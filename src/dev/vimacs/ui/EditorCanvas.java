@@ -61,8 +61,8 @@ public class EditorCanvas extends JPanel {
     }
 
     private void drawCursor(Graphics2D g2, String[] lines, int charWidth, int lineHeight) {
-        // 簡易版: 全角文字を含む行では誤差が出る。正確な実装はfuture-phases.mdを参照。
-        int x = cursorCol * charWidth;
+        String line = (cursorRow < lines.length) ? lines[cursorRow] : "";
+        int x = xForCol(line, cursorCol, charWidth);
         int yTop = cursorRow * lineHeight;
 
         if (insertMode) {
@@ -70,19 +70,33 @@ public class EditorCanvas extends JPanel {
             g2.setColor(theme.foreground);
             g2.fillRect(x, yTop, 2, lineHeight);
         } else {
-            // NORMALモード: ブロックカーソル（色を反転させて文字を浮き出す）
+            // NORMALモード: ブロックカーソル（全角文字は2セル分の幅で描く）
+            int codePoint = (cursorCol < line.length()) ? line.codePointAt(cursorCol) : -1;
+            int blockWidth = charWidth * (codePoint != -1 ? charCellWidth(codePoint) : 1);
             g2.setColor(theme.foreground);
-            g2.fillRect(x, yTop, charWidth, lineHeight);
-            if (cursorRow < lines.length) {
-                String line = lines[cursorRow];
-                if (cursorCol < line.length()) {
-                    // サロゲートペア対応のため charAt ではなく codePointAt を使う
-                    int codePoint = line.codePointAt(cursorCol);
-                    g2.setColor(theme.background);
-                    g2.drawString(new String(Character.toChars(codePoint)), x, (cursorRow + 1) * lineHeight);
-                }
+            g2.fillRect(x, yTop, blockWidth, lineHeight);
+            if (codePoint != -1) {
+                g2.setColor(theme.background);
+                g2.drawString(new String(Character.toChars(codePoint)), x, (cursorRow + 1) * lineHeight);
             }
         }
+    }
+
+    /**
+     * カーソル列インデックス col の先頭から col 文字分の
+     * セル幅の合計をピクセルで返す。
+     * 全角文字（2セル）と半角文字（1セル）を正確に区別する。
+     */
+    private static int xForCol(String line, int col, int charWidth) {
+        int x = 0;
+        int count = 0;
+        for (int i = 0; i < line.length() && count < col; ) {
+            int cp = line.codePointAt(i);
+            x += charCellWidth(cp) * charWidth;
+            i += Character.charCount(cp);
+            count++;
+        }
+        return x;
     }
 
     private void drawStatusLine(Graphics2D g2, int lineHeight) {
