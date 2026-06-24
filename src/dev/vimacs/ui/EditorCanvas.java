@@ -12,6 +12,7 @@ public class EditorCanvas extends JPanel {
     private Theme theme = Theme.LIGHT_MODE;
     private int scrollRow = 0;
     private int cachedLineHeight = 20; // 初回 paint 前の近似値
+    private String commandLineText = null; // null = 通常のモード表示
 
     private static final Font FONT = new Font(Font.MONOSPACED, Font.PLAIN, 16);
 
@@ -21,6 +22,7 @@ public class EditorCanvas extends JPanel {
     public void setTheme(Theme theme) { this.theme = theme; repaint(); }
     public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
     public int getScrollRow() { return scrollRow; }
+    public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
 
     /**
      * カーソル行が表示範囲に収まるよう scrollRow を調整する。
@@ -134,8 +136,9 @@ public class EditorCanvas extends JPanel {
         g2.setColor(theme.accent);
         g2.fillRect(0, y - lineHeight, getWidth(), lineHeight);
         g2.setColor(theme.background);
-        String modeLabel = insertMode ? "-- INSERT --" : "-- NORMAL --";
-        g2.drawString(modeLabel, 4, y - 4);
+        String label = (commandLineText != null) ? commandLineText
+                     : (insertMode ? "-- INSERT --" : "-- NORMAL --");
+        g2.drawString(label, 4, y - 4);
     }
 
     /**

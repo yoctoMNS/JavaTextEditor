@@ -1,6 +1,9 @@
 package dev.vimacs.editor;
 
 import java.awt.event.KeyEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * ModalEditor のテストハーネス（mainメソッド形式・JUnit不使用）。
@@ -26,6 +29,11 @@ public class ModalEditorTest {
         testOpenLineBelow();
         testCtrlMovementInInsert();
         testCtrlMovementBoundary();
+        testCommandModeTransitions();
+        testCommandSaveFile();
+        testCommandLoadFile();
+        testCommandErrors();
+        testCommandQuit();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -257,6 +265,132 @@ public class ModalEditorTest {
         pressCtrl(ed, KeyEvent.VK_N, 'n');
         pressCtrl(ed, KeyEvent.VK_N, 'n');
         check("ctrl+n*2 on 2-line: row=1", ed.getCursorRow() == 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: 基本遷移
+    // -------------------------------------------------------------------------
+
+    static void testCommandModeTransitions() {
+        System.out.println("[COMMMANDモード: 基本遷移]");
+        ModalEditor ed = new ModalEditor("hello");
+
+        pressKey(ed, ':');
+        check("':' キーで isCommandMode()", ed.isCommandMode());
+        check("':' キーで isInsertMode()=false", !ed.isInsertMode());
+
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        check("ESC で NORMAL に戻る (isCommandMode=false)", !ed.isCommandMode());
+        check("ESC で NORMAL に戻る (isInsertMode=false)", !ed.isInsertMode());
+        check("ESC で commandBuffer がクリアされる", ed.getCommandBuffer().isEmpty());
+
+        pressKey(ed, ':');
+        typeString(ed, "wq");
+        check("文字入力で commandBuffer に 'wq' が蓄積される",
+              ed.getCommandBuffer().equals("wq"));
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: :w 保存
+    // -------------------------------------------------------------------------
+
+    static void testCommandSaveFile() {
+        System.out.println("[COMMMANDモード: :w 保存]");
+        Path tmp = null;
+        try {
+            tmp = Files.createTempFile("vimacs-test-", ".txt");
+            String tmpPath = tmp.toString();
+
+            ModalEditor ed = new ModalEditor("save me");
+
+            pressKey(ed, ':');
+            typeString(ed, "w " + tmpPath);
+            ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+
+            check("':w <path>' でファイルが作成される", Files.exists(tmp));
+            check("保存ファイルの内容がバッファの getText() と一致する",
+                  Files.readString(tmp).equals(ed.getText()));
+
+            // ':w' でパス未設定時にエラー
+            ModalEditor ed2 = new ModalEditor("no path");
+            pressKey(ed2, ':');
+            typeString(ed2, "w");
+            ed2.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            check("':w' でパス未設定時に statusMessage がエラー文字列になる",
+                  ed2.getStatusMessage().startsWith("E:"));
+
+        } catch (IOException e) {
+            check("IOException が発生しないこと: " + e.getMessage(), false);
+        } finally {
+            if (tmp != null) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: :e 開閉
+    // -------------------------------------------------------------------------
+
+    static void testCommandLoadFile() {
+        System.out.println("[COMMMANDモード: :e 開閉]");
+        Path tmp = null;
+        try {
+            tmp = Files.createTempFile("vimacs-load-", ".txt");
+            Files.writeString(tmp, "loaded content");
+            String tmpPath = tmp.toString();
+
+            ModalEditor ed = new ModalEditor("original");
+            pressKey(ed, 'l'); // カーソルを移動しておく
+            pressKey(ed, 'l');
+
+            pressKey(ed, ':');
+            typeString(ed, "e " + tmpPath);
+            ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+
+            check("':e <path>' でバッファが差し替わる (getText() が新しい内容になる)",
+                  ed.getText().equals("loaded content"));
+            check("':e' 後にカーソルが row=0 になる", ed.getCursorRow() == 0);
+            check("':e' 後にカーソルが col=0 になる", ed.getCursorCol() == 0);
+
+        } catch (IOException e) {
+            check("IOException が発生しないこと: " + e.getMessage(), false);
+        } finally {
+            if (tmp != null) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: エラーケース
+    // -------------------------------------------------------------------------
+
+    static void testCommandErrors() {
+        System.out.println("[COMMMANDモード: エラーケース]");
+        ModalEditor ed = new ModalEditor("test");
+
+        pressKey(ed, ':');
+        typeString(ed, "foo");
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        check("未定義コマンド ':foo' で statusMessage に \"E: unknown command\" が含まれる",
+              ed.getStatusMessage().contains("E: unknown command"));
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: :q
+    // -------------------------------------------------------------------------
+
+    static void testCommandQuit() {
+        System.out.println("[COMMMANDモード: :q]");
+        ModalEditor ed = new ModalEditor("quit test");
+        boolean[] exited = { false };
+        ed.setExitCallback(() -> exited[0] = true);
+
+        pressKey(ed, ':');
+        typeString(ed, "q");
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        check("':q' で exitCallback が呼ばれる", exited[0]);
     }
 
     // -------------------------------------------------------------------------

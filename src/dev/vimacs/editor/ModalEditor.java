@@ -3,24 +3,34 @@ package dev.vimacs.editor;
 import dev.vimacs.buffer.PieceTable;
 import dev.vimacs.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
- * NORMALモードとINSERTモードの状態管理、カーソル位置管理、
- * PieceTableとEditorCanvasの橋渡しを担うクラス。
+ * NORMAL / INSERT / COMMAND の3モードを管理し、カーソル位置管理と
+ * PieceTable / EditorCanvas の橋渡しを担うクラス。
  *
  * キー入力の処理は processKey(keyCode, keyChar, modifiers) で受け取る。
  * keyCode / modifiers は java.awt.event.KeyEvent の定数を使用する。
  */
 public class ModalEditor {
 
-    private final PieceTable buffer;
-    private EditorCanvas canvas; // null の場合はGUIなし（テスト用）
-    private boolean insertMode = false;
+    private enum Mode { NORMAL, INSERT, COMMAND }
+
+    private PieceTable buffer;
+    private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
+    private Mode mode = Mode.NORMAL;
     private int cursorRow = 0;
     private int cursorCol = 0;
+    private final StringBuilder commandBuffer = new StringBuilder();
+    private String currentFilePath = null;
+    private String statusMessage = "";
+    private Runnable exitCallback = () -> System.exit(0);
 
     public ModalEditor(String initialText) {
         this.buffer = new PieceTable(initialText);
+        this.canvas = null;
     }
 
     public ModalEditor(String initialText, EditorCanvas canvas) {
@@ -29,18 +39,22 @@ public class ModalEditor {
         syncCanvas();
     }
 
-    /**
-     * キー入力を処理する。
-     *
-     * @param keyCode   KeyEvent.VK_* 定数
-     * @param keyChar   入力文字（なければ KeyEvent.CHAR_UNDEFINED）
-     * @param modifiers KeyEvent.CTRL_DOWN_MASK 等のビットマスク
-     */
+    public ModalEditor(String initialText, String filePath, EditorCanvas canvas) {
+        this.buffer = new PieceTable(initialText);
+        this.currentFilePath = filePath;
+        this.canvas = canvas;
+        syncCanvas();
+    }
+
+    public void setExitCallback(Runnable callback) {
+        this.exitCallback = callback;
+    }
+
     public void processKey(int keyCode, char keyChar, int modifiers) {
-        if (insertMode) {
-            processInsertKey(keyCode, keyChar, modifiers);
-        } else {
-            processNormalKey(keyChar);
+        switch (mode) {
+            case INSERT  -> processInsertKey(keyCode, keyChar, modifiers);
+            case COMMAND -> processCommandKey(keyCode, keyChar);
+            case NORMAL  -> processNormalKey(keyChar);
         }
         syncCanvas();
     }
@@ -55,25 +69,32 @@ public class ModalEditor {
             case 'l' -> moveCursor(0, 1);
             case 'j' -> moveCursor(1, 0);
             case 'k' -> moveCursor(-1, 0);
-            case 'i' -> insertMode = true;
+            case 'i' -> {
+                mode = Mode.INSERT;
+                statusMessage = "";
+            }
             case 'a' -> {
-                // カーソル直後（1つ右）に挿入位置を合わせてINSERTへ
                 String[] lines = getLines();
                 int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
                 cursorCol = Math.min(cursorCol + 1, lineLen);
-                insertMode = true;
+                mode = Mode.INSERT;
+                statusMessage = "";
             }
             case 'o' -> {
-                // 現在行の末尾に改行を挿入し、次行冒頭でINSERTへ
                 String[] lines = getLines();
                 int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
                 int endOfLine = offsetAt(cursorRow, lineLen);
                 buffer.insert(endOfLine, "\n");
                 cursorRow++;
                 cursorCol = 0;
-                insertMode = true;
+                mode = Mode.INSERT;
+                statusMessage = "";
             }
-            // v1ではその他のキーはNORMALモードで無視する
+            case ':' -> {
+                commandBuffer.setLength(0);
+                statusMessage = "";
+                mode = Mode.COMMAND;
+            }
         }
     }
 
@@ -85,8 +106,7 @@ public class ModalEditor {
         boolean ctrl = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0;
 
         if (keyCode == KeyEvent.VK_ESCAPE) {
-            insertMode = false;
-            // NORMALモードではカーソルが行末より1つ手前が最大
+            mode = Mode.NORMAL;
             clampCursorForNormal();
 
         } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
@@ -107,7 +127,6 @@ public class ModalEditor {
             moveCursor(-1, 0);
 
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            // 通常の印字可能文字
             buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
             cursorCol++;
         }
@@ -115,11 +134,9 @@ public class ModalEditor {
 
     private void handleBackspace() {
         if (cursorCol > 0) {
-            // 現在行の直前の文字を削除
             buffer.delete(offsetOfCursor() - 1, 1);
             cursorCol--;
         } else if (cursorRow > 0) {
-            // 行頭でのBackspace: 前行末の改行を削除して行を結合
             String[] linesBefore = getLines();
             int prevLineLen = linesBefore[cursorRow - 1].length();
             buffer.delete(offsetOfCursor() - 1, 1);
@@ -129,25 +146,99 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
+    // COMMMANDモード処理
+    // -------------------------------------------------------------------------
+
+    private void processCommandKey(int keyCode, char keyChar) {
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            commandBuffer.setLength(0);
+            mode = Mode.NORMAL;
+
+        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
+            if (commandBuffer.length() > 0) {
+                commandBuffer.deleteCharAt(commandBuffer.length() - 1);
+            }
+
+        } else if (keyCode == KeyEvent.VK_ENTER) {
+            executeCommand(commandBuffer.toString());
+            commandBuffer.setLength(0);
+            mode = Mode.NORMAL;
+
+        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            commandBuffer.append(keyChar);
+        }
+    }
+
+    private void executeCommand(String cmd) {
+        if (cmd.equals("w")) {
+            saveToFile(currentFilePath);
+        } else if (cmd.startsWith("w ")) {
+            String path = cmd.substring(2).trim();
+            if (saveToFile(path)) {
+                currentFilePath = path;
+            }
+        } else if (cmd.startsWith("e ")) {
+            String path = cmd.substring(2).trim();
+            loadFromFile(path);
+        } else if (cmd.equals("q")) {
+            exitCallback.run();
+        } else if (cmd.equals("wq")) {
+            if (saveToFile(currentFilePath)) {
+                exitCallback.run();
+            }
+        } else {
+            statusMessage = "E: unknown command '" + cmd + "'";
+        }
+    }
+
+    private boolean saveToFile(String path) {
+        if (path == null || path.isEmpty()) {
+            statusMessage = "E: no file name";
+            return false;
+        }
+        try {
+            Files.writeString(Path.of(path), buffer.getText());
+            statusMessage = "\"" + path + "\" written";
+            return true;
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+            return false;
+        }
+    }
+
+    private void loadFromFile(String path) {
+        try {
+            String content = Files.readString(Path.of(path)).replace("\r\n", "\n");
+            buffer = new PieceTable(content);
+            currentFilePath = path;
+            cursorRow = 0;
+            cursorCol = 0;
+            statusMessage = "\"" + path + "\" opened";
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // カーソル移動
     // -------------------------------------------------------------------------
 
     private void moveCursor(int dRow, int dCol) {
         String[] lines = getLines();
+        boolean isInsert = (mode == Mode.INSERT);
         if (dRow != 0) {
             int newRow = Math.max(0, Math.min(cursorRow + dRow, lines.length - 1));
             int newLineLen = newRow < lines.length ? lines[newRow].length() : 0;
-            int maxCol = insertMode ? newLineLen : Math.max(0, newLineLen - 1);
+            int maxCol = isInsert ? newLineLen : Math.max(0, newLineLen - 1);
             cursorRow = newRow;
             cursorCol = Math.min(cursorCol, maxCol);
         } else {
             int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
-            int maxCol = insertMode ? lineLen : Math.max(0, lineLen - 1);
+            int maxCol = isInsert ? lineLen : Math.max(0, lineLen - 1);
             cursorCol = Math.max(0, Math.min(cursorCol + dCol, maxCol));
         }
     }
 
-    /** NORMALモード復帰時にカーソル列を最大 lineLen-1 に収める */
     private void clampCursorForNormal() {
         String[] lines = getLines();
         int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
@@ -162,7 +253,6 @@ public class ModalEditor {
     // オフセット計算
     // -------------------------------------------------------------------------
 
-    /** バッファ先頭から (row, col) までのオフセットを返す */
     private int offsetAt(int row, int col) {
         String[] lines = getLines();
         int offset = 0;
@@ -189,8 +279,15 @@ public class ModalEditor {
         if (canvas != null) {
             canvas.setText(buffer.getText());
             canvas.setCursor(cursorRow, cursorCol);
-            canvas.setInsertMode(insertMode);
+            canvas.setInsertMode(mode == Mode.INSERT);
             canvas.ensureCursorVisible(cursorRow);
+            if (mode == Mode.COMMAND) {
+                canvas.setCommandLineText(":" + commandBuffer.toString());
+            } else if (!statusMessage.isEmpty()) {
+                canvas.setCommandLineText(statusMessage);
+            } else {
+                canvas.setCommandLineText(null);
+            }
         }
     }
 
@@ -198,8 +295,11 @@ public class ModalEditor {
     // パブリックアクセサ（テスト・外部連携用）
     // -------------------------------------------------------------------------
 
-    public String getText()       { return buffer.getText(); }
-    public int getCursorRow()     { return cursorRow; }
-    public int getCursorCol()     { return cursorCol; }
-    public boolean isInsertMode() { return insertMode; }
+    public String getText()          { return buffer.getText(); }
+    public int getCursorRow()        { return cursorRow; }
+    public int getCursorCol()        { return cursorCol; }
+    public boolean isInsertMode()    { return mode == Mode.INSERT; }
+    public boolean isCommandMode()   { return mode == Mode.COMMAND; }
+    public String getStatusMessage() { return statusMessage; }
+    public String getCommandBuffer() { return commandBuffer.toString(); }
 }
