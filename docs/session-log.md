@@ -1,6 +1,6 @@
 # 作業セッション記録・引き継ぎ書
 
-最終更新: 2026-06-24 (v2スクロール対応追記)
+最終更新: 2026-06-24 (② v2 コマンドラインモード・ファイル保存/開閉追記)
 
 ---
 
@@ -178,14 +178,60 @@ scripts/
 
 ---
 
-## 現在の状態（2026-06-24時点、v2スクロール完了後）
+---
+
+### フェーズ6: ② modal-editing-engine v2 実装（コマンドラインモード・ファイル保存/開閉）
+
+**ブランチ**: `claude/command-mode-v2-1kcesl`
+
+#### 実施作業
+
+| 対象ファイル | 変更内容 |
+|---|---|
+| `src/dev/vimacs/editor/ModalEditor.java` | `boolean insertMode` → `enum Mode { NORMAL, INSERT, COMMAND }` に置き換え。コマンドバッファ・ファイルパス・ステータスメッセージ・exitCallbackフィールド追加。`processCommandKey`・`executeCommand`・`saveToFile`・`loadFromFile` 実装。3引数コンストラクタ追加 |
+| `src/dev/vimacs/ui/EditorCanvas.java` | `commandLineText` フィールド・`setCommandLineText()` メソッド追加。`drawStatusLine` をコマンドライン表示対応に変更 |
+| `src/dev/vimacs/Main.java` | `args[0]` でファイルパス受け取り。`Files.readString` で起動時ファイル読み込み。3引数コンストラクタ使用 |
+| `test/dev/vimacs/editor/ModalEditorTest.java` | COMMMANDモードのテスト群（基本遷移・:w保存・:e開閉・エラーケース・:q）を追加（14ケース増加） |
+
+#### 実装したコマンド
+
+| コマンド | 動作 |
+|---|---|
+| `:` | NORMALからCOMMANDモードへ移行 |
+| `:w` | currentFilePath へ上書き保存（未設定時はエラー） |
+| `:w <path>` | 指定パスへ保存・currentFilePath 更新 |
+| `:e <path>` | ファイル読み込み・PieceTable 再初期化・カーソル(0,0)・`\r\n`→`\n`正規化 |
+| `:q` | exitCallback.run()（テスト時は差し替え可能） |
+| `:wq` | 保存後に終了 |
+| 未定義 | `statusMessage` にエラー表示 |
+
+#### 設計判断
+
+| 判断 | 理由 |
+|---|---|
+| `buffer` フィールドを `final` から非 `final` に変更 | `:e` でファイルを開く際に `new PieceTable(content)` で差し替える必要があるため。`reinitialize()` メソッドを PieceTable に追加するより侵襲が少ない |
+| `exitCallback` を `Runnable` フィールドで注入可能にした | `System.exit(0)` を直接呼ぶと JVM ごとテストプロセスが終了するため。テストでは `setExitCallback()` で差し替えて検証する |
+| COMMAND モード中のステータス行は `commandLineText` フィールドを通じて EditorCanvas に渡す | ModalEditor が EditorCanvas の描画詳細を知らなくて済む。既存の `drawStatusLine` パターンを最小変更で拡張できる |
+| statusMessage は COMMAND/INSERT 移行時にクリアする | Vim の挙動に準拠。次のコマンド実行まで直前の結果（保存パスなど）を表示し続ける |
+
+#### テスト結果
+
+```
+=== dev.vimacs.buffer.PieceTableTest ===   PASS: 15 / 15  (FAIL: 0)
+=== dev.vimacs.editor.ModalEditorTest ===  PASS: 60 / 60  (FAIL: 0)  ← 46→60
+=== dev.vimacs.ui.EditorCanvasTest ===     PASS: 8 / 8    (FAIL: 0)
+```
+
+---
+
+## 現在の状態（2026-06-24時点、② v2 コマンドラインモード完了後）
 
 ### ロードマップ更新後の状態
 
 | # | Skill名 | 状態 |
 |---|---|---|
 | ① | `editor-buffer-architecture` | ✅ 実機検証済み（15/15テスト成功・getTextInRange/offsetOfLine追加済み） |
-| ② | `modal-editing-engine` | ✅ v1実機検証済み（46/46テスト成功・動作確認済み） |
+| ② | `modal-editing-engine` | ✅ v2完了（60/60テスト成功・:w/:e/:q/:wqコマンド実装済み） |
 | ③ | `extension-language-runtime` | 未着手 |
 | ④ | `keymap-conflict-resolution` | 未着手（②完了により着手可能） |
 | ⑤ | `gui-rendering-pipeline` | ✅ v2実機検証済み（8/8テスト成功）スクロール対応完了 |
@@ -194,20 +240,20 @@ scripts/
 ### ブランチ状態
 
 ```
-main  ← マージ済み（7f85ee9）
-└── claude/gui-rendering-scroll-k24jsa（フィーチャーブランチ・作業完了・プッシュ済み）
+main  ← 8261cfa
+└── claude/command-mode-v2-1kcesl（フィーチャーブランチ・作業完了・プッシュ済み）
 ```
 
 ### 主要ファイルの役割（現時点）
 
 | ファイル | 役割 |
 |---|---|
-| `src/dev/vimacs/Main.java` | JFrame生成・ModalEditor+KeyboardFocusManager接続（デモ110行） |
+| `src/dev/vimacs/Main.java` | JFrame生成・args[0]でファイル起動対応・ModalEditor+KeyboardFocusManager接続 |
 | `src/dev/vimacs/buffer/Piece.java` | ピース（record: source/start/length） |
 | `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/getTextInRange/offsetOfLine/length） |
-| `src/dev/vimacs/editor/ModalEditor.java` | モード・カーソル管理、キー処理、ensureCursorVisible呼び出し |
+| `src/dev/vimacs/editor/ModalEditor.java` | NORMAL/INSERT/COMMANDの3モード管理・ファイルI/O・カーソル管理・キー処理 |
 | `src/dev/vimacs/ui/Theme.java` | LIGHT_MODE / DARK_MODE 配色定数 |
-| `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行）＋スクロール管理 |
+| `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行/コマンドライン）＋スクロール管理 |
 
 ---
 
@@ -217,26 +263,19 @@ main  ← マージ済み（7f85ee9）
 
 | 優先 | Skill | 理由 |
 |---|---|---|
-| 1位 | ② `modal-editing-engine` v2（ファイル開閉・コマンドラインモード） | `:w`保存・`:e`ファイル開閉がないと実用できない |
-| 2位 | ④ `keymap-conflict-resolution` | ②が安定してから |
-
-### ② v2（ファイル開閉・コマンドラインモード）着手時の設計要点
-
-- NORMALモードで `:` を押すとコマンドラインモードへ移行する仕組みが必要
-- `:w` → `Files.writeString()` でファイル書き込み
-- `:e <path>` → `Files.readString()` で読み込み・PieceTable再初期化
-- コマンドライン入力欄をステータス行に描画する（EditorCanvasへの追加）
-- `ModalEditor`のモード定義を `enum Mode { NORMAL, INSERT, COMMAND }` に拡張する
+| 1位 | ④ `keymap-conflict-resolution` | ②v2が完了し着手条件が揃った |
+| 2位 | ② `modal-editing-engine` v3 | VISUALモード・アンドゥ/リドゥ |
 
 ### 既知の制限（未解決）
 
 | 制限 | 詳細 | 対応フェーズ |
 |---|---|---|
-| ファイル開閉なし | 起動時のハードコードテキストしか編集できない | ② v2 |
-| Windows改行`\r\n`未対応 | `split("\n")`では行末に`\r`が残る | ファイル読込時に正規化（② v2） |
-| VISUALモードなし | 範囲選択・ヤンク・ペーストが未実装 | ② v2以降 |
-| アンドゥ/リドゥなし | PieceTableのスナップショット方式は設計済み（SKILL.md参照）だが未実装 | ② v2以降 |
-| `getTextInRange` を描画に未使用 | 現状 `getText()` で全文をEditorCanvasに渡しており、`getTextInRange` は将来最適化用として実装のみ | 巨大ファイルで速度問題が出た場合に対応 |
+| 横スクロールなし | 長い行が画面外にはみ出す | ⑤ v3 |
+| VISUALモードなし | 範囲選択・ヤンク・ペーストが未実装 | ② v3以降 |
+| アンドゥ/リドゥなし | PieceTableのスナップショット方式は設計済み（SKILL.md参照）だが未実装 | ② v3以降 |
+| `:w` 後に currentFilePath が設定される前の `:wq` | `:wq` は `:w` が成功した場合のみ `:q` を実行する（正しい挙動） | 問題なし |
+| コマンド補完・履歴なし | Vim の `<Up>` でコマンド履歴を辿る機能 | スコープ外（② v4以降？） |
+| `getTextInRange` を描画に未使用 | 現状 `getText()` で全文を渡しており将来最適化用として実装のみ | 巨大ファイルで速度問題が出た場合に対応 |
 
 ---
 
