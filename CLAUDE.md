@@ -17,34 +17,51 @@ Vim（モーダル編集）とEmacs（拡張性）の良い所を統合した、
 ## コマンド
 
 ```bash
-# ビルド（srcディレクトリ配下の全.javaファイルをbuild/にコンパイル）
+# ビルド（src/配下の全.javaファイルをbuild/にコンパイル）
 ./scripts/build.sh
 
-# テスト（ビルド後、*Testという名前のクラスのmainメソッドを実行する）
+# テスト（build.shの後、src/+test/をコンパイルし、*Testクラスのmainメソッドを実行）
 ./scripts/test.sh
 
-# 実行
+# 実行（Mainクラスを起動）
 ./scripts/run.sh
 ```
-
-※ 上記スクリプトは現時点では未作成（2026-06-24時点）。プロジェクト骨格を作る際に合わせて作成する。
 
 ## ディレクトリ構成
 
 ```
 project-root/
 ├── CLAUDE.md
+├── docs/
+│   └── requirements.md
 ├── .claude/
 │   └── skills/                          ← 設計知識はここに集約する（下記ロードマップ参照）
-│       └── editor-buffer-architecture/
+│       ├── editor-buffer-architecture/
+│       └── gui-rendering-pipeline/
 ├── src/
-│   └── (パッケージ名は未確定。最初の実装着手時に決定する)
+│   └── dev/vimacs/
+│       ├── Main.java
+│       ├── buffer/
+│       │   ├── Piece.java
+│       │   └── PieceTable.java
+│       └── ui/
+│           ├── Theme.java
+│           └── EditorCanvas.java
+├── test/
+│   └── dev/vimacs/
+│       ├── buffer/
+│       │   └── PieceTableTest.java
+│       └── ui/
+│           ├── EditorCanvasTest.java
+│           └── VisualPreview.java
 ├── scripts/
 │   ├── build.sh
 │   ├── test.sh
 │   └── run.sh
 └── build/                                ← コンパイル出力先（.gitignore対象）
 ```
+
+パッケージ名: `dev.vimacs`（確定済み）
 
 ## 決定済みの設計事項
 
@@ -53,18 +70,20 @@ project-root/
 | バッファ構造 | ピーステーブル方式 | `.claude/skills/editor-buffer-architecture/SKILL.md` |
 | アンドゥ/リドゥ | ピースリストのスナップショット方式 | `.claude/skills/editor-buffer-architecture/references/piece-table-delete-and-undo.md` |
 | 拡張言語 | Lispインタプリタの自作ではなく、`javax.tools.JavaCompiler`（JDK標準API）による動的コンパイルでJavaそのものを拡張言語として使う | 未作成（`extension-language-runtime`スキルで設計予定） |
+| GUI描画v1 | Swing/AWT・単一バッファ静的表示。全角文字幅対応、NORMAL=ブロック/INSERT=縦棒カーソル | `.claude/skills/gui-rendering-pipeline/SKILL.md` |
+| GUI描画v2/v3（未着手） | スクロール対応・`JSplitPane`によるウィンドウ分割 | `.claude/skills/gui-rendering-pipeline/references/future-phases.md` |
 
-**重要**: `editor-buffer-architecture`スキルの`PieceTable`実装は、ロジックを手でトレースしただけで**実機（javac）でのコンパイル・実行検証がまだ済んでいない**。最初の実装作業ではこの検証を最優先で行うこと。
+**新たな依存関係（要注意）**: GUI描画v2（スクロール対応）の実装には、`editor-buffer-architecture`（①）で実装済みの`PieceTable`クラスに`getTextInRange()`等のメソッドを**追加**する必要がある。「①は完了済み」と思って読み飛ばさず、v2着手時は`gui-rendering-pipeline`の`references/future-phases.md`を確認し、①のクラスに戻って修正を加えること。
 
 ## ロードマップ（Skill一覧）
 
 | # | Skill名 | 担当領域 | 状態 |
 |---|---|---|---|
-| ① | `editor-buffer-architecture` | バッファ・データ構造 | 作成済み・実機検証待ち |
+| ① | `editor-buffer-architecture` | バッファ・データ構造 | ✅ 実機検証済み（8/8テスト成功）。v2でメソッド追加予定 |
 | ② | `modal-editing-engine` | Vimモーダル編集（Insert中のEmacs式カーソル移動含む） | 未着手 |
 | ③ | `extension-language-runtime` | Java動的コンパイルによる拡張機構 | 未着手（方針変更済み） |
 | ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | 未着手 |
-| ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画・ウィンドウ分割・テーマ（旧`tui-rendering-pipeline`） | 未着手 |
+| ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画・v1=単一バッファ静的表示（旧`tui-rendering-pipeline`） | ✅ 実機検証済み（5/5テスト成功・目視確認済み） |
 | ⑥ | `plugin-api-design` | プラグイン向け公開API | 未着手 |
 | ⑦ | `editor-testing-strategy` | 境界値・大規模ファイルのテスト戦略 | 未着手 |
 | ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | 未着手 |
