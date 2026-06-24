@@ -190,6 +190,7 @@ public class ModalEditor {
             canvas.setText(buffer.getText());
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(insertMode);
+            canvas.ensureCursorVisible(cursorRow);
         }
     }
 

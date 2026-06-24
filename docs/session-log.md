@@ -1,6 +1,6 @@
 # 作業セッション記録・引き継ぎ書
 
-最終更新: 2026-06-24
+最終更新: 2026-06-24 (v2スクロール対応追記)
 
 ---
 
@@ -143,36 +143,71 @@ scripts/
 
 ---
 
-## 現在の状態（2026-06-24時点）
+---
+
+### フェーズ5: ⑤ gui-rendering-pipeline v2 実装（スクロール対応）
+
+**ブランチ**: `claude/gui-rendering-scroll-k24jsa`
+
+#### 実施作業
+
+| 対象ファイル | 変更内容 |
+|---|---|
+| `src/dev/vimacs/buffer/PieceTable.java` | `getTextInRange(int, int)`・`offsetOfLine(int)` を追加 |
+| `src/dev/vimacs/ui/EditorCanvas.java` | `scrollRow`/`cachedLineHeight` フィールド追加、`ensureCursorVisible()`・`computeVisibleRows()` 追加、`paintComponent` と `drawCursor` をスクロール座標対応に変更 |
+| `src/dev/vimacs/editor/ModalEditor.java` | `syncCanvas()` に `canvas.ensureCursorVisible(cursorRow)` 呼び出しを追加 |
+| `src/dev/vimacs/Main.java` | デモテキストを110行以上に変更（スクロール目視確認用） |
+| `test/dev/vimacs/buffer/PieceTableTest.java` | `getTextInRange`×4ケース、`offsetOfLine`×3ケースを追加（計15テスト） |
+| `test/dev/vimacs/ui/EditorCanvasTest.java` | `scrollRow`初期値・`ensureCursorVisible`下方追従・上方追従の3テストを追加（計8テスト） |
+
+#### 設計判断
+
+| 判断 | 理由 |
+|---|---|
+| `EditorCanvas` が `scrollRow` を持ち `ensureCursorVisible()` で自己管理する | `ModalEditor` がウィンドウ高さを知らなくて済む。ウィンドウ分割（v3）でも各ペインが独立して管理できる |
+| `cachedLineHeight = 20` でデフォルト近似し paint 時に更新 | `ensureCursorVisible` は `Graphics` 不要のまま行数計算できる。初回 paint 前でも0除算が発生しない |
+| `getText()` で全文を渡す方式は維持（`getTextInRange` は将来最適化用） | 現フェーズではボトルネックにならず実装をシンプルに保てる。巨大ファイルで問題が生じた場合は `syncCanvas()` で `getTextInRange` を使うよう切り替える |
+
+#### テスト結果
+
+```
+=== dev.vimacs.buffer.PieceTableTest ===   PASS: 15 / 15  (FAIL: 0)
+=== dev.vimacs.editor.ModalEditorTest ===  PASS: 46 / 46  (FAIL: 0)
+=== dev.vimacs.ui.EditorCanvasTest ===     PASS: 8 / 8    (FAIL: 0)
+```
+
+---
+
+## 現在の状態（2026-06-24時点、v2スクロール完了後）
 
 ### ロードマップ更新後の状態
 
 | # | Skill名 | 状態 |
 |---|---|---|
-| ① | `editor-buffer-architecture` | ✅ 実機検証済み（8/8テスト成功） |
+| ① | `editor-buffer-architecture` | ✅ 実機検証済み（15/15テスト成功・getTextInRange/offsetOfLine追加済み） |
 | ② | `modal-editing-engine` | ✅ v1実機検証済み（46/46テスト成功・動作確認済み） |
 | ③ | `extension-language-runtime` | 未着手 |
 | ④ | `keymap-conflict-resolution` | 未着手（②完了により着手可能） |
-| ⑤ | `gui-rendering-pipeline` | ✅ v1実機検証済み（5/5テスト成功・目視確認済み） |
+| ⑤ | `gui-rendering-pipeline` | ✅ v2実機検証済み（8/8テスト成功）スクロール対応完了 |
 | ⑥〜⑭ | その他 | 未着手 |
 
 ### ブランチ状態
 
 ```
 main  ← マージ済み（7f85ee9）
-└── claude/hopeful-noether-g925gk（フィーチャーブランチ・作業完了）
+└── claude/gui-rendering-scroll-k24jsa（フィーチャーブランチ・作業完了・プッシュ済み）
 ```
 
 ### 主要ファイルの役割（現時点）
 
 | ファイル | 役割 |
 |---|---|
-| `src/dev/vimacs/Main.java` | JFrame生成・ModalEditor+KeyboardFocusManager接続 |
+| `src/dev/vimacs/Main.java` | JFrame生成・ModalEditor+KeyboardFocusManager接続（デモ110行） |
 | `src/dev/vimacs/buffer/Piece.java` | ピース（record: source/start/length） |
-| `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/length） |
-| `src/dev/vimacs/editor/ModalEditor.java` | モード・カーソル管理、キー処理 |
+| `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/getTextInRange/offsetOfLine/length） |
+| `src/dev/vimacs/editor/ModalEditor.java` | モード・カーソル管理、キー処理、ensureCursorVisible呼び出し |
 | `src/dev/vimacs/ui/Theme.java` | LIGHT_MODE / DARK_MODE 配色定数 |
-| `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行） |
+| `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行）＋スクロール管理 |
 
 ---
 
@@ -180,25 +215,10 @@ main  ← マージ済み（7f85ee9）
 
 ### 推奨次作業の優先順位
 
-依存関係と実用上の効果から以下の順を推奨する。
-
 | 優先 | Skill | 理由 |
 |---|---|---|
-| 1位 | ⑤ `gui-rendering-pipeline` v2（スクロール対応） | 現状ウィンドウを超えた行が表示されない。使い物になるには必須 |
-| 2位 | ② `modal-editing-engine` v2（ファイル開閉・コマンドラインモード） | `:w`保存・`:e`ファイル開閉がないと実用できない |
-| 3位 | ④ `keymap-conflict-resolution` | ②が安定してから |
-
-### ⑤ v2（スクロール）着手時の必須作業
-
-**重要**: `PieceTable`に以下の2メソッドを追加する必要がある。詳細は `.claude/skills/gui-rendering-pipeline/references/future-phases.md` を参照。
-
-```java
-// src/dev/vimacs/buffer/PieceTable.java に追加
-public String getTextInRange(int startOffset, int endOffset) { ... }
-public int offsetOfLine(int lineNumber) { ... }
-```
-
-「①は完了済み」として読み飛ばさないこと。
+| 1位 | ② `modal-editing-engine` v2（ファイル開閉・コマンドラインモード） | `:w`保存・`:e`ファイル開閉がないと実用できない |
+| 2位 | ④ `keymap-conflict-resolution` | ②が安定してから |
 
 ### ② v2（ファイル開閉・コマンドラインモード）着手時の設計要点
 
@@ -212,11 +232,11 @@ public int offsetOfLine(int lineNumber) { ... }
 
 | 制限 | 詳細 | 対応フェーズ |
 |---|---|---|
-| スクロールなし | ウィンドウを超えた行は表示されない | ⑤ v2 |
 | ファイル開閉なし | 起動時のハードコードテキストしか編集できない | ② v2 |
-| Windows改行`\r\n`未対応 | `split("\n")`では行末に`\r`が残る | ⑤ v2 またはファイル読込時に正規化 |
+| Windows改行`\r\n`未対応 | `split("\n")`では行末に`\r`が残る | ファイル読込時に正規化（② v2） |
 | VISUALモードなし | 範囲選択・ヤンク・ペーストが未実装 | ② v2以降 |
 | アンドゥ/リドゥなし | PieceTableのスナップショット方式は設計済み（SKILL.md参照）だが未実装 | ② v2以降 |
+| `getTextInRange` を描画に未使用 | 現状 `getText()` で全文をEditorCanvasに渡しており、`getTextInRange` は将来最適化用として実装のみ | 巨大ファイルで速度問題が出た場合に対応 |
 
 ---
 

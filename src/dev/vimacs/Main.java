@@ -18,10 +18,18 @@ public class Main {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setTheme(Theme.DARK_MODE);
 
-            ModalEditor editor = new ModalEditor(
-                "Hello, World!\nLine 2: abc def ghi\n日本語テスト\nLine 4: end of sample",
-                canvas
-            );
+            StringBuilder demoText = new StringBuilder();
+            demoText.append("=== Vimacs Editor Demo ===\n");
+            demoText.append("j/k: 上下移動  h/l: 左右移動  i: INSERTへ  Esc: NORMALへ\n");
+            demoText.append("日本語テスト行: ひらがな・カタカナ・漢字が混在しても動作する\n");
+            demoText.append("---\n");
+            for (int i = 5; i <= 110; i++) {
+                demoText.append("Line ").append(i).append(": ")
+                    .append("The quick brown fox jumps over the lazy dog. (行番号=").append(i).append(")\n");
+            }
+            demoText.append("=== End of Demo ===\n");
+
+            ModalEditor editor = new ModalEditor(demoText.toString(), canvas);
 
             // KeyboardFocusManager はフォーカス状態に関係なく全キーを捕捉する
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
