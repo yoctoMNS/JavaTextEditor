@@ -1,2 +1,134 @@
-# JavaTextEditor
-Java Text Editor
+# Vimacs Editor
+
+VimのモーダルキーバインドとEmacsのカーソル操作を統合した、Java SE製の軽量テキストエディタ。
+
+## 特徴
+
+- **モーダル編集**: Vim式のNORMAL/INSERTモードを採用
+- **Emacs式カーソル移動**: INSERTモード中でも `Ctrl+F/B/N/P` で移動可能
+- **高速バッファ**: ピーステーブル方式により、大規模ファイル（数十万行）でも高速に挿入・削除
+- **Java SE標準APIのみ**: 外部ライブラリ不使用。Java 21で動作
+
+## 必要環境
+
+- Java 21 (LTS)
+- JDK（`javac` が使えること）
+
+## ビルドと実行
+
+```bash
+# ビルド
+./scripts/build.sh
+
+# 実行
+./scripts/run.sh
+
+# テスト
+./scripts/test.sh
+```
+
+Windowsの場合は `build.bat` / `run.bat` / `test.bat` を使用してください。
+
+## キーバインド
+
+### NORMALモード
+
+| キー | 動作 |
+|------|------|
+| `h` | カーソルを左に移動 |
+| `l` | カーソルを右に移動 |
+| `j` | カーソルを下に移動 |
+| `k` | カーソルを上に移動 |
+| `i` | INSERTモードへ（カーソル前に挿入） |
+| `a` | INSERTモードへ（カーソル後に挿入） |
+| `o` | 現在行の下に新しい行を開いてINSERTモードへ |
+
+### INSERTモード
+
+| キー | 動作 |
+|------|------|
+| 通常文字 | カーソル位置に文字を挿入 |
+| `Backspace` | カーソル直前の文字を削除（行頭では前行と結合） |
+| `Enter` | 改行を挿入 |
+| `Escape` | NORMALモードへ復帰 |
+| `Ctrl+F` | カーソルを右に移動（Emacs式） |
+| `Ctrl+B` | カーソルを左に移動（Emacs式） |
+| `Ctrl+N` | カーソルを下に移動（Emacs式） |
+| `Ctrl+P` | カーソルを上に移動（Emacs式） |
+
+## ディレクトリ構成
+
+```
+project-root/
+├── src/dev/vimacs/
+│   ├── Main.java               # エントリポイント・GUI初期化
+│   ├── buffer/
+│   │   ├── Piece.java          # ピーステーブルのピース（record）
+│   │   └── PieceTable.java     # バッファ本体（insert/delete/getText）
+│   ├── editor/
+│   │   └── ModalEditor.java    # モード管理・カーソル管理・キー処理
+│   └── ui/
+│       ├── Theme.java          # カラーテーマ（LIGHT_MODE / DARK_MODE）
+│       └── EditorCanvas.java   # Swing描画コンポーネント
+├── test/dev/vimacs/
+│   ├── buffer/
+│   │   └── PieceTableTest.java
+│   └── editor/
+│       └── ModalEditorTest.java
+├── docs/
+│   └── requirements.md
+└── scripts/
+    ├── build.sh / build.bat
+    ├── test.sh  / test.bat
+    └── run.sh   / run.bat
+```
+
+## アーキテクチャ
+
+### バッファ: ピーステーブル方式
+
+テキストの挿入・削除はバッファ全体をコピーせず、「ピース（範囲参照）」のリストを操作することで実現しています。大規模ファイルでも定数時間に近い挿入・削除が可能です。
+
+```
+PieceTable
+  ├── original: String        （初期テキスト。変更しない）
+  ├── addBuffer: StringBuilder （挿入テキストの追記バッファ）
+  └── pieces: List<Piece>     （original/addBufferへの範囲参照リスト）
+```
+
+### モーダル編集エンジン: ModalEditor
+
+`ModalEditor` がモード状態・カーソル位置を管理し、`PieceTable`（バッファ）と`EditorCanvas`（描画）を橋渡しします。
+
+```
+キー入力 (KeyboardFocusManager)
+    ↓
+ModalEditor.processKey(keyCode, keyChar, modifiers)
+    ↓
+PieceTable.insert() / delete()   ← バッファ更新
+EditorCanvas.setText() / setCursor() / setInsertMode()  ← 再描画
+```
+
+### GUI描画: EditorCanvas
+
+`JPanel` を継承した `EditorCanvas` が `Graphics2D` で直接描画します。
+
+- 全角文字（CJK・ひらがな・カタカナ）を2セル幅として正確に描画
+- NORMALモード: ブロックカーソル（前景色の矩形）
+- INSERTモード: 縦棒カーソル（2px幅）
+- 画面最下部にステータス行（`-- NORMAL --` / `-- INSERT --`）
+
+## テスト結果
+
+```
+=== dev.vimacs.buffer.PieceTableTest ===   PASS: 8 / 8
+=== dev.vimacs.editor.ModalEditorTest ===  PASS: 46 / 46
+=== dev.vimacs.ui.EditorCanvasTest ===     PASS: 5 / 5
+```
+
+## 技術制約
+
+- **言語**: Java 21 (LTS)
+- **依存ライブラリ**: なし（Java SE標準APIのみ）
+- **ビルドツール**: なし（`javac` 直接呼び出し）
+- **テストフレームワーク**: なし（`main` メソッド形式の自作ハーネス）
