@@ -125,4 +125,13 @@ public class PieceTable {
         }
         return fullText.length();
     }
+
+    protected List<Piece> getPieces() {
+        return List.copyOf(pieces);
+    }
+
+    protected void restorePieces(List<Piece> snapshot) {
+        pieces.clear();
+        pieces.addAll(snapshot);
+    }
 }

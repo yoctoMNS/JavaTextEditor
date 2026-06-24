@@ -1,6 +1,7 @@
 package dev.vimacs.editor;
 
 import dev.vimacs.buffer.PieceTable;
+import dev.vimacs.buffer.UndoablePieceTable;
 import dev.vimacs.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
@@ -18,7 +19,7 @@ public class ModalEditor {
 
     private enum Mode { NORMAL, INSERT, COMMAND }
 
-    private PieceTable buffer;
+    private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
     private Mode mode = Mode.NORMAL;
     private int cursorRow = 0;
@@ -29,18 +30,18 @@ public class ModalEditor {
     private Runnable exitCallback = () -> System.exit(0);
 
     public ModalEditor(String initialText) {
-        this.buffer = new PieceTable(initialText);
+        this.buffer = new UndoablePieceTable(initialText);
         this.canvas = null;
     }
 
     public ModalEditor(String initialText, EditorCanvas canvas) {
-        this.buffer = new PieceTable(initialText);
+        this.buffer = new UndoablePieceTable(initialText);
         this.canvas = canvas;
         syncCanvas();
     }
 
     public ModalEditor(String initialText, String filePath, EditorCanvas canvas) {
-        this.buffer = new PieceTable(initialText);
+        this.buffer = new UndoablePieceTable(initialText);
         this.currentFilePath = filePath;
         this.canvas = canvas;
         syncCanvas();
@@ -51,6 +52,13 @@ public class ModalEditor {
     }
 
     public void processKey(int keyCode, char keyChar, int modifiers) {
+        boolean ctrl = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0;
+        if (mode == Mode.NORMAL && ctrl && keyCode == KeyEvent.VK_R) {
+            buffer.redo();
+            clampCursorAfterUndoRedo();
+            syncCanvas();
+            return;
+        }
         switch (mode) {
             case INSERT  -> processInsertKey(keyCode, keyChar, modifiers);
             case COMMAND -> processCommandKey(keyCode, keyChar);
@@ -94,6 +102,10 @@ public class ModalEditor {
                 commandBuffer.setLength(0);
                 statusMessage = "";
                 mode = Mode.COMMAND;
+            }
+            case 'u' -> {
+                buffer.undo();
+                clampCursorAfterUndoRedo();
             }
         }
     }
@@ -209,7 +221,7 @@ public class ModalEditor {
     private void loadFromFile(String path) {
         try {
             String content = Files.readString(Path.of(path)).replace("\r\n", "\n");
-            buffer = new PieceTable(content);
+            buffer = new UndoablePieceTable(content);
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
@@ -247,6 +259,13 @@ public class ModalEditor {
         } else {
             cursorCol = 0;
         }
+    }
+
+    private void clampCursorAfterUndoRedo() {
+        String[] lines = getLines();
+        cursorRow = Math.min(cursorRow, Math.max(0, lines.length - 1));
+        int lineLen = (cursorRow < lines.length) ? lines[cursorRow].length() : 0;
+        cursorCol = Math.min(cursorCol, Math.max(0, lineLen - 1));
     }
 
     // -------------------------------------------------------------------------
