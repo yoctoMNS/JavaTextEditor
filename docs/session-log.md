@@ -6,7 +6,7 @@
 
 ## セッション全体の概要
 
-プロジェクト初期セットアップから始まり、①バッファ実装の実機検証と⑤GUI描画v1の実装・検証まで完了した。mainブランチにマージ済み。
+プロジェクト初期セットアップから始まり、①バッファ実装の実機検証、⑤GUI描画v1の実装・検証、②モーダル編集エンジンの実装・検証まで完了。mainブランチにマージ済み。
 
 ---
 
@@ -78,15 +78,11 @@ scripts/
 
 #### SKILL.md初稿から判明した誤り（実装時に修正済み）
 
-SKILL.mdのコードサンプルは設計フェーズで書かれ、実機検証前だったため以下3件の誤りがあった。
-
 | # | 場所 | 誤り | 修正内容 |
 |---|---|---|---|
 | 1 | `drawStatusLine`の引数 | `FontMetrics fm`が本体内で未使用 | パラメータを削除 |
-| 2 | `drawCursor`のカーソル文字再描画 | `line.charAt(cursorCol)`（`char`単位） | `line.codePointAt(cursorCol)` + `Character.toChars`に修正（サロゲートペア対応） |
-| 3 | `Theme`フィールドのアクセス修飾子 | `final`のみ（パッケージ外から不可視） | `public final`に変更 |
-
-修正内容はSKILL.mdの「実機検証で判明した修正点」節に記録済み。
+| 2 | `drawCursor`のカーソル文字再描画 | `line.charAt(cursorCol)` | `line.codePointAt(cursorCol)` + `Character.toChars`に修正（サロゲートペア対応） |
+| 3 | `Theme`フィールドのアクセス修飾子 | `final`のみ | `public final`に変更 |
 
 #### テスト結果
 
@@ -95,29 +91,55 @@ SKILL.mdのコードサンプルは設計フェーズで書かれ、実機検証
 === dev.vimacs.ui.EditorCanvasTest ===     PASS: 5 / 5
 ```
 
-EditorCanvasTestの検証内容:
-1. LIGHT_MODE背景色がピクセルレベルで正しいか（#F5F0E6）
-2. DARK_MODE背景色がピクセルレベルで正しいか（#1A1A1A）
-3. NORMALモードのカーソルブロックが前景色で描画されているか
-4. INSERTモードのカーソルバーが2px幅で描画されているか
-5. `charCellWidth`が半角(1)/全角(2)を正しく判定するか
+---
 
-#### 目視確認
+### フェーズ4: ② modal-editing-engine v1 実装
 
-`VisualPreview`でPNGを生成し、以下をすべて目視確認済み:
+**ブランチ**: `claude/hopeful-noether-g925gk`（mainにマージ済み）
 
-| ファイル | 確認内容 |
+#### 新規作成ファイル
+
+| ファイル | 内容 |
 |---|---|
-| `preview_light_normal.png` | ベージュ背景・ブロックカーソル・`-- NORMAL --`ステータス行 |
-| `preview_light_insert.png` | ベージュ背景・縦棒カーソル・`-- INSERT --`ステータス行 |
-| `preview_dark_normal.png`  | 黒背景・ブロックカーソル・日本語全角文字の正常描画 |
-| `preview_dark_insert.png`  | 黒背景・縦棒カーソル・`-- INSERT --`ステータス行 |
-| `preview_dark_japanese.png` | 日本語行にカーソルを置いた状態の描画 |
+| `src/dev/vimacs/editor/ModalEditor.java` | モード・カーソル管理、PieceTable/EditorCanvas橋渡し |
+| `test/dev/vimacs/editor/ModalEditorTest.java` | 13テスト群・46ケース全PASS |
 
-#### Windows対応
+#### 実装したキーバインド
 
-`scripts/build.bat`, `test.bat`, `run.bat`を追加した。
-`dir /s /b src\*.java > build\sources.txt`でJavaファイルを列挙し、`@argfile`経由で`javac`に渡す方式を採用。
+**NORMALモード:**
+- `h`/`l` → 左右移動（行端でクランプ）
+- `j`/`k` → 上下移動（新行長さにcolクランプ）
+- `i` → INSERTモードへ（カーソル前）
+- `a` → INSERTモードへ（カーソル後・col+1）
+- `o` → 現在行末に`\n`挿入、次行冒頭でINSERTへ
+
+**INSERTモード:**
+- 通常文字 → `PieceTable.insert()`
+- `Backspace` → `PieceTable.delete()`（行頭では行結合）
+- `Enter` → 改行挿入
+- `Escape` → NORMALモード復帰（colをlen-1にクランプ）
+- `Ctrl+F`/`B` → 左右移動（Emacs式）
+- `Ctrl+N`/`P` → 下上移動（Emacs式）
+
+#### キー入力の接続方法
+
+`canvas.addKeyListener()`ではなく`KeyboardFocusManager.addKeyEventDispatcher()`を採用。
+フォーカス状態に依存せず全キーを確実に捕捉するため。
+
+#### 修正済みバグ
+
+| バグ | 原因 | 修正 |
+|---|---|---|
+| キー入力が一切効かない | `Main.java`がModalEditorを使わずEditorCanvasを直接操作・KeyListener未設定 | ModalEditor+KeyboardFocusManagerで接続 |
+| 全角文字の行でカーソル位置がずれる | `drawCursor`が`cursorCol * charWidth`（全文字1セル扱い） | `xForCol()`でセル幅を積算・NORMALブロック幅も全角対応 |
+
+#### テスト結果
+
+```
+=== dev.vimacs.buffer.PieceTableTest ===   PASS: 8 / 8
+=== dev.vimacs.editor.ModalEditorTest ===  PASS: 46 / 46
+=== dev.vimacs.ui.EditorCanvasTest ===     PASS: 5 / 5
+```
 
 ---
 
@@ -128,40 +150,47 @@ EditorCanvasTestの検証内容:
 | # | Skill名 | 状態 |
 |---|---|---|
 | ① | `editor-buffer-architecture` | ✅ 実機検証済み（8/8テスト成功） |
-| ② | `modal-editing-engine` | **未着手**（次フェーズ推奨） |
+| ② | `modal-editing-engine` | ✅ v1実機検証済み（46/46テスト成功・動作確認済み） |
 | ③ | `extension-language-runtime` | 未着手 |
-| ④ | `keymap-conflict-resolution` | 未着手（②③完了後） |
+| ④ | `keymap-conflict-resolution` | 未着手（②完了により着手可能） |
 | ⑤ | `gui-rendering-pipeline` | ✅ v1実機検証済み（5/5テスト成功・目視確認済み） |
 | ⑥〜⑭ | その他 | 未着手 |
 
 ### ブランチ状態
 
 ```
-main  ← マージ済み（d4ee03a）
-└── claude/quirky-sagan-kzsz6i（フィーチャーブランチ・作業完了）
+main  ← マージ済み（7f85ee9）
+└── claude/hopeful-noether-g925gk（フィーチャーブランチ・作業完了）
 ```
+
+### 主要ファイルの役割（現時点）
+
+| ファイル | 役割 |
+|---|---|
+| `src/dev/vimacs/Main.java` | JFrame生成・ModalEditor+KeyboardFocusManager接続 |
+| `src/dev/vimacs/buffer/Piece.java` | ピース（record: source/start/length） |
+| `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/length） |
+| `src/dev/vimacs/editor/ModalEditor.java` | モード・カーソル管理、キー処理 |
+| `src/dev/vimacs/ui/Theme.java` | LIGHT_MODE / DARK_MODE 配色定数 |
+| `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行） |
 
 ---
 
 ## 次フェーズへの引き継ぎ事項
 
-### 推奨次作業: ② modal-editing-engine
+### 推奨次作業の優先順位
 
-依存関係: ①完了済みのため着手可能。
+依存関係と実用上の効果から以下の順を推奨する。
 
-実装すべき内容（要件定義書2・3章より）:
-- **NORMALモード**: `h`/`j`/`k`/`l`によるカーソル移動、`i`/`a`/`o`でINSERTモード移行
-- **INSERTモード**: 文字入力（PieceTableへのinsert呼び出し）、`Escape`でNORMALモード復帰
-- **INSERTモード中のEmacsカーソル移動**: `Ctrl+F`/`B`/`N`/`P`（前後左右）
+| 優先 | Skill | 理由 |
+|---|---|---|
+| 1位 | ⑤ `gui-rendering-pipeline` v2（スクロール対応） | 現状ウィンドウを超えた行が表示されない。使い物になるには必須 |
+| 2位 | ② `modal-editing-engine` v2（ファイル開閉・コマンドラインモード） | `:w`保存・`:e`ファイル開閉がないと実用できない |
+| 3位 | ④ `keymap-conflict-resolution` | ②が安定してから |
 
-実装完了後の接続先:
-- `EditorCanvas.setCursor(row, col)` ← カーソル行列を渡す
-- `EditorCanvas.setInsertMode(boolean)` ← モード切替を渡す
-- `PieceTable.insert()` / `PieceTable.delete()` ← 編集操作を渡す
+### ⑤ v2（スクロール）着手時の必須作業
 
-### 注意: v2 GUI（スクロール）着手時の追加作業
-
-`gui-rendering-pipeline`の`references/future-phases.md`に詳細があるが、v2実装時は①の`PieceTable`クラスに以下のメソッドを追加する必要がある:
+**重要**: `PieceTable`に以下の2メソッドを追加する必要がある。詳細は `.claude/skills/gui-rendering-pipeline/references/future-phases.md` を参照。
 
 ```java
 // src/dev/vimacs/buffer/PieceTable.java に追加
@@ -171,14 +200,23 @@ public int offsetOfLine(int lineNumber) { ... }
 
 「①は完了済み」として読み飛ばさないこと。
 
-### 既知の制限（v1スコープ外・将来対応）
+### ② v2（ファイル開閉・コマンドラインモード）着手時の設計要点
+
+- NORMALモードで `:` を押すとコマンドラインモードへ移行する仕組みが必要
+- `:w` → `Files.writeString()` でファイル書き込み
+- `:e <path>` → `Files.readString()` で読み込み・PieceTable再初期化
+- コマンドライン入力欄をステータス行に描画する（EditorCanvasへの追加）
+- `ModalEditor`のモード定義を `enum Mode { NORMAL, INSERT, COMMAND }` に拡張する
+
+### 既知の制限（未解決）
 
 | 制限 | 詳細 | 対応フェーズ |
 |---|---|---|
 | スクロールなし | ウィンドウを超えた行は表示されない | ⑤ v2 |
-| 全角文字を含む行のカーソルX座標ずれ | `cursorCol * charWidth`の簡易計算のため | ⑤ v2（`future-phases.md`に正確な実装あり） |
-| Windows改行`\r\n`の未対応 | `split("\n")`では行末に`\r`が残る | ⑤ v2、またはファイル読込時に正規化 |
-| キー入力未接続 | v1のカーソルは外部から直接座標を渡す形式 | ② 完了後に接続 |
+| ファイル開閉なし | 起動時のハードコードテキストしか編集できない | ② v2 |
+| Windows改行`\r\n`未対応 | `split("\n")`では行末に`\r`が残る | ⑤ v2 またはファイル読込時に正規化 |
+| VISUALモードなし | 範囲選択・ヤンク・ペーストが未実装 | ② v2以降 |
+| アンドゥ/リドゥなし | PieceTableのスナップショット方式は設計済み（SKILL.md参照）だが未実装 | ② v2以降 |
 
 ---
 
@@ -191,3 +229,4 @@ public int offsetOfLine(int lineNumber) { ... }
 - **ビルドツール**: `javac`直接呼び出しのみ（Maven/Gradle禁止）
 - **テスト**: JUnit不使用・`main`メソッド形式のテストハーネスのみ
 - 何かを実装する前に`.claude/skills/`配下の関連SKILL.mdを必ず確認すること
+- 新たな設計判断はCLAUDE.mdまたは該当SKILL.mdに記録すること
