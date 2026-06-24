@@ -47,7 +47,24 @@ public class PieceTableTest {
         t8.insert(0, "X");
         pass += check("空文書への挿入", "X", t8.getText());
 
-        int total = 8;
+        // Test 9: getTextInRange - オリジナルバッファ内の部分取得
+        PieceTable t9 = new PieceTable("Hello World");
+        pass += check("getTextInRange 先頭5文字", "Hello", t9.getTextInRange(0, 5));
+        pass += check("getTextInRange 後半5文字", "World", t9.getTextInRange(6, 11));
+
+        // Test 10: getTextInRange - 挿入後の複数ピースをまたぐ取得
+        PieceTable t10 = new PieceTable("AC");
+        t10.insert(1, "B");
+        pass += check("getTextInRange ピースまたぎ", "ABC", t10.getTextInRange(0, 3));
+        pass += check("getTextInRange ピースまたぎ中間", "BC", t10.getTextInRange(1, 3));
+
+        // Test 11: offsetOfLine - 行ごとの開始オフセット
+        PieceTable t11 = new PieceTable("line0\nline1\nline2");
+        pass += check("offsetOfLine(0)==0", "0", String.valueOf(t11.offsetOfLine(0)));
+        pass += check("offsetOfLine(1)==6", "6", String.valueOf(t11.offsetOfLine(1)));
+        pass += check("offsetOfLine(2)==12", "12", String.valueOf(t11.offsetOfLine(2)));
+
+        int total = 15;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

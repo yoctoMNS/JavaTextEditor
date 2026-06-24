@@ -80,7 +80,43 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        int total = 5;
+        // Test 6: scrollRow の初期値は 0
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            boolean ok = (canvas.getScrollRow() == 0);
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "scrollRow初期値==0");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 7: ensureCursorVisible - カーソルが表示範囲より下に出た場合 scrollRow が増える
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            // cachedLineHeight=20(デフォルト), height=60 → visibleRows=(60-20)/20=2
+            canvas.setSize(400, 60);
+            canvas.ensureCursorVisible(0);
+            boolean startOk = (canvas.getScrollRow() == 0);
+            canvas.ensureCursorVisible(10);
+            boolean scrolledDown = (canvas.getScrollRow() > 0);
+            boolean ok = startOk && scrolledDown;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "ensureCursorVisible 下方追従 scrollRow=" + canvas.getScrollRow());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 8: ensureCursorVisible - カーソルが表示範囲より上に戻った場合 scrollRow が減る
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 60);
+            canvas.setScrollRow(10);
+            canvas.ensureCursorVisible(0);
+            boolean ok = (canvas.getScrollRow() == 0);
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "ensureCursorVisible 上方追従 scrollRow=" + canvas.getScrollRow());
+            pass += ok ? 1 : 0;
+        }
+
+        int total = 8;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

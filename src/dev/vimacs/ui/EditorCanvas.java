@@ -10,6 +10,8 @@ public class EditorCanvas extends JPanel {
     private int cursorCol = 0;
     private boolean insertMode = false;
     private Theme theme = Theme.LIGHT_MODE;
+    private int scrollRow = 0;
+    private int cachedLineHeight = 20; // 初回 paint 前の近似値
 
     private static final Font FONT = new Font(Font.MONOSPACED, Font.PLAIN, 16);
 
@@ -17,6 +19,29 @@ public class EditorCanvas extends JPanel {
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
     public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
     public void setTheme(Theme theme) { this.theme = theme; repaint(); }
+    public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
+    public int getScrollRow() { return scrollRow; }
+
+    /**
+     * カーソル行が表示範囲に収まるよう scrollRow を調整する。
+     * ModalEditor がカーソル移動後に呼ぶことでスクロールを追従させる。
+     */
+    public void ensureCursorVisible(int cursorRow) {
+        int visibleRows = computeVisibleRows(cachedLineHeight);
+        if (cursorRow < scrollRow) {
+            scrollRow = cursorRow;
+            repaint();
+        } else if (cursorRow >= scrollRow + visibleRows) {
+            scrollRow = Math.max(0, cursorRow - visibleRows + 1);
+            repaint();
+        }
+    }
+
+    /** ステータス行1行を除いた領域に収まる行数を返す */
+    private int computeVisibleRows(int lineHeight) {
+        if (lineHeight <= 0) return 1;
+        return Math.max(1, (getHeight() - lineHeight) / lineHeight);
+    }
 
     @Override
     protected void paintComponent(Graphics g) {
@@ -26,22 +51,24 @@ public class EditorCanvas extends JPanel {
         FontMetrics fm = g2.getFontMetrics();
         int charWidth = fm.charWidth('M');
         int lineHeight = fm.getHeight();
+        cachedLineHeight = lineHeight;
 
         // 1. 背景を塗る
         g2.setColor(theme.background);
         g2.fillRect(0, 0, getWidth(), getHeight());
 
-        // 2. テキストを行ごとに描画する
-        // コンポーネント範囲外への描画はSwingが自動的に無視するため、
-        // ウィンドウからあふれた行・文字の個別チェックは不要。
+        // 2. 表示行範囲（scrollRow 〜 scrollRow+visibleRows）のみ描画する
         g2.setColor(theme.foreground);
         String[] lines = text.split("\n", -1);
-        for (int row = 0; row < lines.length; row++) {
-            int y = (row + 1) * lineHeight;
+        int visibleRows = computeVisibleRows(lineHeight);
+        int lastRow = Math.min(lines.length, scrollRow + visibleRows);
+        for (int row = scrollRow; row < lastRow; row++) {
+            int screenRow = row - scrollRow;
+            int y = (screenRow + 1) * lineHeight;
             drawLineWithFullWidthSupport(g2, lines[row], 0, y, charWidth);
         }
 
-        // 3. カーソルを描画する
+        // 3. カーソルを描画する（スクロールオフセット考慮）
         drawCursor(g2, lines, charWidth, lineHeight);
 
         // 4. ステータス行を描画する（画面最下部）
@@ -61,9 +88,12 @@ public class EditorCanvas extends JPanel {
     }
 
     private void drawCursor(Graphics2D g2, String[] lines, int charWidth, int lineHeight) {
+        int screenRow = cursorRow - scrollRow;
+        if (screenRow < 0 || screenRow >= computeVisibleRows(lineHeight)) return; // 非表示範囲
+
         String line = (cursorRow < lines.length) ? lines[cursorRow] : "";
         int x = xForCol(line, cursorCol, charWidth);
-        int yTop = cursorRow * lineHeight;
+        int yTop = screenRow * lineHeight;
 
         if (insertMode) {
             // INSERTモード: 縦棒カーソル（2px幅）
@@ -77,7 +107,7 @@ public class EditorCanvas extends JPanel {
             g2.fillRect(x, yTop, blockWidth, lineHeight);
             if (codePoint != -1) {
                 g2.setColor(theme.background);
-                g2.drawString(new String(Character.toChars(codePoint)), x, (cursorRow + 1) * lineHeight);
+                g2.drawString(new String(Character.toChars(codePoint)), x, (screenRow + 1) * lineHeight);
             }
         }
     }
