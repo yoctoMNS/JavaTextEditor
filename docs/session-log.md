@@ -1,6 +1,6 @@
 # 作業セッション記録・引き継ぎ書
 
-最終更新: 2026-06-24 (② v2 コマンドラインモード・ファイル保存/開閉追記)
+最終更新: 2026-06-24 (② v3 アンドゥ/リドゥ追記)
 
 ---
 
@@ -224,14 +224,58 @@ scripts/
 
 ---
 
-## 現在の状態（2026-06-24時点、② v2 コマンドラインモード完了後）
+---
+
+### フェーズ7: ② modal-editing-engine v3 実装（アンドゥ/リドゥ）
+
+**ブランチ**: `claude/undo-redo-v3-k8xmqp`
+
+#### 実施作業
+
+| 対象ファイル | 変更内容 |
+|---|---|
+| `src/dev/vimacs/buffer/PieceTable.java` | `protected getPieces()` / `protected restorePieces()` を追加（サブクラス用アクセサ） |
+| `src/dev/vimacs/buffer/UndoablePieceTable.java` | 新規作成。`PieceTable` を継承し、`undoStack` / `redoStack` でスナップショット管理。`insert` / `delete` を `@Override` して編集前に自動スナップショット取得 |
+| `src/dev/vimacs/editor/ModalEditor.java` | `buffer` フィールドを `PieceTable` → `UndoablePieceTable` に昇格。全コンストラクタ・`loadFromFile()` も `UndoablePieceTable` に変更。`processKey()` 冒頭で `Ctrl+R` → `redo()` を先捌き。`processNormalKey()` に `u` → `undo()` 追加。`clampCursorAfterUndoRedo()` 新規追加 |
+| `test/dev/vimacs/buffer/UndoablePieceTableTest.java` | 新規作成（11ケース・mainメソッド形式） |
+| `test/dev/vimacs/editor/ModalEditorTest.java` | `testUndoKey()` / `testRedoKey()` を追加（5ケース増加・60→65） |
+
+#### 実装したキーバインド
+
+| モード | キー | 動作 |
+|---|---|---|
+| NORMAL | `u` | `buffer.undo()` を呼び、カーソルをクランプ |
+| NORMAL | `Ctrl+R` | `buffer.redo()` を呼び、カーソルをクランプ |
+
+#### 設計判断
+
+| 判断 | 理由 |
+|---|---|
+| `UndoablePieceTable` を別クラスとして `PieceTable` から継承 | `PieceTable` 本体を変更せず、アンドゥ機能の有無を型で区別できる。既存テストへの影響を最小化できる |
+| `snapshotBeforeEdit()` を `insert`/`delete` の `@Override` 内で呼ぶ | 呼び出し元（`ModalEditor`）を修正せずに透過的にスナップショットを取得できる |
+| `processKey()` の冒頭で `Ctrl+R` を先捌き | `processNormalKey(char keyChar)` にはキャラクタのみが渡り、`Ctrl`修飾子が取れないため |
+| `clampCursorAfterUndoRedo()` を追加 | アンドゥ/リドゥでテキストが短くなった場合にカーソルが範囲外になる問題を防ぐ |
+| アンドゥ単位のグループ化は今回スコープ外 | `insert`/`delete` 呼び出し1回が1アンドゥ単位。複合コマンドのグループ化は ② v4以降で対応 |
+
+#### テスト結果
+
+```
+=== dev.vimacs.buffer.PieceTableTest ===         PASS: 15 / 15  (FAIL: 0)
+=== dev.vimacs.buffer.UndoablePieceTableTest ===  PASS: 11 / 11  (FAIL: 0)  ← 新規
+=== dev.vimacs.editor.ModalEditorTest ===         PASS: 65 / 65  (FAIL: 0)  ← 60→65
+=== dev.vimacs.ui.EditorCanvasTest ===            PASS: 8 / 8    (FAIL: 0)
+```
+
+---
+
+## 現在の状態（2026-06-24時点、② v3 アンドゥ/リドゥ完了後）
 
 ### ロードマップ更新後の状態
 
 | # | Skill名 | 状態 |
 |---|---|---|
-| ① | `editor-buffer-architecture` | ✅ 実機検証済み（15/15テスト成功・getTextInRange/offsetOfLine追加済み） |
-| ② | `modal-editing-engine` | ✅ v2完了（60/60テスト成功・:w/:e/:q/:wqコマンド実装済み） |
+| ① | `editor-buffer-architecture` | ✅ 実機検証済み（15/15テスト成功・getTextInRange/offsetOfLine/getPieces/restorePieces追加済み） |
+| ② | `modal-editing-engine` | ✅ v3完了（65/65テスト成功・アンドゥ/リドゥ実装済み） |
 | ③ | `extension-language-runtime` | 未着手 |
 | ④ | `keymap-conflict-resolution` | 未着手（②完了により着手可能） |
 | ⑤ | `gui-rendering-pipeline` | ✅ v2実機検証済み（8/8テスト成功）スクロール対応完了 |
@@ -240,8 +284,8 @@ scripts/
 ### ブランチ状態
 
 ```
-main  ← 8261cfa
-└── claude/command-mode-v2-1kcesl（フィーチャーブランチ・作業完了・プッシュ済み）
+main  ← eeaa3c7
+└── claude/undo-redo-v3-k8xmqp（フィーチャーブランチ・作業完了・プッシュ済み）
 ```
 
 ### 主要ファイルの役割（現時点）
@@ -250,8 +294,9 @@ main  ← 8261cfa
 |---|---|
 | `src/dev/vimacs/Main.java` | JFrame生成・args[0]でファイル起動対応・ModalEditor+KeyboardFocusManager接続 |
 | `src/dev/vimacs/buffer/Piece.java` | ピース（record: source/start/length） |
-| `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/getTextInRange/offsetOfLine/length） |
-| `src/dev/vimacs/editor/ModalEditor.java` | NORMAL/INSERT/COMMANDの3モード管理・ファイルI/O・カーソル管理・キー処理 |
+| `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/getTextInRange/offsetOfLine/length・protected getPieces/restorePieces） |
+| `src/dev/vimacs/buffer/UndoablePieceTable.java` | PieceTable サブクラス（undoStack/redoStack によるスナップショット管理・undo/redo/canUndo/canRedo） |
+| `src/dev/vimacs/editor/ModalEditor.java` | NORMAL/INSERT/COMMANDの3モード管理・ファイルI/O・カーソル管理・キー処理・u/Ctrl+R でアンドゥ/リドゥ |
 | `src/dev/vimacs/ui/Theme.java` | LIGHT_MODE / DARK_MODE 配色定数 |
 | `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行/コマンドライン）＋スクロール管理 |
 
@@ -263,8 +308,8 @@ main  ← 8261cfa
 
 | 優先 | Skill | 理由 |
 |---|---|---|
-| 1位 | ④ `keymap-conflict-resolution` | ②v2が完了し着手条件が揃った |
-| 2位 | ② `modal-editing-engine` v3 | VISUALモード・アンドゥ/リドゥ |
+| 1位 | ④ `keymap-conflict-resolution` | ②v3完了により着手条件が揃った |
+| 2位 | ② `modal-editing-engine` v4 | VISUALモード・範囲選択 |
 
 ### 既知の制限（未解決）
 
@@ -272,7 +317,7 @@ main  ← 8261cfa
 |---|---|---|
 | 横スクロールなし | 長い行が画面外にはみ出す | ⑤ v3 |
 | VISUALモードなし | 範囲選択・ヤンク・ペーストが未実装 | ② v3以降 |
-| アンドゥ/リドゥなし | PieceTableのスナップショット方式は設計済み（SKILL.md参照）だが未実装 | ② v3以降 |
+| アンドゥ単位のグループ化なし | 各 insert/delete が個別アンドゥ単位。複合コマンドのグループ化は未実装 | ② v4以降 |
 | `:w` 後に currentFilePath が設定される前の `:wq` | `:wq` は `:w` が成功した場合のみ `:q` を実行する（正しい挙動） | 問題なし |
 | コマンド補完・履歴なし | Vim の `<Up>` でコマンド履歴を辿る機能 | スコープ外（② v4以降？） |
 | `getTextInRange` を描画に未使用 | 現状 `getText()` で全文を渡しており将来最適化用として実装のみ | 巨大ファイルで速度問題が出た場合に対応 |

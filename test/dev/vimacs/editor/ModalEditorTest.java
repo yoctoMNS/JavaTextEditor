@@ -34,6 +34,8 @@ public class ModalEditorTest {
         testCommandLoadFile();
         testCommandErrors();
         testCommandQuit();
+        testUndoKey();
+        testRedoKey();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -391,6 +393,67 @@ public class ModalEditorTest {
         typeString(ed, "q");
         ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
         check("':q' で exitCallback が呼ばれる", exited[0]);
+    }
+
+    // -------------------------------------------------------------------------
+    // u キー: アンドゥ
+    // -------------------------------------------------------------------------
+
+    static void testUndoKey() {
+        System.out.println("[u キー: アンドゥ]");
+
+        // 文字1文字入力後 ESC → u でテキストが元に戻る（各 insert が1アンドゥ単位）
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'i');
+        typeString(ed, "X");
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        pressKey(ed, 'u');
+        check("INSERT で文字入力後 ESC → u でテキストが前の状態に戻る",
+              ed.getText().equals("hello"));
+
+        // アンドゥ後カーソルクランプ確認
+        ModalEditor ed2 = new ModalEditor("hello");
+        pressKey(ed2, 'i');
+        for (int i = 0; i < 5; i++) pressCtrl(ed2, KeyEvent.VK_F, 'f');
+        typeString(ed2, "xyz");
+        ed2.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        pressKey(ed2, 'u');
+        pressKey(ed2, 'u');
+        pressKey(ed2, 'u');
+        int maxCol = Math.max(0, ed2.getText().split("\n", -1)[ed2.getCursorRow()].length() - 1);
+        check("アンドゥ後にカーソルが有効範囲内にクランプされる",
+              ed2.getCursorCol() <= maxCol);
+
+        // アンドゥ履歴なし → クラッシュしない
+        ModalEditor ed3 = new ModalEditor("hello");
+        pressKey(ed3, 'u');
+        check("アンドゥできない状態で u を押しても何も起きない（クラッシュしない）",
+              ed3.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Ctrl+R キー: リドゥ
+    // -------------------------------------------------------------------------
+
+    static void testRedoKey() {
+        System.out.println("[Ctrl+R キー: リドゥ]");
+
+        // undo 後に Ctrl+R でテキストが再適用される
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'i');
+        typeString(ed, "abc");
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        String textAfterInput = ed.getText();
+        pressKey(ed, 'u');
+        pressCtrl(ed, KeyEvent.VK_R, (char) 18);
+        check("u の後 Ctrl+R → テキストが再適用される",
+              ed.getText().equals(textAfterInput));
+
+        // リドゥ履歴なし → クラッシュしない
+        ModalEditor ed2 = new ModalEditor("hello");
+        pressCtrl(ed2, KeyEvent.VK_R, (char) 18);
+        check("リドゥできない状態で Ctrl+R を押しても何も起きない",
+              ed2.getText().equals("hello"));
     }
 
     // -------------------------------------------------------------------------
