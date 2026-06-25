@@ -634,4 +634,22 @@ public class ModalEditor {
     public String getCommandBuffer()   { return commandBuffer.toString(); }
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType; }
+
+    // プラグイン向けバッファ操作
+    public void insertAtOffset(int offset, String text) {
+        buffer.insert(offset, text);
+        syncCanvas();
+    }
+
+    public void deleteRange(int startOffset, int endOffset) {
+        if (startOffset < endOffset) {
+            buffer.delete(startOffset, endOffset - startOffset);
+            syncCanvas();
+        }
+    }
+
+    public void setStatusMessage(String message) {
+        this.statusMessage = message;
+        syncCanvas();
+    }
 }
