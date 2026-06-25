@@ -13,8 +13,10 @@ public class EditorCanvas extends JPanel {
     private boolean visualLineMode = false;
     private Theme theme = Theme.LIGHT_MODE;
     private int scrollRow = 0;
-    private int cachedLineHeight = 20; // 初回 paint 前の近似値
-    private String commandLineText = null; // null = 通常のモード表示
+    private int scrollCol = 0;              // 横スクロール（セル単位）
+    private int cachedLineHeight = 20;      // 初回 paint 前の近似値
+    private int cachedCharWidth  = 10;      // 初回 paint 前の近似値
+    private String commandLineText = null;  // null = 通常のモード表示
     private int selAnchorRow = -1;
     private int selAnchorCol = -1;
     private int selCursorRow = -1;
@@ -28,6 +30,8 @@ public class EditorCanvas extends JPanel {
     public void setTheme(Theme theme) { this.theme = theme; repaint(); }
     public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
     public int getScrollRow() { return scrollRow; }
+    public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); repaint(); }
+    public int getScrollCol() { return scrollCol; }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
     public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
@@ -59,6 +63,42 @@ public class EditorCanvas extends JPanel {
         }
     }
 
+    /**
+     * カーソル列が表示範囲に収まるよう scrollCol を調整する。
+     * ModalEditor がカーソル移動後に呼ぶことで横スクロールを追従させる。
+     *
+     * @param col      カーソルの文字インデックス（line の何文字目か）
+     * @param line     カーソルがいる行の文字列（全角幅計算に使用）
+     */
+    public void ensureCursorColVisible(int col, String line) {
+        int cursorCells = cellsForCol(line, col);
+        int visibleCols = computeVisibleCols();
+        if (cursorCells < scrollCol) {
+            scrollCol = cursorCells;
+            repaint();
+        } else if (visibleCols > 0 && cursorCells >= scrollCol + visibleCols) {
+            scrollCol = cursorCells - visibleCols + 1;
+            repaint();
+        }
+    }
+
+    /** 行頭から col 文字目までの合計セル幅を返す（全角=2、半角=1） */
+    private static int cellsForCol(String line, int col) {
+        int cells = 0, count = 0;
+        for (int i = 0; i < line.length() && count < col; ) {
+            int cp = line.codePointAt(i);
+            cells += charCellWidth(cp);
+            i += Character.charCount(cp);
+            count++;
+        }
+        return cells;
+    }
+
+    private int computeVisibleCols() {
+        if (cachedCharWidth <= 0) return 80;
+        return Math.max(1, getWidth() / cachedCharWidth);
+    }
+
     /** ステータス行1行を除いた領域に収まる行数を返す */
     private int computeVisibleRows(int lineHeight) {
         if (lineHeight <= 0) return 1;
@@ -75,13 +115,16 @@ public class EditorCanvas extends JPanel {
         int lineHeight = fm.getHeight();
         cachedLineHeight = lineHeight;
 
+        cachedCharWidth = charWidth;
+        int scrollOffsetX = scrollCol * charWidth;
+
         // 1. 背景を塗る
         g2.setColor(theme.background);
         g2.fillRect(0, 0, getWidth(), getHeight());
 
         // 1.5 選択ハイライト（VISUALモード時）
         if (visualMode && selAnchorRow >= 0) {
-            drawSelectionHighlight(g2, text.split("\n", -1), charWidth, lineHeight);
+            drawSelectionHighlight(g2, text.split("\n", -1), charWidth, lineHeight, scrollOffsetX);
         }
 
         // 2. 表示行範囲（scrollRow 〜 scrollRow+visibleRows）のみ描画する
@@ -92,35 +135,46 @@ public class EditorCanvas extends JPanel {
         for (int row = scrollRow; row < lastRow; row++) {
             int screenRow = row - scrollRow;
             int y = (screenRow + 1) * lineHeight;
-            drawLineWithFullWidthSupport(g2, lines[row], 0, y, charWidth);
+            drawLineWithFullWidthSupport(g2, lines[row], y, charWidth, scrollOffsetX);
         }
 
-        // 3. カーソルを描画する（スクロールオフセット考慮）
-        drawCursor(g2, lines, charWidth, lineHeight);
+        // 3. カーソルを描画する（縦・横スクロールオフセット考慮）
+        drawCursor(g2, lines, charWidth, lineHeight, scrollOffsetX);
 
         // 4. ステータス行を描画する（画面最下部）
         drawStatusLine(g2, lineHeight);
     }
 
-    /** 全角文字を考慮しながら1行を描画する */
-    private void drawLineWithFullWidthSupport(Graphics2D g2, String line, int xStart, int y, int charWidth) {
-        int x = xStart;
+    /**
+     * 全角文字を考慮しながら1行を描画する。
+     * scrollOffsetX ピクセル分だけ左にシフトして描画し、
+     * 画面外（x < 0 または x >= width）の文字は描画をスキップする。
+     */
+    private void drawLineWithFullWidthSupport(Graphics2D g2, String line, int y, int charWidth, int scrollOffsetX) {
+        int x = -scrollOffsetX;
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
             int cellWidth = charCellWidth(codePoint);
-            g2.drawString(new String(Character.toChars(codePoint)), x, y);
-            x += charWidth * cellWidth;
+            int charPixelWidth = charWidth * cellWidth;
+            if (x + charPixelWidth > 0 && x < getWidth()) {
+                g2.drawString(new String(Character.toChars(codePoint)), x, y);
+            }
+            x += charPixelWidth;
             i += Character.charCount(codePoint);
+            if (x >= getWidth()) break; // 右端を超えたら残りは不要
         }
     }
 
-    private void drawCursor(Graphics2D g2, String[] lines, int charWidth, int lineHeight) {
+    private void drawCursor(Graphics2D g2, String[] lines, int charWidth, int lineHeight, int scrollOffsetX) {
         int screenRow = cursorRow - scrollRow;
-        if (screenRow < 0 || screenRow >= computeVisibleRows(lineHeight)) return; // 非表示範囲
+        if (screenRow < 0 || screenRow >= computeVisibleRows(lineHeight)) return; // 縦方向の非表示範囲
 
         String line = (cursorRow < lines.length) ? lines[cursorRow] : "";
-        int x = xForCol(line, cursorCol, charWidth);
+        int x = xForCol(line, cursorCol, charWidth) - scrollOffsetX;
         int yTop = screenRow * lineHeight;
+
+        // カーソルが横スクロールで画面外に出ている場合は描画しない
+        if (x + charWidth < 0 || x >= getWidth()) return;
 
         if (insertMode) {
             // INSERTモード: 縦棒カーソル（2px幅）
@@ -157,7 +211,7 @@ public class EditorCanvas extends JPanel {
     }
 
     private void drawSelectionHighlight(Graphics2D g2, String[] lines,
-                                         int charWidth, int lineHeight) {
+                                         int charWidth, int lineHeight, int scrollOffsetX) {
         int r1 = selAnchorRow, c1 = selAnchorCol;
         int r2 = selCursorRow, c2 = selCursorCol;
         if (r1 > r2 || (r1 == r2 && c1 > c2)) {
@@ -187,11 +241,15 @@ public class EditorCanvas extends JPanel {
                 int colStart = (row == r1) ? c1 : 0;
                 int colEnd = (row == r2) ? c2 : Math.max(0, line.length() - 1);
 
-                int xStart = xForCol(line, colStart, charWidth);
-                int xEnd = xForCol(line, Math.min(colEnd + 1, line.length()), charWidth);
+                int xStart = xForCol(line, colStart, charWidth) - scrollOffsetX;
+                int xEnd   = xForCol(line, Math.min(colEnd + 1, line.length()), charWidth) - scrollOffsetX;
                 if (xEnd <= xStart) xEnd = xStart + charWidth;
-
-                g2.fillRect(xStart, yTop, xEnd - xStart, lineHeight);
+                // 画面外クリップ
+                int drawStart = Math.max(xStart, 0);
+                int drawEnd   = Math.min(xEnd, getWidth());
+                if (drawStart < drawEnd) {
+                    g2.fillRect(drawStart, yTop, drawEnd - drawStart, lineHeight);
+                }
             }
         }
     }

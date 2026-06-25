@@ -606,6 +606,9 @@ public class ModalEditor {
             }
 
             canvas.ensureCursorVisible(cursorRow);
+            String[] lines = buffer.getText().split("\n", -1);
+            String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
+            canvas.ensureCursorColVisible(cursorCol, curLine);
             if (mode == Mode.COMMAND) {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
             } else if (!statusMessage.isEmpty()) {

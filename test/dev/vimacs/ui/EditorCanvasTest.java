@@ -228,7 +228,106 @@ public class EditorCanvasTest {
             pass += 1;
         }
 
-        int total = 15;
+        // =====================================================================
+        // 横スクロール（⑤ v3）テスト
+        // =====================================================================
+
+        // Test 16: scrollCol 初期値は 0
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            boolean ok = canvas.getScrollCol() == 0;
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "scrollCol 初期値 == 0");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 17: setScrollCol で値が設定される（負の値は 0 にクランプ）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setScrollCol(10);
+            boolean posOk = canvas.getScrollCol() == 10;
+            canvas.setScrollCol(-5);
+            boolean negOk = canvas.getScrollCol() == 0;
+            boolean ok = posOk && negOk;
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "setScrollCol 正値/負値クランプ");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 18: ensureCursorColVisible - カーソルが右にはみ出た場合 scrollCol が増える
+        {
+            // width=200, cachedCharWidth=10 (デフォルト) → visibleCols ≈ 20
+            // cursorCol=30 → 右端(20)を超えるので scrollCol が増えるはず
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(200, 300);
+            canvas.setText("A".repeat(50));
+            canvas.ensureCursorColVisible(30, "A".repeat(50));
+            boolean ok = canvas.getScrollCol() > 0;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "ensureCursorColVisible 右方追従 scrollCol=" + canvas.getScrollCol());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 19: ensureCursorColVisible - カーソルが左に戻った場合 scrollCol が減る
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(200, 300);
+            canvas.setText("A".repeat(50));
+            canvas.setScrollCol(20); // まず右にスクロール
+            canvas.ensureCursorColVisible(0, "A".repeat(50));
+            boolean ok = canvas.getScrollCol() == 0;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "ensureCursorColVisible 左方追従 scrollCol=" + canvas.getScrollCol());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 20: scrollCol > 0 の時、行頭の文字が描画されない（背景色が見える）
+        {
+            // 短い文字列をスクロールすることで行頭が隠れ、左端が背景色になるはず
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("XXXXXXXXXX");  // 左端に描画される文字列
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setScrollCol(0);  // スクロールなし → X が左端に描画される → 背景色でない
+            BufferedImage imgNoScroll = render(canvas, 400, 300);
+            canvas.setScrollCol(100); // 大きくスクロール → 文字が画面外 → 左端は背景色
+            BufferedImage imgScrolled = render(canvas, 400, 300);
+            // スクロールなし: 左端 (1,1) はカーソル色（前景色）か文字領域
+            // スクロールあり: 左端 (1,1) は背景色になるはず
+            boolean isBackground = colorMatch(imgScrolled.getRGB(1, 1), 0xF5, 0xF0, 0xE6);
+            System.out.println((isBackground ? "[OK] " : "[FAIL] ")
+                + "横スクロール後の左端が背景色になる");
+            pass += isBackground ? 1 : 0;
+        }
+
+        // Test 21: ensureCursorColVisible は全角文字（2セル分）を正しく計算する
+        {
+            // "あ" は 2 セル。"ああ" なら 4 セル。
+            // width=60, cachedCharWidth=10 → visibleCols=6セル
+            // cursorCol=4 (5文字目の位置) の全角文字列では 4*2=8 セル → 範囲外
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(60, 300);
+            String allZenkaku = "ああああああ"; // 6文字 × 2セル = 12セル
+            canvas.ensureCursorColVisible(4, allZenkaku); // 8セル目にカーソル
+            boolean ok = canvas.getScrollCol() > 0;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "全角文字横スクロール scrollCol=" + canvas.getScrollCol());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 22: scrollCol=0 に戻った後、描画が正常に復帰する（クラッシュなし）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("Hello, World!");
+            canvas.setTheme(Theme.DARK_MODE);
+            canvas.setScrollCol(5);
+            BufferedImage img1 = render(canvas, 400, 300);
+            canvas.setScrollCol(0);
+            BufferedImage img2 = render(canvas, 400, 300);
+            System.out.println("[OK] scrollCol 5→0 復帰描画がクラッシュしない");
+            pass += 1;
+        }
+
+        int total = 22;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
