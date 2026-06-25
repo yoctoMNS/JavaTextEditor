@@ -1,6 +1,6 @@
 # 作業セッション記録・引き継ぎ書
 
-最終更新: 2026-06-24 (② v3 アンドゥ/リドゥ追記)
+最終更新: 2026-06-25 (② v4 VISUALモード・ヤンク/ペースト実装完了)
 
 ---
 
@@ -284,8 +284,98 @@ scripts/
 ### ブランチ状態
 
 ```
-main  ← eeaa3c7
-└── claude/undo-redo-v3-k8xmqp（フィーチャーブランチ・作業完了・プッシュ済み）
+main  ← 4be1317
+└── claude/modal-editing-v4-visual-8dvxez（フィーチャーブランチ・作業進行中）
+```
+
+---
+
+### フェーズ5b: ② modal-editing-engine v4（VISUALモード・ヤンク/ペースト）
+
+**対象スキル**: `.claude/skills/editor-buffer-architecture/` (既存・参照用)
+
+**ブランチ**: `claude/modal-editing-v4-visual-8dvxez`
+
+#### 実装内容
+
+##### ModalEditor.java への追加
+
+| 項目 | 内容 |
+|---|---|
+| Mode enum | `VISUAL` を追加（従来 NORMAL/INSERT/COMMAND） |
+| フィールド | `anchorRow`, `anchorCol` (選択開始点)・`yankRegister` (デフォルトレジスタ) |
+| NORMALモードキー | `v` (VISUAL進入)・`x` (1文字削除)・`p`/`P` (ペースト) |
+| VISUALモードキー | `h/l/j/k` (カーソル移動)・`y` (ヤンク)・`d` (削除) |
+| メソッド | `processVisualKey()`・`getSelectedText()`・`deleteSelected()`・`deleteCharAtCursor()`・`pasteAfter()`・`pasteBefore()` 等 |
+
+##### EditorCanvas.java への追加
+
+| 項目 | 内容 |
+|---|---|
+| フィールド | `visualMode` flag・`selAnchorRow/Col`, `selCursorRow/Col` |
+| メソッド | `drawSelectionHighlight()` (アクセント色でハイライト)・`setVisualMode()`・`setSelection()`・`clearSelection()` |
+| 修正 | `drawStatusLine()` で "-- VISUAL --" 表示 |
+
+##### テスト追加（v3 の 65 ケースから v4 は 84 ケースに拡大）
+
+**ModalEditorTest.java**:
+```
+新規メソッド6個（11項目・計19ケース）:
+  - testVisualEnter(), testVisualEscape(), testVisualMovement()
+  - testVisualYank(), testVisualDelete()
+  - testPasteAfter(), testPasteBefore(), testPasteEmptyRegister()
+  - testDeleteChar(), testDeleteCharEolClamping(), testDeleteCharEmptyLine()
+```
+
+**EditorCanvasTest.java**:
+```
+新規メソッド2個（計2ケース）:
+  - VISUALモード setVisualMode(true) でrepaint呼出確認
+  - setSelection(0, 0, 0, 4) で選択設定確認
+```
+
+**テスト実行結果**:
+```
+ModalEditorTest:    84/84 PASS
+EditorCanvasTest:   10/10 PASS
+合計:              94/94 PASS（全テストクラス 4/4）
+既存テスト回帰:     なし
+```
+
+#### 実装の注意点
+
+1. **選択ハイライト**: アンカー（`v` 押下時）とカーソル位置を min/max で正規化し、その範囲を `Theme.accent` 色でハイライト表示。
+2. **ヤンク単位**: 今回は**文字単位（character-wise）のみ**。行ヤンク (`yy`)・行削除 (`dd`) は v5 以降。
+3. **アンドゥとの連携**: VISUAL 中に削除した場合、`buffer.delete()` は `UndoablePieceTable` のスナップショットを自動記録するため、別途対応は不要。
+4. **レジスタ**: デフォルトレジスタ `yankRegister` のみ。名前付きレジスタはスコープ外。
+
+#### コミット情報
+
+```
+7192dcf ② modal-editing-engine v4: VISUALモード・ヤンク/ペースト実装
+```
+
+---
+
+### フェーズのまとめ: ④ keymap-conflict-resolution への依存性
+
+**注意**: CLAUDE.md の依存表に記載通り、④ `keymap-conflict-resolution` は **②③ 両方に依存** している（前セッション引継書に誤記があった）。
+
+```
+②: modal-editing-engine  ✅ v3 完了・v4 完了
+③: extension-language-runtime  ❌ 未着手
+④: keymap-conflict-resolution  ⏳ ③が完了するまで着手不可
+```
+
+④ が次優先ではなく、③ `extension-language-runtime`（Java動的コンパイルによるプラグイン機構）が先。
+
+---
+
+## 前フェーズまでの git 状態
+
+```
+main  ← 4be1317
+└── claude/modal-editing-v4-visual-8dvxez（フィーチャーブランチ・作業完了・プッシュ済み）
 ```
 
 ### 主要ファイルの役割（現時点）
@@ -296,7 +386,7 @@ main  ← eeaa3c7
 | `src/dev/vimacs/buffer/Piece.java` | ピース（record: source/start/length） |
 | `src/dev/vimacs/buffer/PieceTable.java` | バッファ本体（insert/delete/getText/getTextInRange/offsetOfLine/length・protected getPieces/restorePieces） |
 | `src/dev/vimacs/buffer/UndoablePieceTable.java` | PieceTable サブクラス（undoStack/redoStack によるスナップショット管理・undo/redo/canUndo/canRedo） |
-| `src/dev/vimacs/editor/ModalEditor.java` | NORMAL/INSERT/COMMANDの3モード管理・ファイルI/O・カーソル管理・キー処理・u/Ctrl+R でアンドゥ/リドゥ |
+| `src/dev/vimacs/editor/ModalEditor.java` | NORMAL/INSERT/COMMAND/VISUALの4モード管理・ファイルI/O・カーソル管理・キー処理・u/Ctrl+R でアンドゥ/リドゥ・ヤンク/ペースト |
 | `src/dev/vimacs/ui/Theme.java` | LIGHT_MODE / DARK_MODE 配色定数 |
 | `src/dev/vimacs/ui/EditorCanvas.java` | Swing描画（テキスト・カーソル・ステータス行/コマンドライン）＋スクロール管理 |
 
@@ -316,10 +406,12 @@ main  ← eeaa3c7
 | 制限 | 詳細 | 対応フェーズ |
 |---|---|---|
 | 横スクロールなし | 長い行が画面外にはみ出す | ⑤ v3 |
-| VISUALモードなし | 範囲選択・ヤンク・ペーストが未実装 | ② v3以降 |
-| アンドゥ単位のグループ化なし | 各 insert/delete が個別アンドゥ単位。複合コマンドのグループ化は未実装 | ② v4以降 |
+| 行単位ヤンク/削除なし | `yy`・`dd` が未実装（文字ヤンクのみ） | ② v5以降 |
+| アンドゥ単位のグループ化なし | 各 insert/delete が個別アンドゥ単位。複合コマンドのグループ化は未実装 | ② v5以降 |
+| ③ extension-language-runtime 未着手 | Java動的コンパイルによるプラグイン機構 | ③ 予定（④の依存関係） |
+| ④ keymap-conflict-resolution 未着手 | ③完了後に着手可能 | ④ 予定 |
 | `:w` 後に currentFilePath が設定される前の `:wq` | `:wq` は `:w` が成功した場合のみ `:q` を実行する（正しい挙動） | 問題なし |
-| コマンド補完・履歴なし | Vim の `<Up>` でコマンド履歴を辿る機能 | スコープ外（② v4以降？） |
+| コマンド補完・履歴なし | Vim の `<Up>` でコマンド履歴を辿る機能 | スコープ外 |
 | `getTextInRange` を描画に未使用 | 現状 `getText()` で全文を渡しており将来最適化用として実装のみ | 巨大ファイルで速度問題が出た場合に対応 |
 
 ---
