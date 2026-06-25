@@ -17,13 +17,16 @@ import java.nio.file.Path;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL }
 
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
     private Mode mode = Mode.NORMAL;
     private int cursorRow = 0;
     private int cursorCol = 0;
+    private int anchorRow = 0;
+    private int anchorCol = 0;
+    private String yankRegister = "";
     private final StringBuilder commandBuffer = new StringBuilder();
     private String currentFilePath = null;
     private String statusMessage = "";
@@ -59,10 +62,16 @@ public class ModalEditor {
             syncCanvas();
             return;
         }
+        if (mode == Mode.VISUAL && keyCode == KeyEvent.VK_ESCAPE) {
+            mode = Mode.NORMAL;
+            syncCanvas();
+            return;
+        }
         switch (mode) {
             case INSERT  -> processInsertKey(keyCode, keyChar, modifiers);
             case COMMAND -> processCommandKey(keyCode, keyChar);
             case NORMAL  -> processNormalKey(keyChar);
+            case VISUAL  -> processVisualKey(keyChar);
         }
         syncCanvas();
     }
@@ -106,6 +115,20 @@ public class ModalEditor {
             case 'u' -> {
                 buffer.undo();
                 clampCursorAfterUndoRedo();
+            }
+            case 'v' -> {
+                anchorRow = cursorRow;
+                anchorCol = cursorCol;
+                mode = Mode.VISUAL;
+            }
+            case 'x' -> {
+                deleteCharAtCursor();
+            }
+            case 'p' -> {
+                pasteAfter();
+            }
+            case 'P' -> {
+                pasteBefore();
             }
         }
     }
@@ -232,6 +255,29 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
+    // VISUALモード処理
+    // -------------------------------------------------------------------------
+
+    private void processVisualKey(char keyChar) {
+        switch (keyChar) {
+            case 'h' -> moveCursor(0, -1);
+            case 'l' -> moveCursor(0, 1);
+            case 'j' -> moveCursor(1, 0);
+            case 'k' -> moveCursor(-1, 0);
+            case 'y' -> {
+                yankRegister = getSelectedText();
+                mode = Mode.NORMAL;
+            }
+            case 'd' -> {
+                yankRegister = getSelectedText();
+                deleteSelected();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // カーソル移動
     // -------------------------------------------------------------------------
 
@@ -291,6 +337,71 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
+    // VISUALモード用ヘルパーメソッド
+    // -------------------------------------------------------------------------
+
+    private String getSelectedText() {
+        int o1 = offsetAt(anchorRow, anchorCol);
+        int o2 = offsetOfCursor();
+        int start = Math.min(o1, o2);
+        int end = Math.max(o1, o2);
+        if (end < buffer.length()) {
+            end = Math.min(end + 1, buffer.length());
+        }
+        return buffer.getText().substring(start, end);
+    }
+
+    private void deleteSelected() {
+        int o1 = offsetAt(anchorRow, anchorCol);
+        int o2 = offsetOfCursor();
+        int start = Math.min(o1, o2);
+        int end = Math.max(o1, o2);
+        if (end < buffer.length()) {
+            end = Math.min(end + 1, buffer.length());
+        }
+        buffer.delete(start, end - start);
+        moveCursorToOffset(start);
+    }
+
+    private void moveCursorToOffset(int offset) {
+        String[] lines = getLines();
+        int pos = 0;
+        for (int i = 0; i < lines.length; i++) {
+            int lineEnd = pos + lines[i].length();
+            if (offset <= lineEnd) {
+                cursorRow = i;
+                cursorCol = offset - pos;
+                return;
+            }
+            pos = lineEnd + 1;
+        }
+        cursorRow = Math.max(0, lines.length - 1);
+        cursorCol = lines[cursorRow].length();
+    }
+
+    private void deleteCharAtCursor() {
+        String[] lines = getLines();
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        if (lineLen == 0) return;
+        buffer.delete(offsetOfCursor(), 1);
+        clampCursorForNormal();
+    }
+
+    private void pasteAfter() {
+        if (yankRegister.isEmpty()) return;
+        int offset = Math.min(offsetOfCursor() + 1, buffer.length());
+        buffer.insert(offset, yankRegister);
+        moveCursorToOffset(offset);
+        clampCursorForNormal();
+    }
+
+    private void pasteBefore() {
+        if (yankRegister.isEmpty()) return;
+        buffer.insert(offsetOfCursor(), yankRegister);
+        clampCursorForNormal();
+    }
+
+    // -------------------------------------------------------------------------
     // GUI同期
     // -------------------------------------------------------------------------
 
@@ -299,6 +410,12 @@ public class ModalEditor {
             canvas.setText(buffer.getText());
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
+            canvas.setVisualMode(mode == Mode.VISUAL);
+            if (mode == Mode.VISUAL) {
+                canvas.setSelection(anchorRow, anchorCol, cursorRow, cursorCol);
+            } else {
+                canvas.clearSelection();
+            }
             canvas.ensureCursorVisible(cursorRow);
             if (mode == Mode.COMMAND) {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
@@ -319,6 +436,8 @@ public class ModalEditor {
     public int getCursorCol()        { return cursorCol; }
     public boolean isInsertMode()    { return mode == Mode.INSERT; }
     public boolean isCommandMode()   { return mode == Mode.COMMAND; }
+    public boolean isVisualMode()    { return mode == Mode.VISUAL; }
     public String getStatusMessage() { return statusMessage; }
     public String getCommandBuffer() { return commandBuffer.toString(); }
+    public String getYankRegister()  { return yankRegister; }
 }

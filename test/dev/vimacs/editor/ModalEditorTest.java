@@ -36,6 +36,14 @@ public class ModalEditorTest {
         testCommandQuit();
         testUndoKey();
         testRedoKey();
+        testVisualEnter();
+        testVisualEscape();
+        testVisualMovement();
+        testVisualYank();
+        testVisualDelete();
+        testPasteAfter();
+        testPasteBefore();
+        testDeleteChar();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -454,6 +462,145 @@ public class ModalEditorTest {
         pressCtrl(ed2, KeyEvent.VK_R, (char) 18);
         check("リドゥできない状態で Ctrl+R を押しても何も起きない",
               ed2.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // VISUALモード: 基本動作
+    // -------------------------------------------------------------------------
+
+    static void testVisualEnter() {
+        System.out.println("[VISUALモード: v で進入]");
+        ModalEditor ed = new ModalEditor("hello");
+        check("初期はNORMALモード", !ed.isVisualMode());
+        pressKey(ed, 'v');
+        check("v でVISUALモードに", ed.isVisualMode());
+    }
+
+    static void testVisualEscape() {
+        System.out.println("[VISUALモード: ESC で脱出]");
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'v');
+        check("v でVISUALモード", ed.isVisualMode());
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 0, 0);
+        check("ESC でNORMALモード", !ed.isVisualMode());
+    }
+
+    static void testVisualMovement() {
+        System.out.println("[VISUALモード: カーソル移動]");
+        ModalEditor ed = new ModalEditor("abc\ndef");
+        pressKey(ed, 'v');
+        check("v でVISUAL", ed.isVisualMode());
+        pressKey(ed, 'l');
+        check("VISUAL中に l でカーソル移動", ed.getCursorCol() == 1);
+        pressKey(ed, 'h');
+        check("VISUAL中に h で戻る", ed.getCursorCol() == 0);
+        pressKey(ed, 'j');
+        check("VISUAL中に j で行移動", ed.getCursorRow() == 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // VISUALモード: ヤンク・削除
+    // -------------------------------------------------------------------------
+
+    static void testVisualYank() {
+        System.out.println("[VISUALモード: y でヤンク]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'v');        // アンカー = (0, 0)
+        pressKey(ed, 'l');        // カーソル = (0, 1)
+        pressKey(ed, 'l');        // カーソル = (0, 2)
+        pressKey(ed, 'y');
+        check("y でNORMALに戻る", !ed.isVisualMode());
+        check("yankRegister に選択分がヤンクされる", ed.getYankRegister().equals("abc"));
+    }
+
+    static void testVisualDelete() {
+        System.out.println("[VISUALモード: d で削除]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'v');        // アンカー = (0, 0)
+        pressKey(ed, 'l');        // カーソル = (0, 1)
+        pressKey(ed, 'l');        // カーソル = (0, 2)
+        pressKey(ed, 'd');
+        check("d でNORMALに戻る", !ed.isVisualMode());
+        check("選択範囲が削除される", ed.getText().equals("def"));
+        check("yankRegister に削除分が保存", ed.getYankRegister().equals("abc"));
+        check("カーソルが選択開始位置に", ed.getCursorCol() == 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // ペースト: p/P
+    // -------------------------------------------------------------------------
+
+    static void testPasteAfter() {
+        System.out.println("[NORMALモード: p で後ろにペースト]");
+        ModalEditor ed = new ModalEditor("abcdef");
+
+        // ヤンク準備: xy でカーソル位置の "a" をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'y');
+        check("yankRegister = 'a'", ed.getYankRegister().equals("a"));
+
+        // カーソルを列2に移動して p
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        pressKey(ed, 'p');
+        check("p でカーソル後にペースト", ed.getText().equals("abcadef"));
+    }
+
+    static void testPasteBefore() {
+        System.out.println("[NORMALモード: P で前にペースト]");
+        ModalEditor ed = new ModalEditor("abcdef");
+
+        // v y でカーソル位置をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'y');
+
+        // カーソルを列2に移動して P
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        pressKey(ed, 'P');
+        check("P でカーソル前にペースト", ed.getText().equals("abacdef"));
+    }
+
+    static void testPasteEmptyRegister() {
+        System.out.println("[NORMALモード: 空のレジスタでペースト]");
+        ModalEditor ed = new ModalEditor("hello");
+        check("初期は yankRegister 空", ed.getYankRegister().isEmpty());
+        pressKey(ed, 'p');
+        check("yankRegister 空で p を押しても何も起きない", ed.getText().equals("hello"));
+        pressKey(ed, 'P');
+        check("yankRegister 空で P を押しても何も起きない", ed.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // x: 1文字削除
+    // -------------------------------------------------------------------------
+
+    static void testDeleteChar() {
+        System.out.println("[NORMALモード: x で1文字削除]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'x');
+        check("x でカーソル下の 'a' が削除", ed.getText().equals("bcdef"));
+        check("カーソルは位置変わらず", ed.getCursorCol() == 0);
+    }
+
+    static void testDeleteCharEolClamping() {
+        System.out.println("[NORMALモード: x で行末文字削除時のクランプ]");
+        ModalEditor ed = new ModalEditor("abc");
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        check("カーソルが 'c' 上", ed.getCursorCol() == 2);
+        pressKey(ed, 'x');
+        check("x で 'c' が削除", ed.getText().equals("ab"));
+        check("カーソルが行末を超えないように調整", ed.getCursorCol() == 1);
+    }
+
+    static void testDeleteCharEmptyLine() {
+        System.out.println("[NORMALモード: x で空行]");
+        ModalEditor ed = new ModalEditor("a\n\nb");
+        pressKey(ed, 'j');
+        check("2行目（空行）に移動", ed.getCursorRow() == 1);
+        pressKey(ed, 'x');
+        check("空行で x を押してもクラッシュしない", ed.getText().equals("a\n\nb"));
     }
 
     // -------------------------------------------------------------------------
