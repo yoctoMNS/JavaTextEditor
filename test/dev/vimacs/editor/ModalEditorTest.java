@@ -1,6 +1,9 @@
 package dev.vimacs.editor;
 
 import java.awt.event.KeyEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * ModalEditor のテストハーネス（mainメソッド形式・JUnit不使用）。
@@ -26,6 +29,23 @@ public class ModalEditorTest {
         testOpenLineBelow();
         testCtrlMovementInInsert();
         testCtrlMovementBoundary();
+        testCommandModeTransitions();
+        testCommandSaveFile();
+        testCommandLoadFile();
+        testCommandErrors();
+        testCommandQuit();
+        testUndoKey();
+        testRedoKey();
+        testVisualEnter();
+        testVisualEscape();
+        testVisualMovement();
+        testVisualYank();
+        testVisualDelete();
+        testPasteAfter();
+        testPasteBefore();
+        testDeleteChar();
+        testPasteAfterCursorPosition();
+        testPasteCursorAtEndOfPasted();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -257,6 +277,375 @@ public class ModalEditorTest {
         pressCtrl(ed, KeyEvent.VK_N, 'n');
         pressCtrl(ed, KeyEvent.VK_N, 'n');
         check("ctrl+n*2 on 2-line: row=1", ed.getCursorRow() == 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: 基本遷移
+    // -------------------------------------------------------------------------
+
+    static void testCommandModeTransitions() {
+        System.out.println("[COMMMANDモード: 基本遷移]");
+        ModalEditor ed = new ModalEditor("hello");
+
+        pressKey(ed, ':');
+        check("':' キーで isCommandMode()", ed.isCommandMode());
+        check("':' キーで isInsertMode()=false", !ed.isInsertMode());
+
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        check("ESC で NORMAL に戻る (isCommandMode=false)", !ed.isCommandMode());
+        check("ESC で NORMAL に戻る (isInsertMode=false)", !ed.isInsertMode());
+        check("ESC で commandBuffer がクリアされる", ed.getCommandBuffer().isEmpty());
+
+        pressKey(ed, ':');
+        typeString(ed, "wq");
+        check("文字入力で commandBuffer に 'wq' が蓄積される",
+              ed.getCommandBuffer().equals("wq"));
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: :w 保存
+    // -------------------------------------------------------------------------
+
+    static void testCommandSaveFile() {
+        System.out.println("[COMMMANDモード: :w 保存]");
+        Path tmp = null;
+        try {
+            tmp = Files.createTempFile("vimacs-test-", ".txt");
+            String tmpPath = tmp.toString();
+
+            ModalEditor ed = new ModalEditor("save me");
+
+            pressKey(ed, ':');
+            typeString(ed, "w " + tmpPath);
+            ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+
+            check("':w <path>' でファイルが作成される", Files.exists(tmp));
+            check("保存ファイルの内容がバッファの getText() と一致する",
+                  Files.readString(tmp).equals(ed.getText()));
+
+            // ':w' でパス未設定時にエラー
+            ModalEditor ed2 = new ModalEditor("no path");
+            pressKey(ed2, ':');
+            typeString(ed2, "w");
+            ed2.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            check("':w' でパス未設定時に statusMessage がエラー文字列になる",
+                  ed2.getStatusMessage().startsWith("E:"));
+
+        } catch (IOException e) {
+            check("IOException が発生しないこと: " + e.getMessage(), false);
+        } finally {
+            if (tmp != null) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: :e 開閉
+    // -------------------------------------------------------------------------
+
+    static void testCommandLoadFile() {
+        System.out.println("[COMMMANDモード: :e 開閉]");
+        Path tmp = null;
+        try {
+            tmp = Files.createTempFile("vimacs-load-", ".txt");
+            Files.writeString(tmp, "loaded content");
+            String tmpPath = tmp.toString();
+
+            ModalEditor ed = new ModalEditor("original");
+            pressKey(ed, 'l'); // カーソルを移動しておく
+            pressKey(ed, 'l');
+
+            pressKey(ed, ':');
+            typeString(ed, "e " + tmpPath);
+            ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+
+            check("':e <path>' でバッファが差し替わる (getText() が新しい内容になる)",
+                  ed.getText().equals("loaded content"));
+            check("':e' 後にカーソルが row=0 になる", ed.getCursorRow() == 0);
+            check("':e' 後にカーソルが col=0 になる", ed.getCursorCol() == 0);
+
+        } catch (IOException e) {
+            check("IOException が発生しないこと: " + e.getMessage(), false);
+        } finally {
+            if (tmp != null) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: エラーケース
+    // -------------------------------------------------------------------------
+
+    static void testCommandErrors() {
+        System.out.println("[COMMMANDモード: エラーケース]");
+        ModalEditor ed = new ModalEditor("test");
+
+        pressKey(ed, ':');
+        typeString(ed, "foo");
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        check("未定義コマンド ':foo' で statusMessage に \"E: unknown command\" が含まれる",
+              ed.getStatusMessage().contains("E: unknown command"));
+    }
+
+    // -------------------------------------------------------------------------
+    // COMMMANDモード: :q
+    // -------------------------------------------------------------------------
+
+    static void testCommandQuit() {
+        System.out.println("[COMMMANDモード: :q]");
+        ModalEditor ed = new ModalEditor("quit test");
+        boolean[] exited = { false };
+        ed.setExitCallback(() -> exited[0] = true);
+
+        pressKey(ed, ':');
+        typeString(ed, "q");
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        check("':q' で exitCallback が呼ばれる", exited[0]);
+    }
+
+    // -------------------------------------------------------------------------
+    // u キー: アンドゥ
+    // -------------------------------------------------------------------------
+
+    static void testUndoKey() {
+        System.out.println("[u キー: アンドゥ]");
+
+        // 文字1文字入力後 ESC → u でテキストが元に戻る（各 insert が1アンドゥ単位）
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'i');
+        typeString(ed, "X");
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        pressKey(ed, 'u');
+        check("INSERT で文字入力後 ESC → u でテキストが前の状態に戻る",
+              ed.getText().equals("hello"));
+
+        // アンドゥ後カーソルクランプ確認
+        ModalEditor ed2 = new ModalEditor("hello");
+        pressKey(ed2, 'i');
+        for (int i = 0; i < 5; i++) pressCtrl(ed2, KeyEvent.VK_F, 'f');
+        typeString(ed2, "xyz");
+        ed2.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        pressKey(ed2, 'u');
+        pressKey(ed2, 'u');
+        pressKey(ed2, 'u');
+        int maxCol = Math.max(0, ed2.getText().split("\n", -1)[ed2.getCursorRow()].length() - 1);
+        check("アンドゥ後にカーソルが有効範囲内にクランプされる",
+              ed2.getCursorCol() <= maxCol);
+
+        // アンドゥ履歴なし → クラッシュしない
+        ModalEditor ed3 = new ModalEditor("hello");
+        pressKey(ed3, 'u');
+        check("アンドゥできない状態で u を押しても何も起きない（クラッシュしない）",
+              ed3.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Ctrl+R キー: リドゥ
+    // -------------------------------------------------------------------------
+
+    static void testRedoKey() {
+        System.out.println("[Ctrl+R キー: リドゥ]");
+
+        // undo 後に Ctrl+R でテキストが再適用される
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'i');
+        typeString(ed, "abc");
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        String textAfterInput = ed.getText();
+        pressKey(ed, 'u');
+        pressCtrl(ed, KeyEvent.VK_R, (char) 18);
+        check("u の後 Ctrl+R → テキストが再適用される",
+              ed.getText().equals(textAfterInput));
+
+        // リドゥ履歴なし → クラッシュしない
+        ModalEditor ed2 = new ModalEditor("hello");
+        pressCtrl(ed2, KeyEvent.VK_R, (char) 18);
+        check("リドゥできない状態で Ctrl+R を押しても何も起きない",
+              ed2.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // VISUALモード: 基本動作
+    // -------------------------------------------------------------------------
+
+    static void testVisualEnter() {
+        System.out.println("[VISUALモード: v で進入]");
+        ModalEditor ed = new ModalEditor("hello");
+        check("初期はNORMALモード", !ed.isVisualMode());
+        pressKey(ed, 'v');
+        check("v でVISUALモードに", ed.isVisualMode());
+    }
+
+    static void testVisualEscape() {
+        System.out.println("[VISUALモード: ESC で脱出]");
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'v');
+        check("v でVISUALモード", ed.isVisualMode());
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 0, 0);
+        check("ESC でNORMALモード", !ed.isVisualMode());
+    }
+
+    static void testVisualMovement() {
+        System.out.println("[VISUALモード: カーソル移動]");
+        ModalEditor ed = new ModalEditor("abc\ndef");
+        pressKey(ed, 'v');
+        check("v でVISUAL", ed.isVisualMode());
+        pressKey(ed, 'l');
+        check("VISUAL中に l でカーソル移動", ed.getCursorCol() == 1);
+        pressKey(ed, 'h');
+        check("VISUAL中に h で戻る", ed.getCursorCol() == 0);
+        pressKey(ed, 'j');
+        check("VISUAL中に j で行移動", ed.getCursorRow() == 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // VISUALモード: ヤンク・削除
+    // -------------------------------------------------------------------------
+
+    static void testVisualYank() {
+        System.out.println("[VISUALモード: y でヤンク]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'v');        // アンカー = (0, 0)
+        pressKey(ed, 'l');        // カーソル = (0, 1)
+        pressKey(ed, 'l');        // カーソル = (0, 2)
+        pressKey(ed, 'y');
+        check("y でNORMALに戻る", !ed.isVisualMode());
+        check("yankRegister に選択分がヤンクされる", ed.getYankRegister().equals("abc"));
+    }
+
+    static void testVisualDelete() {
+        System.out.println("[VISUALモード: d で削除]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'v');        // アンカー = (0, 0)
+        pressKey(ed, 'l');        // カーソル = (0, 1)
+        pressKey(ed, 'l');        // カーソル = (0, 2)
+        pressKey(ed, 'd');
+        check("d でNORMALに戻る", !ed.isVisualMode());
+        check("選択範囲が削除される", ed.getText().equals("def"));
+        check("yankRegister に削除分が保存", ed.getYankRegister().equals("abc"));
+        check("カーソルが選択開始位置に", ed.getCursorCol() == 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // ペースト: p/P
+    // -------------------------------------------------------------------------
+
+    static void testPasteAfter() {
+        System.out.println("[NORMALモード: p で後ろにペースト]");
+        ModalEditor ed = new ModalEditor("abcdef");
+
+        // ヤンク準備: xy でカーソル位置の "a" をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'y');
+        check("yankRegister = 'a'", ed.getYankRegister().equals("a"));
+
+        // カーソルを列2に移動して p
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        pressKey(ed, 'p');
+        check("p でカーソル後にペースト", ed.getText().equals("abcadef"));
+        check("p後のカーソルはペーストテキスト末尾に", ed.getCursorCol() == 3);  // 'a' の位置
+    }
+
+    static void testPasteBefore() {
+        System.out.println("[NORMALモード: P で前にペースト]");
+        ModalEditor ed = new ModalEditor("abcdef");
+
+        // v y でカーソル位置をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'y');
+
+        // カーソルを列2に移動して P
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        pressKey(ed, 'P');
+        check("P でカーソル前にペースト", ed.getText().equals("abacdef"));
+        check("P後のカーソルはペーストテキスト末尾に", ed.getCursorCol() == 2);  // 'a' の位置
+    }
+
+    static void testPasteEmptyRegister() {
+        System.out.println("[NORMALモード: 空のレジスタでペースト]");
+        ModalEditor ed = new ModalEditor("hello");
+        check("初期は yankRegister 空", ed.getYankRegister().isEmpty());
+        pressKey(ed, 'p');
+        check("yankRegister 空で p を押しても何も起きない", ed.getText().equals("hello"));
+        pressKey(ed, 'P');
+        check("yankRegister 空で P を押しても何も起きない", ed.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // x: 1文字削除
+    // -------------------------------------------------------------------------
+
+    static void testDeleteChar() {
+        System.out.println("[NORMALモード: x で1文字削除]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'x');
+        check("x でカーソル下の 'a' が削除", ed.getText().equals("bcdef"));
+        check("カーソルは位置変わらず", ed.getCursorCol() == 0);
+    }
+
+    static void testDeleteCharEolClamping() {
+        System.out.println("[NORMALモード: x で行末文字削除時のクランプ]");
+        ModalEditor ed = new ModalEditor("abc");
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        check("カーソルが 'c' 上", ed.getCursorCol() == 2);
+        pressKey(ed, 'x');
+        check("x で 'c' が削除", ed.getText().equals("ab"));
+        check("カーソルが行末を超えないように調整", ed.getCursorCol() == 1);
+    }
+
+    static void testDeleteCharEmptyLine() {
+        System.out.println("[NORMALモード: x で空行]");
+        ModalEditor ed = new ModalEditor("a\n\nb");
+        pressKey(ed, 'j');
+        check("2行目（空行）に移動", ed.getCursorRow() == 1);
+        pressKey(ed, 'x');
+        check("空行で x を押してもクラッシュしない", ed.getText().equals("a\n\nb"));
+    }
+
+    static void testPasteAfterCursorPosition() {
+        System.out.println("[NORMALモード: p 後のカーソル位置（複数文字）]");
+        ModalEditor ed = new ModalEditor("abc");
+
+        // "ab" をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'l');
+        pressKey(ed, 'y');
+        check("yankRegister=\"ab\"", ed.getYankRegister().equals("ab"));
+
+        // カーソルを列2に移動して p
+        pressKey(ed, 'l');
+        pressKey(ed, 'p');
+        // cursor=(0,2) で offset=3, "abc"のoffset 3に"ab"を挿入 → "abcab"
+        check("p でペースト: abc → abcab", ed.getText().equals("abcab"));
+        // newOffset = 3 + 2 - 1 = 4 = 末尾の'b'
+        check("p後のカーソルは末尾: col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testPasteCursorAtEndOfPasted() {
+        System.out.println("[NORMALモード: p/P でカーソルがペーストテキスト末尾に]");
+        ModalEditor ed = new ModalEditor("12345");
+
+        // "12" をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'l');
+        pressKey(ed, 'y');
+
+        // カーソルを列3に移動（'4' 上）
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+
+        // p でペースト
+        pressKey(ed, 'p');
+        // cursor=(0,4) で offset=5, "12345"のoffset 5に"12"を挿入 → "1234512"
+        check("p: 12345 → 1234512", ed.getText().equals("1234512"));
+        // newOffset = 5 + 2 - 1 = 6 = 末尾の'2'
+        check("カーソルは末尾の'2'上: col=6", ed.getCursorCol() == 6);
     }
 
     // -------------------------------------------------------------------------

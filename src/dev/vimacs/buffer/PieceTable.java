@@ -87,4 +87,51 @@ public class PieceTable {
         }
         return result.toString();
     }
+
+    /**
+     * 文書全体ではなく指定オフセット範囲だけを返す。
+     * 画面に表示する数十行分だけを取り出すことで getText() の全文字列構築コストを避けられる。
+     */
+    public String getTextInRange(int startOffset, int endOffset) {
+        StringBuilder result = new StringBuilder(Math.max(0, endOffset - startOffset));
+        int runningOffset = 0;
+        for (Piece p : pieces) {
+            int pieceEnd = runningOffset + p.length();
+            if (pieceEnd > startOffset && runningOffset < endOffset) {
+                int from = Math.max(0, startOffset - runningOffset);
+                int to = Math.min(p.length(), endOffset - runningOffset);
+                String source = (p.source() == Piece.Source.ORIGINAL) ? original : addBuffer.toString();
+                result.append(source, p.start() + from, p.start() + to);
+            }
+            runningOffset = pieceEnd;
+            if (runningOffset >= endOffset) break;
+        }
+        return result.toString();
+    }
+
+    /**
+     * N行目が何文字目（0-based オフセット）から始まるかを返す。
+     * 簡易実装のため毎回先頭から走査する。頻繁に呼ぶ場合は行オフセットキャッシュへの切り替えを検討。
+     */
+    public int offsetOfLine(int lineNumber) {
+        if (lineNumber == 0) return 0;
+        String fullText = getText();
+        int currentLine = 0;
+        for (int i = 0; i < fullText.length(); i++) {
+            if (fullText.charAt(i) == '\n') {
+                currentLine++;
+                if (currentLine == lineNumber) return i + 1;
+            }
+        }
+        return fullText.length();
+    }
+
+    protected List<Piece> getPieces() {
+        return List.copyOf(pieces);
+    }
+
+    protected void restorePieces(List<Piece> snapshot) {
+        pieces.clear();
+        pieces.addAll(snapshot);
+    }
 }
