@@ -426,3 +426,41 @@ main  ← 4be1317
 - **テスト**: JUnit不使用・`main`メソッド形式のテストハーネスのみ
 - 何かを実装する前に`.claude/skills/`配下の関連SKILL.mdを必ず確認すること
 - 新たな設計判断はCLAUDE.mdまたは該当SKILL.mdに記録すること
+
+---
+
+## セッション記録: 2026-06-25（⑤ gui-rendering-pipeline v3）
+
+### 完了内容
+
+**⑤ v3: 横スクロール・JSplitPane ウィンドウ分割**
+
+- `EditorCanvas` に `scrollCol`（横スクロール、半角セル単位）と `cachedCharWidth` を追加
+- `ensureCursorColVisible(int col, String line)` を新設——カーソル移動時に横スクロールを自動追従
+- 全描画メソッド（`drawLineWithFullWidthSupport` / `drawCursor` / `drawSelectionHighlight`）を `scrollOffsetX = scrollCol * charWidth` 対応に変更。画面外文字を正しくクリップ
+- `ModalEditor.syncCanvas()` から `ensureCursorColVisible` を呼び出すよう更新
+- `Main.java` を `JSplitPane(HORIZONTAL_SPLIT)` で左右2ペイン構成に変更（各ペインが独立した `ModalEditor + EditorCanvas`）
+- `Ctrl+W` でアクティブペイン切り替え（青枠 `#8888FF` でアクティブ表示）
+- ウィンドウサイズを 800×600 → 1200×700 に拡大
+- `EditorCanvasTest` に横スクロール 7 ケースを追加（計 22 ケース）
+
+### テスト結果
+
+```
+PASS: 199 / 199  (FAIL: 0)   ← 前セッション比 +7 ケース
+```
+
+### 設計判断（記録）
+
+1. **`scrollCol` の単位をピクセルではなくセル数にした理由**: フォントサイズ変更時も `scrollCol` 値を変更不要にするため
+2. **各ペインに独立した `ModalEditor` を持たせた理由**: `future-phases.md` の「モード共有案」より実装がシンプルで、テストも書きやすい
+3. **`Ctrl+W` を `KeyboardFocusManager` レベルで処理した理由**: `JSplitPane` の Swing フォーカス管理と干渉せずにキー入力を確実に捕捉するため
+
+### 既知の制限（引継ぎ）
+
+| 制限 | 詳細 | 対応予定 |
+|---|---|---|
+| `:q` でアプリ全体が終了 | 片方のペインだけ閉じる機能なし | ⑤ v4 以降 |
+| ペインが2つ固定 | `:split` コマンドでの動的分割未実装 | 長期課題 |
+| 横スクロール時の全角文字クリップ | 画面左端で全角文字が半分見えることがある（`drawString` の描画先が負のxでも1文字丸ごと描かれる） | 必要になったら対応 |
+

@@ -71,19 +71,17 @@ project-root/
 | アンドゥ/リドゥ | ピースリストのスナップショット方式 | `.claude/skills/editor-buffer-architecture/references/piece-table-delete-and-undo.md` |
 | 拡張言語 | Lispインタプリタの自作ではなく、`javax.tools.JavaCompiler`（JDK標準API）による動的コンパイルでJavaそのものを拡張言語として使う | 未作成（`extension-language-runtime`スキルで設計予定） |
 | GUI描画v1 | Swing/AWT・単一バッファ静的表示。全角文字幅対応、NORMAL=ブロック/INSERT=縦棒カーソル | `.claude/skills/gui-rendering-pipeline/SKILL.md` |
-| GUI描画v2/v3（未着手） | スクロール対応・`JSplitPane`によるウィンドウ分割 | `.claude/skills/gui-rendering-pipeline/references/future-phases.md` |
-
-**新たな依存関係（要注意）**: GUI描画v2（スクロール対応）の実装には、`editor-buffer-architecture`（①）で実装済みの`PieceTable`クラスに`getTextInRange()`等のメソッドを**追加**する必要がある。「①は完了済み」と思って読み飛ばさず、v2着手時は`gui-rendering-pipeline`の`references/future-phases.md`を確認し、①のクラスに戻って修正を加えること。
+| GUI描画v1 〜 v3（実装済み） | v2=縦スクロール・v3=横スクロール＋JSplitPaneウィンドウ分割 | `.claude/skills/gui-rendering-pipeline/references/future-phases.md` |
 
 ## ロードマップ（Skill一覧）
 
 | # | Skill名 | 担当領域 | 状態 |
 |---|---|---|---|
-| ① | `editor-buffer-architecture` | バッファ・データ構造 | ✅ 実機検証済み（8/8テスト成功）。v2でメソッド追加予定 |
-| ② | `modal-editing-engine` | Vimモーダル編集（Insert中のEmacs式カーソル移動含む） | 未着手 |
-| ③ | `extension-language-runtime` | Java動的コンパイルによる拡張機構 | 未着手（方針変更済み） |
-| ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | 未着手 |
-| ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画・v1=単一バッファ静的表示（旧`tui-rendering-pipeline`） | ✅ 実機検証済み（5/5テスト成功・目視確認済み） |
+| ① | `editor-buffer-architecture` | バッファ・データ構造 | ✅ 完了（15/15テスト・getTextInRange/offsetOfLine追加済み） |
+| ② | `modal-editing-engine` | Vimモーダル編集（Insert中のEmacs式カーソル移動含む） | ✅ v5 完了（151/151テスト・NORMAL/INSERT/COMMAND/VISUAL/VISUAL LINE） |
+| ③ | `extension-language-runtime` | Java動的コンパイルによる拡張機構 | ❌ 未着手（SKILL.md未作成・方針は JavaCompiler API で確定） |
+| ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | ⏳ ③設計完了後に着手可能 |
+| ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画 | ✅ v3 完了（22/22テスト・縦横スクロール・JSplitPane・Ctrl+W） |
 | ⑥ | `plugin-api-design` | プラグイン向け公開API | 未着手 |
 | ⑦ | `editor-testing-strategy` | 境界値・大規模ファイルのテスト戦略 | 未着手 |
 | ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | 未着手 |
