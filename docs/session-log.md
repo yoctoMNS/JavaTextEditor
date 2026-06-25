@@ -464,3 +464,44 @@ PASS: 199 / 199  (FAIL: 0)   ← 前セッション比 +7 ケース
 | ペインが2つ固定 | `:split` コマンドでの動的分割未実装 | 長期課題 |
 | 横スクロール時の全角文字クリップ | 画面左端で全角文字が半分見えることがある（`drawString` の描画先が負のxでも1文字丸ごと描かれる） | 必要になったら対応 |
 
+
+---
+
+## セッション記録: 2026-06-25（③ extension-language-runtime）
+
+### 完了内容
+
+**③ extension-language-runtime: JavaCompiler による動的プラグイン機構**
+
+- `.claude/skills/extension-language-runtime/SKILL.md` 新規作成（設計書）
+- `src/dev/vimacs/extension/` パッケージを新規作成（5ファイル）
+  - `EditorPlugin.java` — プラグイン作者が実装するインタフェース（`getName` / `execute` / `onLoad` / `onUnload`）
+  - `EditorContext.java` — プラグインがエディタを操作する疎結合インタフェース
+  - `PluginLoader.java` — `javax.tools.JavaCompiler` + `URLClassLoader` で動的コンパイル・ロード・ライフサイクル管理
+  - `SimpleEditorContext.java` — `ModalEditor` を `EditorContext` にアダプトする実装
+  - `PluginLoadException.java` — コンパイル失敗・型不整合エラー
+- `ModalEditor.java` に `insertAtOffset` / `deleteRange` / `setStatusMessage` を追加（プラグイン向けバッファ操作）
+- `test/dev/vimacs/extension/PluginLoaderTest.java` — 7 ケース（ロード・execute・insertAtOffset・コンパイルエラー・型エラー・unload・再ロード）
+
+### テスト結果
+
+```
+PASS: 208 / 208  (FAIL: 0)   ← 前セッション比 +9 ケース
+```
+
+### 設計判断（記録）
+
+1. **拡張言語に Java 自身を採用した理由**: Lisp インタプリタを自作するより学習コストが低く、IDE との親和性が高い（CLAUDE.md で方針確定済み）
+2. **1プラグイン1 `URLClassLoader` の理由**: プラグイン間のクラス競合回避・`unload` を可能にするため
+3. **`EditorContext` インタフェースを挟む理由**: `ModalEditor` の内部実装変更がプラグイン API に波及しないよう疎結合を保つため
+4. **`SecurityManager` を使わない理由**: Java 17+ で非推奨・Java 21 で削除済み。v1 は信頼ユーザー向けで可
+5. **コンパイル出力先を一時ディレクトリにした理由**: ソースと分離し、複数バージョンの共存を防ぐため
+
+### 既知の制限（引継ぎ）
+
+| 制限 | 詳細 | 対応予定 |
+|---|---|---|
+| `:plugin <name>` コマンド未実装 | `PluginLoader.executePlugin()` は実装済みだが `ModalEditor` の COMMAND モードに未接続 | ④ または ⑤ v4 |
+| プラグイン自動ロードディレクトリ未実装 | `~/.vimacs/plugins/` の監視・自動ロード機能なし | ⑥ plugin-api-design |
+| パッケージ付きプラグイン非対応 | クラス名はファイル名から推定。`package dev.vimacs.plugins;` 宣言があると `Class.forName` が失敗する | 必要になったら対応 |
+| プラグイン間依存未対応 | あるプラグインが別プラグインのクラスを参照できない | ⑥ 以降 |
