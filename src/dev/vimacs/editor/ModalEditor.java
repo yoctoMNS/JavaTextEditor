@@ -21,6 +21,7 @@ public class ModalEditor {
 
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
+    private final KeymapRegistry keymap = new KeymapRegistry();
     private Mode mode = Mode.NORMAL;
     private int cursorRow = 0;
     private int cursorCol = 0;
@@ -57,13 +58,6 @@ public class ModalEditor {
     }
 
     public void processKey(int keyCode, char keyChar, int modifiers) {
-        boolean ctrl = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0;
-        if (mode == Mode.NORMAL && ctrl && keyCode == KeyEvent.VK_R) {
-            buffer.redo();
-            clampCursorAfterUndoRedo();
-            syncCanvas();
-            return;
-        }
         if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE) && keyCode == KeyEvent.VK_ESCAPE) {
             mode = Mode.NORMAL;
             pendingNormalChar = 0;
@@ -73,7 +67,7 @@ public class ModalEditor {
         switch (mode) {
             case INSERT      -> processInsertKey(keyCode, keyChar, modifiers);
             case COMMAND     -> processCommandKey(keyCode, keyChar);
-            case NORMAL      -> processNormalKey(keyChar);
+            case NORMAL      -> processNormalKey(keyCode, keyChar, modifiers);
             case VISUAL      -> processVisualKey(keyChar);
             case VISUAL_LINE -> processVisualLineKey(keyChar);
         }
@@ -84,33 +78,36 @@ public class ModalEditor {
     // NORMALモード処理
     // -------------------------------------------------------------------------
 
-    private void processNormalKey(char keyChar) {
+    private void processNormalKey(int keyCode, char keyChar, int modifiers) {
         // 2打鍵シーケンス（yy / dd）の処理
         if (pendingNormalChar != 0) {
             char prev = pendingNormalChar;
             pendingNormalChar = 0;
             if (prev == 'y' && keyChar == 'y') { yankCurrentLine(); return; }
             if (prev == 'd' && keyChar == 'd') { deleteCurrentLine(); return; }
-            // シーケンスが成立しなかった場合は落下して keyChar を通常処理
+            // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
 
-        switch (keyChar) {
-            case 'h' -> moveCursor(0, -1);
-            case 'l' -> moveCursor(0, 1);
-            case 'j' -> moveCursor(1, 0);
-            case 'k' -> moveCursor(-1, 0);
-            case 'i' -> {
+        String action = keymap.resolve(KeymapRegistry.Mode.NORMAL, keyCode, keyChar, modifiers);
+        if (action == null) return;
+
+        switch (action) {
+            case "cursor.left" -> moveCursor(0, -1);
+            case "cursor.right" -> moveCursor(0, 1);
+            case "cursor.down" -> moveCursor(1, 0);
+            case "cursor.up" -> moveCursor(-1, 0);
+            case "enter.insert" -> {
                 mode = Mode.INSERT;
                 statusMessage = "";
             }
-            case 'a' -> {
+            case "enter.insert.after" -> {
                 String[] lines = getLines();
                 int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
                 cursorCol = Math.min(cursorCol + 1, lineLen);
                 mode = Mode.INSERT;
                 statusMessage = "";
             }
-            case 'o' -> {
+            case "enter.insert.newline" -> {
                 String[] lines = getLines();
                 int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
                 int endOfLine = offsetAt(cursorRow, lineLen);
@@ -120,29 +117,33 @@ public class ModalEditor {
                 mode = Mode.INSERT;
                 statusMessage = "";
             }
-            case ':' -> {
+            case "enter.command" -> {
                 commandBuffer.setLength(0);
                 statusMessage = "";
                 mode = Mode.COMMAND;
             }
-            case 'u' -> {
+            case "undo" -> {
                 buffer.undo();
                 clampCursorAfterUndoRedo();
             }
-            case 'v' -> {
+            case "redo" -> {
+                buffer.redo();
+                clampCursorAfterUndoRedo();
+            }
+            case "enter.visual" -> {
                 anchorRow = cursorRow;
                 anchorCol = cursorCol;
                 mode = Mode.VISUAL;
             }
-            case 'V' -> {
+            case "enter.visual.line" -> {
                 anchorRow = cursorRow;
                 mode = Mode.VISUAL_LINE;
             }
-            case 'x' -> deleteCharAtCursor();
-            case 'p' -> pasteAfter();
-            case 'P' -> pasteBefore();
-            case 'y' -> pendingNormalChar = 'y';
-            case 'd' -> pendingNormalChar = 'd';
+            case "delete.char" -> deleteCharAtCursor();
+            case "paste.after" -> pasteAfter();
+            case "paste.before" -> pasteBefore();
+            case "yank.pending" -> pendingNormalChar = 'y';
+            case "delete.pending" -> pendingNormalChar = 'd';
         }
     }
 
