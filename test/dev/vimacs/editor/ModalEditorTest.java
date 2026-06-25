@@ -46,6 +46,17 @@ public class ModalEditorTest {
         testDeleteChar();
         testPasteAfterCursorPosition();
         testPasteCursorAtEndOfPasted();
+        // ② v5: 行単位ヤンク・VISUAL LINE モード
+        testYankLine();
+        testDeleteLine();
+        testLinePasteAfter();
+        testLinePasteBefore();
+        testVisualLineEnter();
+        testVisualLineMovement();
+        testVisualLineYank();
+        testVisualLineDelete();
+        testVisualLineEscape();
+        testYankTypeDefault();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -646,6 +657,299 @@ public class ModalEditorTest {
         check("p: 12345 → 1234512", ed.getText().equals("1234512"));
         // newOffset = 5 + 2 - 1 = 6 = 末尾の'2'
         check("カーソルは末尾の'2'上: col=6", ed.getCursorCol() == 6);
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: yy — 行単位ヤンク
+    // -------------------------------------------------------------------------
+
+    static void testYankLine() {
+        System.out.println("[NORMALモード: yy で行ヤンク]");
+
+        // 単一行ファイルで yy
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'y');
+        pressKey(ed, 'y');
+        check("yy で yankRegister = 'hello\\n'", ed.getYankRegister().equals("hello\n"));
+        check("yy の yankType = 'line'", ed.getYankType().equals("line"));
+        check("yy 後もカーソルは同じ行", ed.getCursorRow() == 0);
+
+        // 複数行ファイルの先頭行で yy
+        ModalEditor ed2 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed2, 'y');
+        pressKey(ed2, 'y');
+        check("先頭行で yy → 'line0\\n'", ed2.getYankRegister().equals("line0\n"));
+
+        // 複数行ファイルの中間行で yy
+        ModalEditor ed3 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed3, 'j');
+        pressKey(ed3, 'y');
+        pressKey(ed3, 'y');
+        check("中間行で yy → 'line1\\n'", ed3.getYankRegister().equals("line1\n"));
+
+        // 最終行で yy
+        ModalEditor ed4 = new ModalEditor("line0\nline1");
+        pressKey(ed4, 'j');
+        pressKey(ed4, 'y');
+        pressKey(ed4, 'y');
+        check("最終行で yy → 'line1\\n'", ed4.getYankRegister().equals("line1\n"));
+
+        // yy でテキストは変化しない
+        ModalEditor ed5 = new ModalEditor("abc\ndef");
+        pressKey(ed5, 'y');
+        pressKey(ed5, 'y');
+        check("yy でテキストが変化しない", ed5.getText().equals("abc\ndef"));
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: dd — 行削除ヤンク
+    // -------------------------------------------------------------------------
+
+    static void testDeleteLine() {
+        System.out.println("[NORMALモード: dd で行削除・ヤンク]");
+
+        // 中間行を dd
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'j');          // row1
+        pressKey(ed, 'd');
+        pressKey(ed, 'd');
+        check("中間行 dd → テキストから削除", ed.getText().equals("line0\nline2"));
+        check("中間行 dd → yankRegister='line1\\n'", ed.getYankRegister().equals("line1\n"));
+        check("中間行 dd → yankType='line'", ed.getYankType().equals("line"));
+        check("中間行 dd → カーソルが同じ行番号", ed.getCursorRow() == 1);
+
+        // 先頭行を dd（複数行）
+        ModalEditor ed2 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed2, 'd');
+        pressKey(ed2, 'd');
+        check("先頭行 dd → 'line1\\nline2'", ed2.getText().equals("line1\nline2"));
+        check("先頭行 dd → カーソルrow=0", ed2.getCursorRow() == 0);
+
+        // 最終行を dd（他の行あり）
+        ModalEditor ed3 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed3, 'j');
+        pressKey(ed3, 'j');         // row2 (最終行)
+        pressKey(ed3, 'd');
+        pressKey(ed3, 'd');
+        check("最終行 dd → 'line0\\nline1'", ed3.getText().equals("line0\nline1"));
+        check("最終行 dd → カーソルが前の行へ", ed3.getCursorRow() == 1);
+
+        // 唯一の行を dd
+        ModalEditor ed4 = new ModalEditor("only");
+        pressKey(ed4, 'd');
+        pressKey(ed4, 'd');
+        check("唯一行 dd → テキストが空", ed4.getText().equals(""));
+        check("唯一行 dd → row=0", ed4.getCursorRow() == 0);
+
+        // y が来なければ dd にならない
+        ModalEditor ed5 = new ModalEditor("hello");
+        pressKey(ed5, 'd');
+        pressKey(ed5, 'h');         // 'd' + 'h' はシーケンス不成立、h はカーソル移動
+        check("d + h でテキスト変化なし", ed5.getText().equals("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: 行ヤンク後の p（下に貼り付け）
+    // -------------------------------------------------------------------------
+
+    static void testLinePasteAfter() {
+        System.out.println("[NORMALモード: 行ヤンク後 p で下に貼り付け]");
+
+        // 中間行にペースト
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'y');
+        pressKey(ed, 'y');          // "line0\n" をヤンク
+        pressKey(ed, 'p');
+        check("先頭行ヤンク→p で1行下に挿入", ed.getText().equals("line0\nline0\nline1\nline2"));
+        check("p後カーソルが貼り付け行(row=1)に", ed.getCursorRow() == 1);
+        check("p後カーソルのcol=0", ed.getCursorCol() == 0);
+
+        // 最終行にペースト
+        ModalEditor ed2 = new ModalEditor("line0\nline1");
+        pressKey(ed2, 'j');         // row1 (最終行)
+        pressKey(ed2, 'y');
+        pressKey(ed2, 'y');         // "line1\n" をヤンク
+        pressKey(ed2, 'p');
+        check("最終行ヤンク→p で最終行の下に挿入", ed2.getText().equals("line0\nline1\nline1"));
+        check("p後カーソルが row=2", ed2.getCursorRow() == 2);
+
+        // dd後にpで行を移動
+        ModalEditor ed3 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed3, 'j');         // row1
+        pressKey(ed3, 'd');
+        pressKey(ed3, 'd');         // "line1\n" を削除・ヤンク
+        pressKey(ed3, 'p');         // "line1" を row2(現row1=line2) の下に貼り付け
+        check("dd→p でテキスト復元", ed3.getText().equals("line0\nline2\nline1"));
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: 行ヤンク後の P（上に貼り付け）
+    // -------------------------------------------------------------------------
+
+    static void testLinePasteBefore() {
+        System.out.println("[NORMALモード: 行ヤンク後 P で上に貼り付け]");
+
+        // 中間行の上にペースト
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'j');          // row1
+        pressKey(ed, 'y');
+        pressKey(ed, 'y');          // "line1\n" をヤンク
+        pressKey(ed, 'P');
+        check("P で現在行の上に挿入", ed.getText().equals("line0\nline1\nline1\nline2"));
+        check("P後カーソルが貼り付け行(row=1)に", ed.getCursorRow() == 1);
+        check("P後カーソルのcol=0", ed.getCursorCol() == 0);
+
+        // 先頭行の上にペースト
+        ModalEditor ed2 = new ModalEditor("line0\nline1");
+        pressKey(ed2, 'y');
+        pressKey(ed2, 'y');         // "line0\n" をヤンク
+        pressKey(ed2, 'P');
+        check("先頭行 P で先頭に挿入", ed2.getText().equals("line0\nline0\nline1"));
+        check("P後カーソルが row=0", ed2.getCursorRow() == 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: VISUAL LINE モード進入
+    // -------------------------------------------------------------------------
+
+    static void testVisualLineEnter() {
+        System.out.println("[VISUAL LINEモード: V で進入]");
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        check("初期は VISUAL LINE でない", !ed.isVisualLineMode());
+        pressKey(ed, 'V');
+        check("V で VISUAL LINE モードに", ed.isVisualLineMode());
+        check("NORMAL/INSERT/VISUAL/COMMAND でない", !ed.isInsertMode() && !ed.isVisualMode());
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: VISUAL LINE モード移動
+    // -------------------------------------------------------------------------
+
+    static void testVisualLineMovement() {
+        System.out.println("[VISUAL LINEモード: j/k で行移動]");
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'V');
+        check("V でVISUAL LINE、anchorRow=0", ed.isVisualLineMode());
+
+        pressKey(ed, 'j');
+        check("VISUAL LINE中 j で row=1", ed.getCursorRow() == 1);
+
+        pressKey(ed, 'j');
+        check("VISUAL LINE中 j で row=2", ed.getCursorRow() == 2);
+
+        pressKey(ed, 'k');
+        check("VISUAL LINE中 k で row=1", ed.getCursorRow() == 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: VISUAL LINE y でヤンク
+    // -------------------------------------------------------------------------
+
+    static void testVisualLineYank() {
+        System.out.println("[VISUAL LINEモード: y でヤンク]");
+
+        // 1行選択
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'V');
+        pressKey(ed, 'y');
+        check("V y で1行ヤンク (yankType=line)", ed.getYankType().equals("line"));
+        check("V y で 'line0\\n' がヤンク", ed.getYankRegister().equals("line0\n"));
+        check("y 後NORMAL モードに戻る", !ed.isVisualLineMode());
+        check("y 後カーソルがanchorRowに", ed.getCursorRow() == 0);
+
+        // 複数行選択
+        ModalEditor ed2 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed2, 'V');         // anchorRow=0
+        pressKey(ed2, 'j');         // cursorRow=1
+        pressKey(ed2, 'y');
+        check("2行選択 y で 'line0\\nline1\\n'", ed2.getYankRegister().equals("line0\nline1\n"));
+        check("2行選択 y 後カーソルがanchorRow=0に", ed2.getCursorRow() == 0);
+
+        // 上方向選択（k）でもヤンク範囲が正しい
+        ModalEditor ed3 = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed3, 'j');
+        pressKey(ed3, 'j');         // row=2
+        pressKey(ed3, 'V');         // anchorRow=2
+        pressKey(ed3, 'k');         // cursorRow=1
+        pressKey(ed3, 'y');
+        check("上方向選択 y で 'line1\\nline2\\n'", ed3.getYankRegister().equals("line1\nline2\n"));
+        check("上方向選択 y 後カーソルがmin行=1に", ed3.getCursorRow() == 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: VISUAL LINE d で削除
+    // -------------------------------------------------------------------------
+
+    static void testVisualLineDelete() {
+        System.out.println("[VISUAL LINEモード: d で削除]");
+
+        // 中間行を削除
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'j');          // row1
+        pressKey(ed, 'V');          // anchorRow=1
+        pressKey(ed, 'd');
+        check("VISUAL LINE d で中間行削除", ed.getText().equals("line0\nline2"));
+        check("d 後 yankRegister='line1\\n'", ed.getYankRegister().equals("line1\n"));
+        check("d 後 yankType='line'", ed.getYankType().equals("line"));
+        check("d 後 NORMALモードに戻る", !ed.isVisualLineMode());
+        check("d 後カーソルがrow=1に", ed.getCursorRow() == 1);
+
+        // 複数行削除
+        ModalEditor ed2 = new ModalEditor("line0\nline1\nline2\nline3");
+        pressKey(ed2, 'j');         // row1
+        pressKey(ed2, 'V');         // anchorRow=1
+        pressKey(ed2, 'j');         // cursorRow=2
+        pressKey(ed2, 'd');
+        check("2行選択 d で削除", ed2.getText().equals("line0\nline3"));
+        check("2行選択 d のヤンク", ed2.getYankRegister().equals("line1\nline2\n"));
+
+        // 全行削除
+        ModalEditor ed3 = new ModalEditor("line0\nline1");
+        pressKey(ed3, 'V');         // row0
+        pressKey(ed3, 'j');         // row1
+        pressKey(ed3, 'd');
+        check("全行選択 d でテキストが空", ed3.getText().equals(""));
+        check("全行削除後 row=0", ed3.getCursorRow() == 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: VISUAL LINE ESC で脱出
+    // -------------------------------------------------------------------------
+
+    static void testVisualLineEscape() {
+        System.out.println("[VISUAL LINEモード: ESC でNORMAL復帰]");
+        ModalEditor ed = new ModalEditor("line0\nline1");
+        pressKey(ed, 'V');
+        check("V でVISUAL LINE", ed.isVisualLineMode());
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 0, 0);
+        check("ESC でNORMALに戻る", !ed.isVisualLineMode());
+        check("テキスト変化なし", ed.getText().equals("line0\nline1"));
+    }
+
+    // -------------------------------------------------------------------------
+    // ② v5: デフォルト yankType は "char"
+    // -------------------------------------------------------------------------
+
+    static void testYankTypeDefault() {
+        System.out.println("[yankType: デフォルトは 'char'・文字ヤンク後も 'char']");
+        ModalEditor ed = new ModalEditor("abcdef");
+        check("初期 yankType='char'", ed.getYankType().equals("char"));
+
+        // VISUAL で文字ヤンク後も 'char'
+        pressKey(ed, 'v');
+        pressKey(ed, 'l');
+        pressKey(ed, 'y');
+        check("文字ヤンク後 yankType='char'", ed.getYankType().equals("char"));
+
+        // 行ヤンク後は 'line'
+        pressKey(ed, 'y');
+        pressKey(ed, 'y');
+        check("行ヤンク後 yankType='line'", ed.getYankType().equals("line"));
+
+        // 再度 文字ヤンクで 'char' に戻る
+        pressKey(ed, 'v');
+        pressKey(ed, 'y');
+        check("再度文字ヤンクで yankType='char'", ed.getYankType().equals("char"));
     }
 
     // -------------------------------------------------------------------------
