@@ -44,6 +44,8 @@ public class ModalEditorTest {
         testPasteAfter();
         testPasteBefore();
         testDeleteChar();
+        testPasteAfterCursorPosition();
+        testPasteCursorAtEndOfPasted();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -544,6 +546,7 @@ public class ModalEditorTest {
         pressKey(ed, 'l');
         pressKey(ed, 'p');
         check("p でカーソル後にペースト", ed.getText().equals("abcadef"));
+        check("p後のカーソルはペーストテキスト末尾に", ed.getCursorCol() == 3);  // 'a' の位置
     }
 
     static void testPasteBefore() {
@@ -559,6 +562,7 @@ public class ModalEditorTest {
         pressKey(ed, 'l');
         pressKey(ed, 'P');
         check("P でカーソル前にペースト", ed.getText().equals("abacdef"));
+        check("P後のカーソルはペーストテキスト末尾に", ed.getCursorCol() == 2);  // 'a' の位置
     }
 
     static void testPasteEmptyRegister() {
@@ -601,6 +605,47 @@ public class ModalEditorTest {
         check("2行目（空行）に移動", ed.getCursorRow() == 1);
         pressKey(ed, 'x');
         check("空行で x を押してもクラッシュしない", ed.getText().equals("a\n\nb"));
+    }
+
+    static void testPasteAfterCursorPosition() {
+        System.out.println("[NORMALモード: p 後のカーソル位置（複数文字）]");
+        ModalEditor ed = new ModalEditor("abc");
+
+        // "ab" をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'l');
+        pressKey(ed, 'y');
+        check("yankRegister=\"ab\"", ed.getYankRegister().equals("ab"));
+
+        // カーソルを列2に移動して p
+        pressKey(ed, 'l');
+        pressKey(ed, 'p');
+        // cursor=(0,2) で offset=3, "abc"のoffset 3に"ab"を挿入 → "abcab"
+        check("p でペースト: abc → abcab", ed.getText().equals("abcab"));
+        // newOffset = 3 + 2 - 1 = 4 = 末尾の'b'
+        check("p後のカーソルは末尾: col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testPasteCursorAtEndOfPasted() {
+        System.out.println("[NORMALモード: p/P でカーソルがペーストテキスト末尾に]");
+        ModalEditor ed = new ModalEditor("12345");
+
+        // "12" をヤンク
+        pressKey(ed, 'v');
+        pressKey(ed, 'l');
+        pressKey(ed, 'y');
+
+        // カーソルを列3に移動（'4' 上）
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');
+
+        // p でペースト
+        pressKey(ed, 'p');
+        // cursor=(0,4) で offset=5, "12345"のoffset 5に"12"を挿入 → "1234512"
+        check("p: 12345 → 1234512", ed.getText().equals("1234512"));
+        // newOffset = 5 + 2 - 1 = 6 = 末尾の'2'
+        check("カーソルは末尾の'2'上: col=6", ed.getCursorCol() == 6);
     }
 
     // -------------------------------------------------------------------------

@@ -391,13 +391,17 @@ public class ModalEditor {
         if (yankRegister.isEmpty()) return;
         int offset = Math.min(offsetOfCursor() + 1, buffer.length());
         buffer.insert(offset, yankRegister);
-        moveCursorToOffset(offset);
+        int newOffset = offset + yankRegister.length() - 1;
+        moveCursorToOffset(newOffset);
         clampCursorForNormal();
     }
 
     private void pasteBefore() {
         if (yankRegister.isEmpty()) return;
-        buffer.insert(offsetOfCursor(), yankRegister);
+        int currentOffset = offsetOfCursor();
+        buffer.insert(currentOffset, yankRegister);
+        int newOffset = currentOffset + yankRegister.length() - 1;
+        moveCursorToOffset(newOffset);
         clampCursorForNormal();
     }
 
