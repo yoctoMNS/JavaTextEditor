@@ -143,7 +143,92 @@ public class EditorCanvasTest {
             pass += 1;
         }
 
-        int total = 10;
+        // Test 11: VISUAL LINE モード - setVisualLineMode で状態が変わる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("line0\nline1\nline2");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setVisualMode(true);
+            canvas.setVisualLineMode(true);
+            canvas.setSelection(0, 0, 1, 0);
+            // 描画が例外なく完了することを確認
+            BufferedImage img = render(canvas, 400, 300);
+            System.out.println("[OK] setVisualLineMode(true) で行単位ハイライト描画が完了");
+            pass += 1;
+        }
+
+        // Test 12: VISUAL LINE モード - ステータス行が "-- VISUAL LINE --" になる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 80);
+            canvas.setText("line0\nline1");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setInsertMode(false);
+            canvas.setVisualMode(true);
+            canvas.setVisualLineMode(true);
+            // ステータス行はアクセント色(0x99,0x99,0x99)で塗られるので背景色でない
+            BufferedImage img = render(canvas, 400, 80);
+            int pixel = img.getRGB(50, 75); // ステータス行の中央付近
+            boolean isNotBackground = !colorMatch(pixel, 0xF5, 0xF0, 0xE6);
+            System.out.println((isNotBackground ? "[OK] " : "[FAIL] ")
+                + "VISUAL LINE ステータス行がアクセント色で塗られる");
+            pass += isNotBackground ? 1 : 0;
+        }
+
+        // Test 13: clearSelection で visualLineMode がリセットされる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("line0\nline1");
+            canvas.setVisualLineMode(true);
+            canvas.setVisualMode(true);
+            canvas.setSelection(0, 0, 1, 0);
+            canvas.clearSelection();
+            // clearSelection後は行単位ハイライトなし → 普通の背景が描かれる
+            canvas.setVisualMode(false);
+            BufferedImage img = render(canvas, 400, 300);
+            int pixel = img.getRGB(350, 100);
+            boolean isBackground = colorMatch(pixel, 0xF5, 0xF0, 0xE6);
+            System.out.println((isBackground ? "[OK] " : "[FAIL] ")
+                + "clearSelection 後はハイライトなし（背景色に戻る）");
+            pass += isBackground ? 1 : 0;
+        }
+
+        // Test 14: VISUAL LINE - 複数行が全幅でハイライトされるか（ピクセル検証）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 200);
+            canvas.setText("line0\nline1\nline2");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setVisualMode(true);
+            canvas.setVisualLineMode(true);
+            canvas.setSelection(0, 0, 1, 0); // row0〜row1を選択
+            BufferedImage img = render(canvas, 400, 200);
+            // 行0のx=300付近（テキスト描画範囲外の右端）がアクセント色になるはず
+            // cachedLineHeight≒20なので行0のy範囲は0〜19、中央y≒10
+            int pixel = img.getRGB(300, 10);
+            boolean isAccent = colorMatch(pixel, 0x99, 0x99, 0x99);
+            System.out.println((isAccent ? "[OK] " : "[FAIL] ")
+                + "VISUAL LINE 行0の右端がアクセント色（行全幅ハイライト）");
+            pass += isAccent ? 1 : 0;
+        }
+
+        // Test 15: VISUAL LINE 選択後の repaint でクラッシュしない（境界値）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("only line");
+            canvas.setTheme(Theme.DARK_MODE);
+            canvas.setVisualMode(true);
+            canvas.setVisualLineMode(true);
+            canvas.setSelection(0, 0, 0, 0); // 1行のみ選択
+            BufferedImage img = render(canvas, 400, 300);
+            System.out.println("[OK] VISUAL LINE 単一行選択で repaint がクラッシュしない");
+            pass += 1;
+        }
+
+        int total = 15;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

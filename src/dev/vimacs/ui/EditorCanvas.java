@@ -10,6 +10,7 @@ public class EditorCanvas extends JPanel {
     private int cursorCol = 0;
     private boolean insertMode = false;
     private boolean visualMode = false;
+    private boolean visualLineMode = false;
     private Theme theme = Theme.LIGHT_MODE;
     private int scrollRow = 0;
     private int cachedLineHeight = 20; // 初回 paint 前の近似値
@@ -29,6 +30,7 @@ public class EditorCanvas extends JPanel {
     public int getScrollRow() { return scrollRow; }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
+    public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
     public void setSelection(int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
         this.selAnchorRow = anchorRow;
         this.selAnchorCol = anchorCol;
@@ -38,6 +40,7 @@ public class EditorCanvas extends JPanel {
     }
     public void clearSelection() {
         this.selAnchorRow = -1;
+        this.visualLineMode = false;
         repaint();
     }
 
@@ -164,21 +167,32 @@ public class EditorCanvas extends JPanel {
 
         g2.setColor(theme.accent);
 
-        for (int row = Math.max(r1, scrollRow);
-             row <= Math.min(r2, scrollRow + computeVisibleRows(lineHeight) - 1);
-             row++) {
-            int screenRow = row - scrollRow;
-            int yTop = screenRow * lineHeight;
-            String line = (row < lines.length) ? lines[row] : "";
+        if (visualLineMode) {
+            // 行全体をハイライト（列は無視）
+            for (int row = Math.max(r1, scrollRow);
+                 row <= Math.min(r2, scrollRow + computeVisibleRows(lineHeight) - 1);
+                 row++) {
+                int screenRow = row - scrollRow;
+                g2.fillRect(0, screenRow * lineHeight, getWidth(), lineHeight);
+            }
+        } else {
+            // 文字単位ハイライト
+            for (int row = Math.max(r1, scrollRow);
+                 row <= Math.min(r2, scrollRow + computeVisibleRows(lineHeight) - 1);
+                 row++) {
+                int screenRow = row - scrollRow;
+                int yTop = screenRow * lineHeight;
+                String line = (row < lines.length) ? lines[row] : "";
 
-            int colStart = (row == r1) ? c1 : 0;
-            int colEnd = (row == r2) ? c2 : Math.max(0, line.length() - 1);
+                int colStart = (row == r1) ? c1 : 0;
+                int colEnd = (row == r2) ? c2 : Math.max(0, line.length() - 1);
 
-            int xStart = xForCol(line, colStart, charWidth);
-            int xEnd = xForCol(line, Math.min(colEnd + 1, line.length()), charWidth);
-            if (xEnd <= xStart) xEnd = xStart + charWidth;
+                int xStart = xForCol(line, colStart, charWidth);
+                int xEnd = xForCol(line, Math.min(colEnd + 1, line.length()), charWidth);
+                if (xEnd <= xStart) xEnd = xStart + charWidth;
 
-            g2.fillRect(xStart, yTop, xEnd - xStart, lineHeight);
+                g2.fillRect(xStart, yTop, xEnd - xStart, lineHeight);
+            }
         }
     }
 
@@ -188,9 +202,10 @@ public class EditorCanvas extends JPanel {
         g2.fillRect(0, y - lineHeight, getWidth(), lineHeight);
         g2.setColor(theme.background);
         String label = (commandLineText != null) ? commandLineText
-                     : visualMode ? "-- VISUAL --"
-                     : insertMode ? "-- INSERT --"
-                     : "-- NORMAL --";
+                     : visualLineMode ? "-- VISUAL LINE --"
+                     : visualMode     ? "-- VISUAL --"
+                     : insertMode     ? "-- INSERT --"
+                     :                  "-- NORMAL --";
         g2.drawString(label, 4, y - 4);
     }
 
