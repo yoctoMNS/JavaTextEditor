@@ -32,6 +32,11 @@ public class KeymapRegistry {
      * keyCode ベースで先に探し、見つからなければ keyChar ベースでフォールバックする。
      * これにより ofCode() 登録キー（ESC/Enter/Ctrl+X 等）と
      * ofChar() 登録キー（h/j/k/l 等）の両方を、実際のキーイベントから正しく解決できる。
+     *
+     * keyChar ベースのフォールバックでは SHIFT_DOWN_MASK を除去する。
+     * ':' や 'V' のような Shift 修飾文字は keyChar 自体が Shift を反映しており、
+     * ofChar() は modifiers=0 で登録するため、実キーイベントの SHIFT を除かないと
+     * マップのキーが一致しない。
      */
     public String resolve(Mode mode, int keyCode, char keyChar, int modifiers) {
         Map<String, String> map = bindings.get(mode);
@@ -40,9 +45,12 @@ public class KeymapRegistry {
             String action = map.get("VK" + keyCode + ":" + modifiers);
             if (action != null) return action;
         }
-        // keyChar ベースにフォールバック（h/j/k/l 等の文字キーはこちらで解決）
+        // keyChar ベースにフォールバック（h/j/k/l、':'、'V' 等）
+        // keyChar は Shift 状態を既に反映しているため（':' vs ';'、'V' vs 'v'）、
+        // ofChar() が modifiers=0 で登録したバインドと一致させるために SHIFT を除く
         if (keyChar != KeyEvent.CHAR_UNDEFINED) {
-            return map.get(keyChar + ":" + modifiers);
+            int charModifiers = modifiers & ~KeyEvent.SHIFT_DOWN_MASK;
+            return map.get(keyChar + ":" + charModifiers);
         }
         return null;
     }
