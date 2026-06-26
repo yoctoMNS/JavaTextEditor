@@ -1,5 +1,8 @@
 package dev.vimacs;
 
+import dev.vimacs.analysis.AnalysisException;
+import dev.vimacs.analysis.CompileAnalyzer;
+import dev.vimacs.analysis.CompileDiagnostic;
 import dev.vimacs.editor.ModalEditor;
 import dev.vimacs.ui.EditorCanvas;
 import dev.vimacs.ui.Theme;
@@ -9,6 +12,7 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
 import javax.swing.JSplitPane;
@@ -18,6 +22,33 @@ public class Main {
 
     /** アクティブなペインを示すボーダー色 */
     private static final Color ACTIVE_BORDER_COLOR = new Color(0x88, 0x88, 0xFF);
+
+    /** CompileAnalyzer はスレッドセーフなので全ペインで共有する */
+    private static final CompileAnalyzer COMPILE_ANALYZER = new CompileAnalyzer();
+
+    /**
+     * editor と canvas を接続し、INSERT→NORMAL 復帰時・保存時に
+     * バックグラウンドでコンパイル解析を実行してガター表示を更新する。
+     */
+    private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
+        Runnable trigger = () -> {
+            String filePath = editor.getCurrentFilePath();
+            String source   = editor.getText();
+            Thread.ofVirtual().start(() -> {
+                try {
+                    List<CompileDiagnostic> diags = (filePath != null)
+                        ? COMPILE_ANALYZER.analyzeFile(Path.of(filePath))
+                        : COMPILE_ANALYZER.analyze(source);
+                    SwingUtilities.invokeLater(() -> canvas.setDiagnostics(diags));
+                } catch (AnalysisException e) {
+                    // コンパイラが使えない環境でも静かに失敗する
+                    SwingUtilities.invokeLater(() -> canvas.setDiagnostics(List.of()));
+                }
+            });
+        };
+        editor.setOnReturnToNormal(trigger);
+        editor.setOnSave(trigger);
+    }
 
     public static void main(String[] args) {
         String initialPath = (args.length > 0) ? args[0] : null;
@@ -56,11 +87,13 @@ public class Main {
             EditorCanvas leftCanvas = new EditorCanvas();
             leftCanvas.setTheme(Theme.DARK_MODE);
             ModalEditor leftEditor = new ModalEditor(text, path, leftCanvas);
+            setupCompileAnalysis(leftEditor, leftCanvas);
 
             // --- 右ペイン ---
             EditorCanvas rightCanvas = new EditorCanvas();
             rightCanvas.setTheme(Theme.DARK_MODE);
             ModalEditor rightEditor = new ModalEditor(text, path, rightCanvas);
+            setupCompileAnalysis(rightEditor, rightCanvas);
 
             // JSplitPane で左右に並べる
             JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftCanvas, rightCanvas);

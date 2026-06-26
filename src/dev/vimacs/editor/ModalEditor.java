@@ -25,6 +25,8 @@ public class ModalEditor {
     private Mode mode = Mode.NORMAL;
     // INSERT → NORMAL 復帰時に呼ばれるコールバック（バックグラウンドコンパイル等）
     private Runnable onReturnToNormal = null;
+    // ファイル保存成功時に呼ばれるコールバック（バックグラウンドコンパイル等）
+    private Runnable onSave = null;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -66,6 +68,17 @@ public class ModalEditor {
     public void setOnReturnToNormal(Runnable callback) {
         this.onReturnToNormal = callback;
     }
+
+    /**
+     * ファイル保存（:w / :wq）が成功したときに呼ばれるコールバックを登録する。
+     * バックグラウンドコンパイルのトリガーとして使用する。
+     */
+    public void setOnSave(Runnable callback) {
+        this.onSave = callback;
+    }
+
+    /** 現在開いているファイルのパスを返す（未設定の場合は null）。 */
+    public String getCurrentFilePath() { return currentFilePath; }
 
     public void processKey(int keyCode, char keyChar, int modifiers) {
         if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE) && keyCode == KeyEvent.VK_ESCAPE) {
@@ -264,6 +277,7 @@ public class ModalEditor {
         try {
             Files.writeString(Path.of(path), buffer.getText());
             statusMessage = "\"" + path + "\" written";
+            if (onSave != null) onSave.run();
             return true;
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
