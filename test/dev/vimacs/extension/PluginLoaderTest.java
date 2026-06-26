@@ -18,13 +18,38 @@ public class PluginLoaderTest {
     static class StubContext implements EditorContext {
         final StringBuilder buf = new StringBuilder("hello world");
         String status = "";
+        int cursorRow = 0;
+        int cursorCol = 0;
         final List<String> insertLog = new ArrayList<>();
         final List<int[]> deleteLog  = new ArrayList<>();
 
-        @Override public String getText()      { return buf.toString(); }
-        @Override public int getCursorRow()    { return 0; }
-        @Override public int getCursorCol()    { return 0; }
-        @Override public int length()          { return buf.length(); }
+        @Override public String getText()   { return buf.toString(); }
+        @Override public int length()       { return buf.length(); }
+        @Override public int getCursorRow() { return cursorRow; }
+        @Override public int getCursorCol() { return cursorCol; }
+
+        @Override public int getLineCount() {
+            return buf.toString().split("\n", -1).length;
+        }
+        @Override public String getLine(int row) {
+            String[] lines = buf.toString().split("\n", -1);
+            return (row >= 0 && row < lines.length) ? lines[row] : "";
+        }
+        @Override public int offsetAt(int row, int col) {
+            String[] lines = buf.toString().split("\n", -1);
+            int offset = 0;
+            for (int i = 0; i < row && i < lines.length; i++) {
+                offset += lines[i].length() + 1;
+            }
+            int lineLen = row < lines.length ? lines[row].length() : 0;
+            return offset + Math.min(col, lineLen);
+        }
+        @Override public void setCursor(int row, int col) {
+            cursorRow = row;
+            cursorCol = col;
+        }
+        @Override public boolean isNormalMode() { return true; }
+        @Override public boolean isInsertMode() { return false; }
 
         @Override
         public void insertAtOffset(int offset, String text) {
