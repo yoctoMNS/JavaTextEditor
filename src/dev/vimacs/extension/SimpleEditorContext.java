@@ -1,5 +1,6 @@
 package dev.vimacs.extension;
 
+import dev.vimacs.editor.KeymapRegistry;
 import dev.vimacs.editor.ModalEditor;
 
 /**
@@ -40,5 +41,10 @@ public class SimpleEditorContext implements EditorContext {
     @Override
     public void setStatusMessage(String message) {
         editor.setStatusMessage(message);
+    }
+
+    @Override
+    public KeymapRegistry getKeymap() {
+        return editor.getKeymap();
     }
 }

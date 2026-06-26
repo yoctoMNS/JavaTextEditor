@@ -1,5 +1,6 @@
 package dev.vimacs.extension;
 
+import dev.vimacs.editor.KeymapRegistry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -65,6 +66,10 @@ public class PluginLoaderTest {
 
         @Override
         public void setStatusMessage(String msg) { status = msg; }
+
+        private final KeymapRegistry keymap = new KeymapRegistry();
+        @Override
+        public KeymapRegistry getKeymap() { return keymap; }
     }
 
     // -------------------------------------------------------------------------

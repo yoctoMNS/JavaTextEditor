@@ -100,6 +100,15 @@ public interface EditorContext {
 
     /** エディタのステータスバーにメッセージを表示する。 */
     void setStatusMessage(String message);
+
+    // ---- キーマップ -----------------------------------------------------------
+
+    /**
+     * モード別キーマップレジストリを返す。
+     * プラグインはこれを通じてキーバインドを追加・上書きしたり、
+     * 独自アクションハンドラを登録できる。
+     */
+    KeymapRegistry getKeymap();
 }
 ```
 
@@ -180,5 +189,5 @@ public boolean isNormalMode() { return mode == Mode.NORMAL; }
 | `offsetAt(int, int)` を公開 | プラグインからカーソル周辺のテキストを操作する際に必須 |
 | `setCursor(int, int)` を追加 | ナビゲーション系プラグインがカーソルを動かせるようにするため |
 | `isNormalMode()` / `isInsertMode()` を追加 | プラグインが「INSERTモード中は実行しない」などの条件分岐に必要 |
-| `getKeymap()` は ④ Phase 3 で追加 | キーバインド登録は plugin-api より keymap-conflict-resolution のスコープ |
+| `getKeymap()` を ④ Phase 3 で追加 | キーバインド登録は plugin-api より keymap-conflict-resolution のスコープ。④ Phase 3 完了により実装済み |
 | デフォルト実装は持たない | テスト時に未実装メソッドを見落とさないよう、全メソッドを明示的に実装させる |

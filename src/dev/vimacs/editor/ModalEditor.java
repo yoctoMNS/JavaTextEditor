@@ -91,6 +91,9 @@ public class ModalEditor {
         String action = keymap.resolve(KeymapRegistry.Mode.NORMAL, keyCode, keyChar, modifiers);
         if (action == null) return;
 
+        Runnable custom = keymap.getCustomAction(action);
+        if (custom != null) { custom.run(); return; }
+
         switch (action) {
             case "cursor.left" -> moveCursor(0, -1);
             case "cursor.right" -> moveCursor(0, 1);
@@ -155,21 +158,26 @@ public class ModalEditor {
         String action = keymap.resolve(KeymapRegistry.Mode.INSERT, keyCode, keyChar, modifiers);
 
         if (action != null) {
-            switch (action) {
-                case "enter.normal" -> {
-                    mode = Mode.NORMAL;
-                    clampCursorForNormal();
+            Runnable custom = keymap.getCustomAction(action);
+            if (custom != null) {
+                custom.run();
+            } else {
+                switch (action) {
+                    case "enter.normal" -> {
+                        mode = Mode.NORMAL;
+                        clampCursorForNormal();
+                    }
+                    case "delete.before" -> handleBackspace();
+                    case "insert.newline" -> {
+                        buffer.insert(offsetOfCursor(), "\n");
+                        cursorRow++;
+                        cursorCol = 0;
+                    }
+                    case "cursor.right" -> moveCursor(0, 1);
+                    case "cursor.left"  -> moveCursor(0, -1);
+                    case "cursor.down"  -> moveCursor(1, 0);
+                    case "cursor.up"    -> moveCursor(-1, 0);
                 }
-                case "delete.before" -> handleBackspace();
-                case "insert.newline" -> {
-                    buffer.insert(offsetOfCursor(), "\n");
-                    cursorRow++;
-                    cursorCol = 0;
-                }
-                case "cursor.right" -> moveCursor(0, 1);
-                case "cursor.left"  -> moveCursor(0, -1);
-                case "cursor.down"  -> moveCursor(1, 0);
-                case "cursor.up"    -> moveCursor(-1, 0);
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             // 通常文字の挿入（キーバインドに登録されていない文字）
@@ -273,6 +281,9 @@ public class ModalEditor {
         String action = keymap.resolve(KeymapRegistry.Mode.VISUAL, keyCode, keyChar, modifiers);
         if (action == null) return;
 
+        Runnable custom = keymap.getCustomAction(action);
+        if (custom != null) { custom.run(); return; }
+
         switch (action) {
             case "cursor.left"  -> moveCursor(0, -1);
             case "cursor.right" -> moveCursor(0, 1);
@@ -300,6 +311,9 @@ public class ModalEditor {
     private void processVisualLineKey(int keyCode, char keyChar, int modifiers) {
         String action = keymap.resolve(KeymapRegistry.Mode.VISUAL_LINE, keyCode, keyChar, modifiers);
         if (action == null) return;
+
+        Runnable custom = keymap.getCustomAction(action);
+        if (custom != null) { custom.run(); return; }
 
         switch (action) {
             case "cursor.left"  -> moveCursor(0, -1);
@@ -627,6 +641,7 @@ public class ModalEditor {
     // パブリックアクセサ（テスト・外部連携用）
     // -------------------------------------------------------------------------
 
+    public KeymapRegistry getKeymap()   { return keymap; }
     public String getText()            { return buffer.getText(); }
     public int getCursorRow()          { return cursorRow; }
     public int getCursorCol()          { return cursorCol; }

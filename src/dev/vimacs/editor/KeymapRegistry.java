@@ -13,6 +13,7 @@ public class KeymapRegistry {
     public enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE }
 
     private final Map<Mode, Map<String, String>> bindings = new HashMap<>();
+    private final Map<String, Runnable> customActions = new HashMap<>();
 
     public KeymapRegistry() {
         for (Mode m : Mode.values()) {
@@ -30,6 +31,16 @@ public class KeymapRegistry {
     public String resolve(Mode mode, int keyCode, char keyChar, int modifiers) {
         String k = toKey(new KeyBinding(keyCode, keyChar, modifiers, ""));
         return bindings.get(mode).get(k);
+    }
+
+    /** プラグインが独自アクションのハンドラを登録する。既存のアクション名も上書き可能。 */
+    public void registerAction(String actionName, Runnable handler) {
+        customActions.put(actionName, handler);
+    }
+
+    /** アクション名に紐付いたカスタムハンドラを返す（未登録なら null）。 */
+    public Runnable getCustomAction(String actionName) {
+        return customActions.get(actionName);
     }
 
     private String toKey(KeyBinding kb) {
