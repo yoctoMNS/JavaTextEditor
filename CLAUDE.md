@@ -83,7 +83,7 @@ project-root/
 | ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | ✅ Phase 3 完了（38/38テスト・getKeymap()/registerAction() でプラグインがキーバインド登録可能） |
 | ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画 | ✅ v3 完了（22/22テスト・縦横スクロール・JSplitPane・Ctrl+W） |
 | ⑥ | `plugin-api-design` | プラグイン向け公開API | ✅ 完了（39/39テスト・getLine/offsetAt/setCursor/isNormalMode/getKeymap追加） |
-| ⑦ | `editor-testing-strategy` | 境界値・大規模ファイルのテスト戦略 | 未着手 |
+| ⑦ | `editor-testing-strategy` | 境界値・大規模ファイルのテスト戦略 | ✅ 完了（101テスト追加・計394/394テスト全PASS） |
 | ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | 未着手 |
 | ⑨ | `javac-compile-integration` | javac連携・コンパイルエラー表示 | 未着手 |
 | ⑩ | `jdk-api-navigation` | JDKクラス/メソッド/フィールドの参照・ナビゲーション | 未着手 |
