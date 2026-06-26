@@ -367,7 +367,7 @@ public class ModalEditor {
     // オフセット計算
     // -------------------------------------------------------------------------
 
-    private int offsetAt(int row, int col) {
+    public int offsetAt(int row, int col) {
         String[] lines = getLines();
         int offset = 0;
         for (int i = 0; i < row && i < lines.length; i++) {
@@ -630,6 +630,7 @@ public class ModalEditor {
     public String getText()            { return buffer.getText(); }
     public int getCursorRow()          { return cursorRow; }
     public int getCursorCol()          { return cursorCol; }
+    public boolean isNormalMode()      { return mode == Mode.NORMAL; }
     public boolean isInsertMode()      { return mode == Mode.INSERT; }
     public boolean isCommandMode()     { return mode == Mode.COMMAND; }
     public boolean isVisualMode()      { return mode == Mode.VISUAL; }
@@ -640,6 +641,23 @@ public class ModalEditor {
     public String getYankType()        { return yankType; }
 
     // プラグイン向けバッファ操作
+    public int getLineCount() {
+        return getLines().length;
+    }
+
+    public String getLine(int row) {
+        String[] lines = getLines();
+        return (row >= 0 && row < lines.length) ? lines[row] : "";
+    }
+
+    public void setCursor(int row, int col) {
+        String[] lines = getLines();
+        cursorRow = Math.max(0, Math.min(row, lines.length - 1));
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        cursorCol = Math.max(0, Math.min(col, lineLen));
+        syncCanvas();
+    }
+
     public void insertAtOffset(int offset, String text) {
         buffer.insert(offset, text);
         syncCanvas();

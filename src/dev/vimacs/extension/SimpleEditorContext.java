@@ -15,9 +15,17 @@ public class SimpleEditorContext implements EditorContext {
     }
 
     @Override public String getText()      { return editor.getText(); }
+    @Override public int length()          { return editor.getText().length(); }
+    @Override public int getLineCount()    { return editor.getLineCount(); }
+    @Override public String getLine(int row) { return editor.getLine(row); }
+
     @Override public int getCursorRow()    { return editor.getCursorRow(); }
     @Override public int getCursorCol()    { return editor.getCursorCol(); }
-    @Override public int length()          { return editor.getText().length(); }
+    @Override public int offsetAt(int row, int col) { return editor.offsetAt(row, col); }
+    @Override public void setCursor(int row, int col) { editor.setCursor(row, col); }
+
+    @Override public boolean isNormalMode() { return editor.isNormalMode(); }
+    @Override public boolean isInsertMode() { return editor.isInsertMode(); }
 
     @Override
     public void insertAtOffset(int offset, String text) {
