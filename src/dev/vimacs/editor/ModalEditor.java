@@ -68,8 +68,8 @@ public class ModalEditor {
             case INSERT      -> processInsertKey(keyCode, keyChar, modifiers);
             case COMMAND     -> processCommandKey(keyCode, keyChar);
             case NORMAL      -> processNormalKey(keyCode, keyChar, modifiers);
-            case VISUAL      -> processVisualKey(keyChar);
-            case VISUAL_LINE -> processVisualLineKey(keyChar);
+            case VISUAL      -> processVisualKey(keyCode, keyChar, modifiers);
+            case VISUAL_LINE -> processVisualLineKey(keyCode, keyChar, modifiers);
         }
         syncCanvas();
     }
@@ -152,30 +152,27 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
-        boolean ctrl = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0;
+        String action = keymap.resolve(KeymapRegistry.Mode.INSERT, keyCode, keyChar, modifiers);
 
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            mode = Mode.NORMAL;
-            clampCursorForNormal();
-
-        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            handleBackspace();
-
-        } else if (keyCode == KeyEvent.VK_ENTER) {
-            buffer.insert(offsetOfCursor(), "\n");
-            cursorRow++;
-            cursorCol = 0;
-
-        } else if (ctrl && keyCode == KeyEvent.VK_F) {
-            moveCursor(0, 1);
-        } else if (ctrl && keyCode == KeyEvent.VK_B) {
-            moveCursor(0, -1);
-        } else if (ctrl && keyCode == KeyEvent.VK_N) {
-            moveCursor(1, 0);
-        } else if (ctrl && keyCode == KeyEvent.VK_P) {
-            moveCursor(-1, 0);
-
+        if (action != null) {
+            switch (action) {
+                case "enter.normal" -> {
+                    mode = Mode.NORMAL;
+                    clampCursorForNormal();
+                }
+                case "delete.before" -> handleBackspace();
+                case "insert.newline" -> {
+                    buffer.insert(offsetOfCursor(), "\n");
+                    cursorRow++;
+                    cursorCol = 0;
+                }
+                case "cursor.right" -> moveCursor(0, 1);
+                case "cursor.left"  -> moveCursor(0, -1);
+                case "cursor.down"  -> moveCursor(1, 0);
+                case "cursor.up"    -> moveCursor(-1, 0);
+            }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            // 通常文字の挿入（キーバインドに登録されていない文字）
             buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
             cursorCol++;
         }
@@ -272,18 +269,21 @@ public class ModalEditor {
     // VISUALモード処理（文字単位）
     // -------------------------------------------------------------------------
 
-    private void processVisualKey(char keyChar) {
-        switch (keyChar) {
-            case 'h' -> moveCursor(0, -1);
-            case 'l' -> moveCursor(0, 1);
-            case 'j' -> moveCursor(1, 0);
-            case 'k' -> moveCursor(-1, 0);
-            case 'y' -> {
+    private void processVisualKey(int keyCode, char keyChar, int modifiers) {
+        String action = keymap.resolve(KeymapRegistry.Mode.VISUAL, keyCode, keyChar, modifiers);
+        if (action == null) return;
+
+        switch (action) {
+            case "cursor.left"  -> moveCursor(0, -1);
+            case "cursor.right" -> moveCursor(0, 1);
+            case "cursor.down"  -> moveCursor(1, 0);
+            case "cursor.up"    -> moveCursor(-1, 0);
+            case "yank" -> {
                 yankRegister = getSelectedText();
                 yankType = "char";
                 mode = Mode.NORMAL;
             }
-            case 'd' -> {
+            case "delete" -> {
                 yankRegister = getSelectedText();
                 yankType = "char";
                 deleteSelected();
@@ -297,13 +297,16 @@ public class ModalEditor {
     // VISUAL LINEモード処理（行単位）
     // -------------------------------------------------------------------------
 
-    private void processVisualLineKey(char keyChar) {
-        switch (keyChar) {
-            case 'h' -> moveCursor(0, -1);
-            case 'l' -> moveCursor(0, 1);
-            case 'j' -> moveCursor(1, 0);
-            case 'k' -> moveCursor(-1, 0);
-            case 'y' -> {
+    private void processVisualLineKey(int keyCode, char keyChar, int modifiers) {
+        String action = keymap.resolve(KeymapRegistry.Mode.VISUAL_LINE, keyCode, keyChar, modifiers);
+        if (action == null) return;
+
+        switch (action) {
+            case "cursor.left"  -> moveCursor(0, -1);
+            case "cursor.right" -> moveCursor(0, 1);
+            case "cursor.down"  -> moveCursor(1, 0);
+            case "cursor.up"    -> moveCursor(-1, 0);
+            case "yank" -> {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
                 yankRegister = buildLineRangeText(r1, r2);
@@ -312,7 +315,7 @@ public class ModalEditor {
                 cursorCol = 0;
                 mode = Mode.NORMAL;
             }
-            case 'd' -> {
+            case "delete" -> {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
                 yankRegister = buildLineRangeText(r1, r2);

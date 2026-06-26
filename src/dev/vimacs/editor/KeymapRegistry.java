@@ -72,5 +72,23 @@ public class KeymapRegistry {
         // 基本的には文字入力をそのまま溜めるので、特別なキーバインドは ESC だけ
         bind(Mode.COMMAND, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
         bind(Mode.COMMAND, KeyBinding.ofCode(KeyEvent.VK_ENTER, 0, "execute.command"), "execute.command");
+
+        // VISUAL モード（文字単位選択）
+        bind(Mode.VISUAL, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
+        bind(Mode.VISUAL, KeyBinding.ofChar('l', "cursor.right"), "cursor.right");
+        bind(Mode.VISUAL, KeyBinding.ofChar('j', "cursor.down"), "cursor.down");
+        bind(Mode.VISUAL, KeyBinding.ofChar('k', "cursor.up"), "cursor.up");
+        bind(Mode.VISUAL, KeyBinding.ofChar('y', "yank"), "yank");
+        bind(Mode.VISUAL, KeyBinding.ofChar('d', "delete"), "delete");
+        bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
+
+        // VISUAL LINE モード（行単位選択）
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('l', "cursor.right"), "cursor.right");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('j', "cursor.down"), "cursor.down");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('k', "cursor.up"), "cursor.up");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('y', "yank"), "yank");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('d', "delete"), "delete");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
     }
 }

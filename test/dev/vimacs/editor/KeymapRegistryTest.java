@@ -12,6 +12,8 @@ public class KeymapRegistryTest {
         testUnregisteredKey();
         testMultipleModifiers();
         testResolveDifferentModes();
+        testVisualModeBindings();
+        testVisualLineModeBindings();
 
         System.out.println("\n--- Summary ---");
         System.out.println("PASS: " + passCount + " / " + testCount);
@@ -110,6 +112,59 @@ public class KeymapRegistryTest {
 
         check("NORMAL 'i' -> enter.insert", normalAction.equals("enter.insert"));
         check("INSERT 'i' -> null (未登録)", insertAction == null);
+    }
+
+    static void testVisualModeBindings() {
+        System.out.println("[VISUAL モードキーマップ確認]");
+        KeymapRegistry reg = new KeymapRegistry();
+
+        // 移動キー
+        check("VISUAL 'h' -> cursor.left",
+            "cursor.left".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'h', 0)));
+        check("VISUAL 'l' -> cursor.right",
+            "cursor.right".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'l', 0)));
+        check("VISUAL 'j' -> cursor.down",
+            "cursor.down".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'j', 0)));
+        check("VISUAL 'k' -> cursor.up",
+            "cursor.up".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'k', 0)));
+
+        // ヤンク・削除
+        check("VISUAL 'y' -> yank",
+            "yank".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'y', 0)));
+        check("VISUAL 'd' -> delete",
+            "delete".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'd', 0)));
+
+        // ESC は processKey で先行処理されるが、登録はされている
+        check("VISUAL ESC -> enter.normal",
+            "enter.normal".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0)));
+
+        // VISUAL モード固有確認: NORMAL にある 'i' が VISUAL では null
+        check("VISUAL 'i' -> null (NORMAL のキーは引き継がない)",
+            reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'i', 0) == null);
+    }
+
+    static void testVisualLineModeBindings() {
+        System.out.println("[VISUAL LINE モードキーマップ確認]");
+        KeymapRegistry reg = new KeymapRegistry();
+
+        // 移動キー
+        check("VISUAL_LINE 'j' -> cursor.down",
+            "cursor.down".equals(reg.resolve(KeymapRegistry.Mode.VISUAL_LINE, KeyEvent.VK_UNDEFINED, 'j', 0)));
+        check("VISUAL_LINE 'k' -> cursor.up",
+            "cursor.up".equals(reg.resolve(KeymapRegistry.Mode.VISUAL_LINE, KeyEvent.VK_UNDEFINED, 'k', 0)));
+
+        // ヤンク・削除
+        check("VISUAL_LINE 'y' -> yank",
+            "yank".equals(reg.resolve(KeymapRegistry.Mode.VISUAL_LINE, KeyEvent.VK_UNDEFINED, 'y', 0)));
+        check("VISUAL_LINE 'd' -> delete",
+            "delete".equals(reg.resolve(KeymapRegistry.Mode.VISUAL_LINE, KeyEvent.VK_UNDEFINED, 'd', 0)));
+
+        // VISUAL と VISUAL_LINE が独立したマップを持つことを確認
+        reg.bind(KeymapRegistry.Mode.VISUAL_LINE, KeyBinding.ofChar('y', "custom.yank"), "custom.yank");
+        check("VISUAL_LINE 'y' を上書き -> custom.yank",
+            "custom.yank".equals(reg.resolve(KeymapRegistry.Mode.VISUAL_LINE, KeyEvent.VK_UNDEFINED, 'y', 0)));
+        check("VISUAL 'y' は影響を受けない -> yank",
+            "yank".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'y', 0)));
     }
 
     static void check(String desc, boolean result) {
