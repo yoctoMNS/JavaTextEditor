@@ -16,6 +16,7 @@ public class KeymapRegistryTest {
         testVisualLineModeBindings();
         testRegisterCustomAction();
         testCustomActionOverridesBuiltin();
+        testResolveWithRealKeyEventFormat();
 
         System.out.println("\n--- Summary ---");
         System.out.println("PASS: " + passCount + " / " + testCount);
@@ -213,6 +214,45 @@ public class KeymapRegistryTest {
         editor.processKey(KeyEvent.VK_UNDEFINED, 'h', 0);
         check("'h' の cursor.left をカスタムに差し替え -> カスタムが実行", hRan[0]);
         check("'h' のデフォルト移動は実行されない (col 変化なし)", editor.getCursorCol() == colBefore);
+    }
+
+    static void testResolveWithRealKeyEventFormat() {
+        System.out.println("[実際のキーイベント形式での解決確認]");
+        // 実際の KeyEvent では、文字キーも keyCode が VK_H=72 のように設定される。
+        // resolve() は keyCode で先に探して見つからなければ keyChar にフォールバックすることで正しく動作する。
+        KeymapRegistry reg = new KeymapRegistry();
+
+        // 'h' キー: KeyEvent は keyCode=VK_H(72), keyChar='h' を持つ
+        String action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_H, 'h', 0);
+        check("実キーイベント形式: VK_H+'h' -> cursor.left", "cursor.left".equals(action));
+
+        // 'j' キー
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_J, 'j', 0);
+        check("実キーイベント形式: VK_J+'j' -> cursor.down", "cursor.down".equals(action));
+
+        // 'i' キー
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_I, 'i', 0);
+        check("実キーイベント形式: VK_I+'i' -> enter.insert", "enter.insert".equals(action));
+
+        // 'v' キー
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_V, 'v', 0);
+        check("実キーイベント形式: VK_V+'v' -> enter.visual", "enter.visual".equals(action));
+
+        // Ctrl+R: keyCode=VK_R, keyChar=(char)18 — ofCode で登録済み、こちらは keyCode で解決
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char)18, KeyEvent.CTRL_DOWN_MASK);
+        check("実キーイベント形式: Ctrl+R -> redo (keyCode 優先)", "redo".equals(action));
+
+        // ESC: keyCode=VK_ESCAPE, keyChar=CHAR_UNDEFINED
+        action = reg.resolve(KeymapRegistry.Mode.INSERT, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        check("実キーイベント形式: VK_ESCAPE -> enter.normal", "enter.normal".equals(action));
+
+        // Ctrl+F: keyCode=VK_F, keyChar=(char)6
+        action = reg.resolve(KeymapRegistry.Mode.INSERT, KeyEvent.VK_F, (char)6, KeyEvent.CTRL_DOWN_MASK);
+        check("実キーイベント形式: Ctrl+F -> cursor.right", "cursor.right".equals(action));
+
+        // 'h' を NORMAL で Ctrl 付き押した場合は登録なし (NORMAL 'h' はmodifiers=0 のみ)
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_H, 'h', KeyEvent.CTRL_DOWN_MASK);
+        check("実キーイベント形式: Ctrl+H -> null (未登録)", action == null);
     }
 
     static void check(String desc, boolean result) {

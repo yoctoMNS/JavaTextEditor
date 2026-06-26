@@ -27,10 +27,24 @@ public class KeymapRegistry {
         bindings.get(mode).put(toKey(key), actionName);
     }
 
-    /** キー入力からアクション名を解決（見つからなければ null） */
+    /**
+     * キー入力からアクション名を解決（見つからなければ null）。
+     * keyCode ベースで先に探し、見つからなければ keyChar ベースでフォールバックする。
+     * これにより ofCode() 登録キー（ESC/Enter/Ctrl+X 等）と
+     * ofChar() 登録キー（h/j/k/l 等）の両方を、実際のキーイベントから正しく解決できる。
+     */
     public String resolve(Mode mode, int keyCode, char keyChar, int modifiers) {
-        String k = toKey(new KeyBinding(keyCode, keyChar, modifiers, ""));
-        return bindings.get(mode).get(k);
+        Map<String, String> map = bindings.get(mode);
+        // keyCode ベースで探す（特殊キーや Ctrl+X 系はこちらで解決）
+        if (keyCode != KeyEvent.VK_UNDEFINED) {
+            String action = map.get("VK" + keyCode + ":" + modifiers);
+            if (action != null) return action;
+        }
+        // keyChar ベースにフォールバック（h/j/k/l 等の文字キーはこちらで解決）
+        if (keyChar != KeyEvent.CHAR_UNDEFINED) {
+            return map.get(keyChar + ":" + modifiers);
+        }
+        return null;
     }
 
     /** プラグインが独自アクションのハンドラを登録する。既存のアクション名も上書き可能。 */
