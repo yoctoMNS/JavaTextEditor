@@ -16,6 +16,7 @@ VimのモーダルキーバインドとEmacsのカーソル操作を統合した
 - **プラグイン公開API**: テキスト読み取り・編集・カーソル操作・キーバインド登録を `EditorContext` 経由で提供
 - **境界値テスト**: 空バッファ・1文字・行末・行頭など極端なケースを体系的に網羅
 - **パフォーマンステスト**: 10万行ファイルopen・大規模文書への1000回挿入/削除・offsetOfLine速度計測
+- **ソース解析エンジン**: Compiler Tree APIでJavaソースをparse-only解析し、import索引・シンボル索引を構築
 - **Java SE標準APIのみ**: 外部ライブラリ不使用。Java 21で動作
 
 ## 必要環境
@@ -127,6 +128,13 @@ project-root/
 │   │   ├── EditorPlugin.java        # プラグインインタフェース
 │   │   ├── PluginLoader.java        # JavaCompiler 動的ロード
 │   │   └── SimpleEditorContext.java # ModalEditor → EditorContext アダプタ
+│   ├── analysis/
+│   │   ├── AnalysisException.java  # checked exception
+│   │   ├── ImportEntry.java        # import 文1件 (record)
+│   │   ├── SourceAnalyzer.java     # Compiler Tree API 解析本体
+│   │   ├── SourceIndex.java        # 解析結果 (record)
+│   │   ├── SymbolEntry.java        # シンボル1件 (record)
+│   │   └── SymbolKind.java         # CLASS/INTERFACE/ENUM/METHOD/FIELD/CONSTRUCTOR
 │   └── ui/
 │       ├── Theme.java          # カラーテーマ（LIGHT_MODE / DARK_MODE）
 │       └── EditorCanvas.java   # Swing描画コンポーネント
@@ -140,6 +148,8 @@ project-root/
 │   │   ├── KeymapRegistryTest.java
 │   │   ├── ModalEditorTest.java
 │   │   └── ModalEditorEdgeCaseTest.java  # カーソルクランプ・マルチバイト・深いアンドゥ
+│   ├── analysis/
+│   │   └── SourceAnalyzerTest.java    # import/シンボル索引・構文エラー耐性・行番号テスト
 │   ├── extension/
 │   │   ├── EditorContextApiTest.java  # EditorContext API の結合テスト
 │   │   └── PluginLoaderTest.java
@@ -270,6 +280,25 @@ public class MyPlugin implements EditorPlugin {
 | UI | `setStatusMessage(String)` | ステータスバーにメッセージ表示 |
 | キーマップ | `getKeymap()` | `KeymapRegistry` を返す（キーバインド登録・変更に使用） |
 
+### ソース解析エンジン: SourceAnalyzer
+
+`SourceAnalyzer` は JDK 標準の Compiler Tree API (`com.sun.source.tree.*`) を使って Java ソースを parse-only モードで解析し、`SourceIndex` を生成します。型解決を行わないため高速（通常ファイルで 200ms 以内）で、構文エラーがあっても部分的に解析を継続します（graceful degradation）。
+
+```
+analyzeText(String sourceCode)   ← バッファ内容を直接解析（ファイル保存不要）
+analyzeFile(Path path)           ← ファイルパスから解析
+
+SourceIndex
+  ├── filePath: String                  // "<buffer>" or 絶対パス
+  ├── imports: List<ImportEntry>        // import 文の一覧（fqn / isStatic / isWildcard / lineNumber）
+  ├── symbols: List<SymbolEntry>        // トップレベル型のクラス・メソッド・フィールド・コンストラクタ
+  └── hasParseError: boolean            // 構文エラーがあったかどうか
+```
+
+**収集スコープ**: トップレベル型宣言の直接メンバーのみ。ネストしたクラスは収集対象外。  
+**行番号**: 0-indexed（`getLineNumber() - 1` で変換）。  
+**後続機能の基盤**: ⑨ javac連携（コンパイルエラー表示）・⑩ JDKナビゲーション・⑭ マルチファイルリファクタリングで再利用される。
+
 ### GUI描画: EditorCanvas
 
 `JPanel` を継承した `EditorCanvas` が `Graphics2D` で直接描画します。
@@ -285,6 +314,7 @@ public class MyPlugin implements EditorPlugin {
 ## テスト結果
 
 ```
+=== dev.vimacs.analysis.SourceAnalyzerTest ===         PASS: 49 / 49
 === dev.vimacs.buffer.PieceTableTest ===               PASS: 15 / 15
 === dev.vimacs.buffer.PieceTableEdgeCaseTest ===       PASS: 46 / 46
 === dev.vimacs.buffer.UndoablePieceTableTest ===       PASS: 11 / 11
@@ -296,9 +326,16 @@ public class MyPlugin implements EditorPlugin {
 === dev.vimacs.extension.PluginLoaderTest ===          PASS: 9 / 9
 === dev.vimacs.performance.LargeFileTest ===           PASS: 12 / 12
 === dev.vimacs.ui.EditorCanvasTest ===                 PASS: 22 / 22
+=== dev.vimacs.ui.KeyboardSimulationTest ===           PASS: 110 / 110
 
-合計: 394 テストケース全 PASS
+合計: 553 テストケース全 PASS
 ```
+
+### ⑧ java-source-analysis で追加したテスト（49件）
+
+| テストクラス | 内容 |
+|---|---|
+| `SourceAnalyzerTest` (49) | import収集・static/wildcard区別・クラス/メソッド/フィールド/コンストラクタ/インタフェース/enum収集・行番号・構文エラー耐性・空ソース・バッファ文字列解析・ファイル解析・ネストしたクラスの除外 |
 
 ### ⑦ editor-testing-strategy で追加したテスト（101件）
 
