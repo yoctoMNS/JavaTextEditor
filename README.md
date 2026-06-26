@@ -115,7 +115,13 @@ project-root/
 │   │   ├── PieceTable.java          # バッファ本体（insert/delete/getText）
 │   │   └── UndoablePieceTable.java  # アンドゥ/リドゥ対応バッファ（PieceTable継承）
 │   ├── editor/
-│   │   └── ModalEditor.java    # モード管理・カーソル管理・キー処理
+│   │   ├── KeyBinding.java          # キーバインド（record）
+│   │   ├── KeymapRegistry.java       # モード別キーバインド管理
+│   │   └── ModalEditor.java         # モード管理・カーソル管理・キー処理
+│   ├── extension/
+│   │   ├── EditorPlugin.java        # プラグインインタフェース
+│   │   ├── PluginLoader.java        # JavaCompiler 動的ロード
+│   │   └── SimpleEditorContext.java # ModalEditor → EditorContext アダプタ
 │   └── ui/
 │       ├── Theme.java          # カラーテーマ（LIGHT_MODE / DARK_MODE）
 │       └── EditorCanvas.java   # Swing描画コンポーネント
@@ -124,6 +130,7 @@ project-root/
 │   │   ├── PieceTableTest.java
 │   │   └── UndoablePieceTableTest.java
 │   ├── editor/
+│   │   ├── KeymapRegistryTest.java
 │   │   └── ModalEditorTest.java
 │   └── ui/
 │       ├── EditorCanvasTest.java
@@ -158,21 +165,25 @@ UndoablePieceTable（PieceTable継承）
 
 アンドゥ/リドゥは `pieces` リストのコピー（参照のみ、実データ複製なし）をスタックに積む方式で実現しているため、スナップショットのコストはほぼゼロです。
 
-### モーダル編集エンジン: ModalEditor
+### モーダル編集エンジン: ModalEditor と KeymapRegistry
 
-`ModalEditor` がモード状態・カーソル位置を管理し、`PieceTable`（バッファ）と`EditorCanvas`（描画）を橋渡しします。
+`ModalEditor` がモード状態・カーソル位置を管理し、`PieceTable`（バッファ）と`EditorCanvas`（描画）を橋渡しします。キーバインドは `KeymapRegistry` により一元管理され、モード別に設定可能です。
 
 ```
 キー入力 (KeyboardFocusManager)
     ↓
 ModalEditor.processKey(keyCode, keyChar, modifiers)
-    ├── NORMAL モード: h/j/k/l 移動、i/a/o でINSERT移行、u/Ctrl+R でアンドゥ/リドゥ
-    │                  yy/dd で行ヤンク/削除、v/V でVISUAL移行、x で1文字削除
-    │                  p/P でペースト（yankType で文字/行を区別）、: でCOMMAND移行
-    ├── INSERT モード: 文字挿入・削除・改行、Ctrl移動、Esc でNORMAL復帰
-    ├── COMMAND モード: コマンド文字列を蓄積し Enter で実行
-    ├── VISUAL モード: h/j/k/l で文字単位範囲拡張、y/d でヤンク/削除、Esc でNORMAL復帰
-    └── VISUAL LINE モード: h/j/k/l で行単位範囲拡張、y/d でヤンク/削除、Esc でNORMAL復帰
+    ├── KeymapRegistry.resolve(mode, keyCode, keyChar, modifiers)
+    │   → アクション名の取得（ハードコード不要・外部から設定変更可能）
+    │
+    ├── NORMAL モード: cursor.left/right/up/down, enter.insert, enter.insert.after,
+    │                  enter.insert.newline, undo, redo, yank.pending, delete.pending,
+    │                  enter.visual, enter.visual.line, delete.char, paste.after, paste.before,
+    │                  enter.command
+    ├── INSERT モード: cursor.right/left/up/down, enter.normal, delete.before, insert.newline
+    ├── COMMAND モード: enter.normal, execute.command
+    ├── VISUAL モード: cursor.left/right/up/down, yank, delete, enter.normal
+    └── VISUAL LINE モード: cursor.left/right/up/down, yank, delete, enter.normal
             ↓
     PieceTable.insert() / delete()           ← バッファ更新
     Files.writeString() / Files.readString() ← ファイルI/O
@@ -180,6 +191,12 @@ ModalEditor.processKey(keyCode, keyChar, modifiers)
         / setInsertMode() / setVisualMode() / setVisualLineMode()
         / setSelection() / setCommandLineText()    ← 再描画
 ```
+
+**KeymapRegistry** は、モード別のキーバインドを一元管理し、以下の機能を提供します：
+
+- `loadDefaults()`: デフォルトキーマップを定義（Vim標準 + Emacs式INSERTモード移動）
+- `bind(mode, keyBinding, actionName)`: 新規キーバインドの登録・既存バインドの上書き
+- `resolve(mode, keyCode, keyChar, modifiers)`: キー入力からアクション名を解決
 
 ### GUI描画: EditorCanvas
 
@@ -198,10 +215,12 @@ ModalEditor.processKey(keyCode, keyChar, modifiers)
 ```
 === dev.vimacs.buffer.PieceTableTest ===          PASS: 15 / 15
 === dev.vimacs.buffer.UndoablePieceTableTest ===  PASS: 11 / 11
+=== dev.vimacs.editor.KeymapRegistryTest ===      PASS: 16 / 16
 === dev.vimacs.editor.ModalEditorTest ===         PASS: 151 / 151
-=== dev.vimacs.ui.EditorCanvasTest ===            PASS: 15 / 15
+=== dev.vimacs.extension.PluginLoaderTest ===     PASS: 9 / 9
+=== dev.vimacs.ui.EditorCanvasTest ===            PASS: 22 / 22
 
-合計: 192 テストケース全 PASS
+合計: 224 テストケース全 PASS
 ```
 
 ## 技術制約
