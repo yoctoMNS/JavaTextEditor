@@ -91,6 +91,7 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('P', "paste.before"), "paste.before");
         bind(Mode.NORMAL, KeyBinding.ofChar('y', "yank.pending"), "yank.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('d', "delete.pending"), "delete.pending");
+        bind(Mode.NORMAL, KeyBinding.ofChar('K', "jdk.doc"), "jdk.doc");
 
         // INSERT モード
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");

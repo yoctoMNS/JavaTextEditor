@@ -1,5 +1,7 @@
 package dev.vimacs.editor;
 
+import dev.vimacs.analysis.JdkClassIndex;
+import dev.vimacs.analysis.JdkTypeInfo;
 import dev.vimacs.buffer.PieceTable;
 import dev.vimacs.buffer.UndoablePieceTable;
 import dev.vimacs.ui.EditorCanvas;
@@ -7,6 +9,8 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
 
 /**
  * NORMAL / INSERT / COMMAND / VISUAL / VISUAL_LINE の5モードを管理し、
@@ -38,6 +42,8 @@ public class ModalEditor {
     private String currentFilePath = null;
     private String statusMessage = "";
     private Runnable exitCallback = () -> System.exit(0);
+    // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
+    private JdkClassIndex jdkIndex = null;
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -170,6 +176,7 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingNormalChar = 'y';
             case "delete.pending" -> pendingNormalChar = 'd';
+            case "jdk.doc" -> lookupJdkDoc();
         }
     }
 
@@ -713,5 +720,71 @@ public class ModalEditor {
     public void setStatusMessage(String message) {
         this.statusMessage = message;
         syncCanvas();
+    }
+
+    /** JDK クラスインデックスを設定する（Main.java からバックグラウンド構築後に呼ぶ）。 */
+    public void setJdkClassIndex(JdkClassIndex index) {
+        this.jdkIndex = index;
+    }
+
+    /** NORMALモードの K キー: カーソル位置の識別子を JDK クラスとして検索し、ステータスバーに表示。 */
+    private void lookupJdkDoc() {
+        if (jdkIndex == null || !jdkIndex.isReady()) {
+            setStatusMessage("JDK index building...");
+            return;
+        }
+        String word = wordAtCursor();
+        if (word.isEmpty()) {
+            setStatusMessage("No identifier at cursor");
+            return;
+        }
+        List<String> candidates = jdkIndex.lookup(word);
+        if (candidates.isEmpty()) {
+            setStatusMessage("Not found in JDK: " + word);
+            return;
+        }
+        // 候補が1件なら即詳細表示、複数ならリスト表示
+        if (candidates.size() == 1) {
+            Optional<Class<?>> cls = jdkIndex.loadClass(candidates.get(0));
+            if (cls.isPresent()) {
+                setStatusMessage(JdkTypeInfo.from(cls.get()).toStatusLine());
+            } else {
+                setStatusMessage(candidates.get(0) + " (cannot load)");
+            }
+        } else {
+            // 最初の候補を優先表示（java.lang > java.util > その他）
+            String best = candidates.stream()
+                .filter(f -> f.startsWith("java.lang."))
+                .findFirst()
+                .orElseGet(() -> candidates.stream()
+                    .filter(f -> f.startsWith("java.util."))
+                    .findFirst()
+                    .orElse(candidates.get(0)));
+            Optional<Class<?>> cls = jdkIndex.loadClass(best);
+            String extra = candidates.size() > 1 ? " (+" + (candidates.size() - 1) + " more)" : "";
+            if (cls.isPresent()) {
+                setStatusMessage(JdkTypeInfo.from(cls.get()).toStatusLine() + extra);
+            } else {
+                setStatusMessage(best + " (cannot load)" + extra);
+            }
+        }
+    }
+
+    /** カーソル位置の Java 識別子（単語）を返す。識別子がなければ空文字列。 */
+    private String wordAtCursor() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return "";
+        String line = lines[cursorRow];
+        if (cursorCol >= line.length()) return "";
+        // カーソル位置が識別子文字でなければ空
+        char ch = line.charAt(cursorCol);
+        if (!Character.isJavaIdentifierPart(ch)) return "";
+        // 左方向に識別子の先頭を探す
+        int start = cursorCol;
+        while (start > 0 && Character.isJavaIdentifierPart(line.charAt(start - 1))) start--;
+        // 右方向に識別子の末尾を探す
+        int end = cursorCol;
+        while (end < line.length() && Character.isJavaIdentifierPart(line.charAt(end))) end++;
+        return line.substring(start, end);
     }
 }

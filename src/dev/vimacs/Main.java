@@ -3,6 +3,7 @@ package dev.vimacs;
 import dev.vimacs.analysis.AnalysisException;
 import dev.vimacs.analysis.CompileAnalyzer;
 import dev.vimacs.analysis.CompileDiagnostic;
+import dev.vimacs.analysis.JdkClassIndex;
 import dev.vimacs.editor.ModalEditor;
 import dev.vimacs.ui.EditorCanvas;
 import dev.vimacs.ui.Theme;
@@ -25,6 +26,9 @@ public class Main {
 
     /** CompileAnalyzer はスレッドセーフなので全ペインで共有する */
     private static final CompileAnalyzer COMPILE_ANALYZER = new CompileAnalyzer();
+
+    /** JDK クラスインデックス（起動時にバックグラウンドで構築） */
+    private static final JdkClassIndex JDK_INDEX = JdkClassIndex.build();
 
     /**
      * editor と canvas を接続し、INSERT→NORMAL 復帰時・保存時に
@@ -88,12 +92,14 @@ public class Main {
             leftCanvas.setTheme(Theme.DARK_MODE);
             ModalEditor leftEditor = new ModalEditor(text, path, leftCanvas);
             setupCompileAnalysis(leftEditor, leftCanvas);
+            leftEditor.setJdkClassIndex(JDK_INDEX);
 
             // --- 右ペイン ---
             EditorCanvas rightCanvas = new EditorCanvas();
             rightCanvas.setTheme(Theme.DARK_MODE);
             ModalEditor rightEditor = new ModalEditor(text, path, rightCanvas);
             setupCompileAnalysis(rightEditor, rightCanvas);
+            rightEditor.setJdkClassIndex(JDK_INDEX);
 
             // JSplitPane で左右に並べる
             JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftCanvas, rightCanvas);
