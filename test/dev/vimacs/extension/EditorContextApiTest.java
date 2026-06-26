@@ -168,6 +168,84 @@ public class EditorContextApiTest {
         loader.unloadAll();
     }
 
+    static void testGetKeymap() {
+        System.out.println("[getKeymap]");
+        EditorContext c = ctx("hello");
+        check("getKeymap() != null", c.getKeymap() != null);
+        // 同じインスタンスが返る
+        check("getKeymap() は同じインスタンスを返す", c.getKeymap() == c.getKeymap());
+    }
+
+    static void testPluginRebindsKey() throws Exception {
+        System.out.println("[E2E: Plugin が getKeymap でキーを再バインドする]");
+        String src = """
+            import dev.vimacs.extension.EditorPlugin;
+            import dev.vimacs.extension.EditorContext;
+            import dev.vimacs.editor.KeymapRegistry;
+            import dev.vimacs.editor.KeyBinding;
+            public class RebindPlugin implements EditorPlugin {
+                public String getName() { return "rebind"; }
+                public void execute(EditorContext ctx) {
+                    // 'z' -> undo に割り当て
+                    ctx.getKeymap().bind(KeymapRegistry.Mode.NORMAL,
+                        KeyBinding.ofChar('z', "undo"), "undo");
+                }
+            }
+            """;
+        Path srcFile = writeTempPlugin("RebindPlugin", src);
+        PluginLoader loader = new PluginLoader();
+        EditorPlugin plugin = loader.loadPlugin(srcFile);
+
+        dev.vimacs.editor.ModalEditor editor = new dev.vimacs.editor.ModalEditor("hello");
+        EditorContext c = new SimpleEditorContext(editor);
+
+        // INSERT モードで 'X' を入力してからNORMALに戻す
+        editor.processKey(0, 'i', 0);
+        editor.processKey(0, 'X', 0);
+        editor.processKey(java.awt.event.KeyEvent.VK_ESCAPE, (char)27, 0);
+        String afterInsert = editor.getText();
+
+        // プラグインで 'z' を undo に再バインド
+        plugin.execute(c);
+
+        // 'z' を押すとアンドゥが実行される
+        editor.processKey(0, 'z', 0);
+        check("'z' 押下後アンドゥが実行された (テキストが復元)", editor.getText().equals("hello"));
+        loader.unloadAll();
+    }
+
+    static void testPluginRegistersCustomKey() throws Exception {
+        System.out.println("[E2E: Plugin がカスタムキーとアクションを登録する]");
+        String src = """
+            import dev.vimacs.extension.EditorPlugin;
+            import dev.vimacs.extension.EditorContext;
+            import dev.vimacs.editor.KeymapRegistry;
+            import dev.vimacs.editor.KeyBinding;
+            public class CustomKeyPlugin implements EditorPlugin {
+                public String getName() { return "customkey"; }
+                public void execute(EditorContext ctx) {
+                    ctx.getKeymap().registerAction("custom.greet",
+                        () -> ctx.setStatusMessage("hello from custom key"));
+                    ctx.getKeymap().bind(KeymapRegistry.Mode.NORMAL,
+                        KeyBinding.ofChar('Q', "custom.greet"), "custom.greet");
+                }
+            }
+            """;
+        Path srcFile = writeTempPlugin("CustomKeyPlugin", src);
+        PluginLoader loader = new PluginLoader();
+        EditorPlugin plugin = loader.loadPlugin(srcFile);
+
+        dev.vimacs.editor.ModalEditor editor = new dev.vimacs.editor.ModalEditor("hello");
+        EditorContext c = new SimpleEditorContext(editor);
+        plugin.execute(c);
+
+        // 'Q' を押すとカスタムアクションが実行される
+        editor.processKey(0, 'Q', 0);
+        check("'Q' 押下でカスタムアクションが実行された",
+              "hello from custom key".equals(editor.getStatusMessage()));
+        loader.unloadAll();
+    }
+
     static void testPluginUsesOffsetAt() throws Exception {
         System.out.println("[E2E: Plugin が offsetAt + insertAtOffset で行頭挿入する]");
         String src = """
@@ -203,9 +281,12 @@ public class EditorContextApiTest {
         testSetCursor();
         testSetCursorClamping();
         testModeQueries();
-        try { testPluginUsesGetLine();       } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
-        try { testPluginUsesSetCursor();     } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
-        try { testPluginUsesOffsetAt();      } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
+        testGetKeymap();
+        try { testPluginUsesGetLine();           } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
+        try { testPluginUsesSetCursor();         } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
+        try { testPluginUsesOffsetAt();          } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
+        try { testPluginRebindsKey();            } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
+        try { testPluginRegistersCustomKey();    } catch (Exception e) { fail++; System.out.println("  ERROR: " + e); }
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);

@@ -1,5 +1,7 @@
 package dev.vimacs.extension;
 
+import dev.vimacs.editor.KeymapRegistry;
+
 /**
  * プラグインがエディタを操作するための窓口。
  * ModalEditor の内部実装から切り離し、プラグインを疎結合に保つ。
@@ -62,4 +64,13 @@ public interface EditorContext {
 
     /** エディタのステータスバーにメッセージを表示する。 */
     void setStatusMessage(String message);
+
+    // ---- キーマップ -----------------------------------------------------------
+
+    /**
+     * モード別キーマップレジストリを返す。
+     * プラグインはこれを通じてキーバインドを追加・上書きしたり、
+     * 独自アクションハンドラを登録できる。
+     */
+    KeymapRegistry getKeymap();
 }

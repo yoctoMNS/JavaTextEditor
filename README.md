@@ -215,13 +215,13 @@ ModalEditor.processKey(keyCode, keyChar, modifiers)
 ```
 === dev.vimacs.buffer.PieceTableTest ===               PASS: 15 / 15
 === dev.vimacs.buffer.UndoablePieceTableTest ===       PASS: 11 / 11
-=== dev.vimacs.editor.KeymapRegistryTest ===           PASS: 30 / 30
+=== dev.vimacs.editor.KeymapRegistryTest ===           PASS: 38 / 38
 === dev.vimacs.editor.ModalEditorTest ===              PASS: 151 / 151
-=== dev.vimacs.extension.EditorContextApiTest ===      PASS: 35 / 35
+=== dev.vimacs.extension.EditorContextApiTest ===      PASS: 39 / 39
 === dev.vimacs.extension.PluginLoaderTest ===          PASS: 9 / 9
 === dev.vimacs.ui.EditorCanvasTest ===                 PASS: 22 / 22
 
-合計: 273 テストケース全 PASS
+合計: 285 テストケース全 PASS
 ```
 
 ## 技術制約

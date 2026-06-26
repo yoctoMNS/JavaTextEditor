@@ -80,9 +80,9 @@ project-root/
 | ① | `editor-buffer-architecture` | バッファ・データ構造 | ✅ 完了（15/15テスト・getTextInRange/offsetOfLine追加済み） |
 | ② | `modal-editing-engine` | Vimモーダル編集（Insert中のEmacs式カーソル移動含む） | ✅ v5 完了（151/151テスト・NORMAL/INSERT/COMMAND/VISUAL/VISUAL LINE） |
 | ③ | `extension-language-runtime` | Java動的コンパイルによる拡張機構 | ✅ v1 完了（9/9テスト） |
-| ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | ✅ Phase 1+2 完了（30/30テスト・全5モード KeymapRegistry 移行済み） |
+| ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | ✅ Phase 3 完了（38/38テスト・getKeymap()/registerAction() でプラグインがキーバインド登録可能） |
 | ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画 | ✅ v3 完了（22/22テスト・縦横スクロール・JSplitPane・Ctrl+W） |
-| ⑥ | `plugin-api-design` | プラグイン向け公開API | ✅ 完了（35/35テスト・getLine/offsetAt/setCursor/isNormalMode追加） |
+| ⑥ | `plugin-api-design` | プラグイン向け公開API | ✅ 完了（39/39テスト・getLine/offsetAt/setCursor/isNormalMode/getKeymap追加） |
 | ⑦ | `editor-testing-strategy` | 境界値・大規模ファイルのテスト戦略 | 未着手 |
 | ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | 未着手 |
 | ⑨ | `javac-compile-integration` | javac連携・コンパイルエラー表示 | 未着手 |

@@ -14,6 +14,8 @@ public class KeymapRegistryTest {
         testResolveDifferentModes();
         testVisualModeBindings();
         testVisualLineModeBindings();
+        testRegisterCustomAction();
+        testCustomActionOverridesBuiltin();
 
         System.out.println("\n--- Summary ---");
         System.out.println("PASS: " + passCount + " / " + testCount);
@@ -165,6 +167,52 @@ public class KeymapRegistryTest {
             "custom.yank".equals(reg.resolve(KeymapRegistry.Mode.VISUAL_LINE, KeyEvent.VK_UNDEFINED, 'y', 0)));
         check("VISUAL 'y' は影響を受けない -> yank",
             "yank".equals(reg.resolve(KeymapRegistry.Mode.VISUAL, KeyEvent.VK_UNDEFINED, 'y', 0)));
+    }
+
+    static void testRegisterCustomAction() {
+        System.out.println("[カスタムアクション登録確認]");
+        KeymapRegistry reg = new KeymapRegistry();
+
+        // 未登録アクション -> null
+        check("未登録アクション -> null", reg.getCustomAction("my.custom") == null);
+
+        // 登録後 -> ハンドラが返る
+        boolean[] ran = { false };
+        reg.registerAction("my.custom", () -> ran[0] = true);
+        Runnable handler = reg.getCustomAction("my.custom");
+        check("登録後 getCustomAction -> non-null", handler != null);
+
+        handler.run();
+        check("ハンドラを run() すると実行される", ran[0]);
+
+        // 上書き登録
+        boolean[] ran2 = { false };
+        reg.registerAction("my.custom", () -> ran2[0] = true);
+        reg.getCustomAction("my.custom").run();
+        check("上書き登録したハンドラが実行される", ran2[0]);
+        check("旧ハンドラの ran[0] は true のまま (副作用なし)", ran[0]);
+    }
+
+    static void testCustomActionOverridesBuiltin() {
+        System.out.println("[カスタムアクションがビルトインを上書き]");
+        dev.vimacs.editor.ModalEditor editor = new dev.vimacs.editor.ModalEditor("abc");
+        KeymapRegistry km = editor.getKeymap();
+
+        // 'z' に新アクションを割り当てる
+        boolean[] triggered = { false };
+        km.bind(KeymapRegistry.Mode.NORMAL, KeyBinding.ofChar('z', "custom.z"), "custom.z");
+        km.registerAction("custom.z", () -> triggered[0] = true);
+
+        editor.processKey(KeyEvent.VK_UNDEFINED, 'z', 0);
+        check("NORMAL モードで 'z' を押すとカスタムアクションが実行される", triggered[0]);
+
+        // 既存の 'h' をカスタムアクションで上書きするとデフォルト動作（cursor.left）を置き換えられる
+        boolean[] hRan = { false };
+        int colBefore = editor.getCursorCol();
+        km.registerAction("cursor.left", () -> hRan[0] = true);
+        editor.processKey(KeyEvent.VK_UNDEFINED, 'h', 0);
+        check("'h' の cursor.left をカスタムに差し替え -> カスタムが実行", hRan[0]);
+        check("'h' のデフォルト移動は実行されない (col 変化なし)", editor.getCursorCol() == colBefore);
     }
 
     static void check(String desc, boolean result) {
