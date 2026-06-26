@@ -253,6 +253,18 @@ public class KeymapRegistryTest {
         // 'h' を NORMAL で Ctrl 付き押した場合は登録なし (NORMAL 'h' はmodifiers=0 のみ)
         action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_H, 'h', KeyEvent.CTRL_DOWN_MASK);
         check("実キーイベント形式: Ctrl+H -> null (未登録)", action == null);
+
+        // Shift+K: keyChar='K' 大文字で届く環境
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_K, 'K', KeyEvent.SHIFT_DOWN_MASK);
+        check("Shift+K (keyChar='K') -> jdk.doc", "jdk.doc".equals(action));
+
+        // Shift+K: keyChar='k' 小文字で届く環境（AWT プラットフォーム差）
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_K, 'k', KeyEvent.SHIFT_DOWN_MASK);
+        check("Shift+K (keyChar='k') -> jdk.doc", "jdk.doc".equals(action));
+
+        // 小文字 k はカーソル上移動（Shift なし）
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_K, 'k', 0);
+        check("k (Shift なし) -> cursor.up", "cursor.up".equals(action));
     }
 
     static void check(String desc, boolean result) {
