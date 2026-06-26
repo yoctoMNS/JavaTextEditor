@@ -84,7 +84,7 @@ project-root/
 | ⑤ | `gui-rendering-pipeline` | Swing/AWT GUI描画 | ✅ v3 完了（22/22テスト・縦横スクロール・JSplitPane・Ctrl+W） |
 | ⑥ | `plugin-api-design` | プラグイン向け公開API | ✅ 完了（39/39テスト・getLine/offsetAt/setCursor/isNormalMode/getKeymap追加） |
 | ⑦ | `editor-testing-strategy` | 境界値・大規模ファイルのテスト戦略 | ✅ 完了（101テスト追加・計394/394テスト全PASS） |
-| ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | 未着手 |
+| ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | ✅ 完了（49/49テスト・import索引/シンボル索引/graceful degradation） |
 | ⑨ | `javac-compile-integration` | javac連携・コンパイルエラー表示 | 未着手 |
 | ⑩ | `jdk-api-navigation` | JDKクラス/メソッド/フィールドの参照・ナビゲーション | 未着手 |
 | ⑪ | `javadoc-viewer` | ローカルJavadoc(HTML)のエディタ内表示 | 未着手 |
