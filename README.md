@@ -17,6 +17,7 @@ VimのモーダルキーバインドとEmacsのカーソル操作を統合した
 - **境界値テスト**: 空バッファ・1文字・行末・行頭など極端なケースを体系的に網羅
 - **パフォーマンステスト**: 10万行ファイルopen・大規模文書への1000回挿入/削除・offsetOfLine速度計測
 - **ソース解析エンジン**: Compiler Tree APIでJavaソースをparse-only解析し、import索引・シンボル索引を構築
+- **コンパイルエラー表示**: `JavacTask.analyze()` による型解決まで含むコンパイルエラー・警告をガター（E/Wマーカー）と波下線でリアルタイム表示
 - **Java SE標準APIのみ**: 外部ライブラリ不使用。Java 21で動作
 
 ## 必要環境
@@ -130,8 +131,11 @@ project-root/
 │   │   └── SimpleEditorContext.java # ModalEditor → EditorContext アダプタ
 │   ├── analysis/
 │   │   ├── AnalysisException.java  # checked exception
+│   │   ├── CompileAnalyzer.java    # JavacTask.analyze() 型解決込みコンパイル診断収集
+│   │   ├── CompileDiagnostic.java  # 診断1件 record (lineNumber/column/message/kind)
+│   │   ├── DiagnosticKind.java     # ERROR / WARNING enum
 │   │   ├── ImportEntry.java        # import 文1件 (record)
-│   │   ├── SourceAnalyzer.java     # Compiler Tree API 解析本体
+│   │   ├── SourceAnalyzer.java     # Compiler Tree API 解析本体（parse-only）
 │   │   ├── SourceIndex.java        # 解析結果 (record)
 │   │   ├── SymbolEntry.java        # シンボル1件 (record)
 │   │   └── SymbolKind.java         # CLASS/INTERFACE/ENUM/METHOD/FIELD/CONSTRUCTOR
@@ -149,7 +153,8 @@ project-root/
 │   │   ├── ModalEditorTest.java
 │   │   └── ModalEditorEdgeCaseTest.java  # カーソルクランプ・マルチバイト・深いアンドゥ
 │   ├── analysis/
-│   │   └── SourceAnalyzerTest.java    # import/シンボル索引・構文エラー耐性・行番号テスト
+│   │   ├── SourceAnalyzerTest.java    # import/シンボル索引・構文エラー耐性・行番号テスト
+│   │   └── CompileAnalyzerTest.java   # 型解決エラー・診断行番号・setDiagnostics・フックテスト
 │   ├── extension/
 │   │   ├── EditorContextApiTest.java  # EditorContext API の結合テスト
 │   │   └── PluginLoaderTest.java
@@ -299,6 +304,30 @@ SourceIndex
 **行番号**: 0-indexed（`getLineNumber() - 1` で変換）。  
 **後続機能の基盤**: ⑨ javac連携（コンパイルエラー表示）・⑩ JDKナビゲーション・⑭ マルチファイルリファクタリングで再利用される。
 
+### コンパイルエラー表示: CompileAnalyzer
+
+`SourceAnalyzer`（parse-only）とは別に、`CompileAnalyzer` が `JavacTask.analyze()` まで実行して型解決エラーも収集します。
+
+```
+CompileAnalyzer.analyze(String sourceCode)    ← バッファ文字列を直接解析
+CompileAnalyzer.analyzeFile(Path path)        ← ファイルパスから解析
+
+→ List<CompileDiagnostic>
+     CompileDiagnostic.lineNumber()  // 0-indexed
+     CompileDiagnostic.column()      // 0-indexed
+     CompileDiagnostic.message()     // javac のエラーメッセージ
+     CompileDiagnostic.kind()        // DiagnosticKind.ERROR / WARNING
+```
+
+`EditorCanvas.setDiagnostics(List<CompileDiagnostic>)` で診断をセットすると：
+
+- **ガター列**（左端 2文字分）: エラー行に赤い `E`、警告行に黄色い `W` を表示
+- **波下線**: エラー/警告行のテキスト下に 4px 周期の波線を描画
+- **ステータスバー右端**: `2 errors, 1 warning` 形式で件数を表示
+- 診断が空のときはガター幅 = 0（既存の描画レイアウトに影響なし）
+
+バックグラウンドコンパイルは `ModalEditor.setOnReturnToNormal(Runnable)` で登録したコールバックを INSERT→NORMAL 復帰時に呼び出すことでトリガーします。UI スレッドをブロックしないよう、コンパイルは仮想スレッドで実行し `SwingUtilities.invokeLater()` で結果を反映します。
+
 ### GUI描画: EditorCanvas
 
 `JPanel` を継承した `EditorCanvas` が `Graphics2D` で直接描画します。
@@ -314,6 +343,7 @@ SourceIndex
 ## テスト結果
 
 ```
+=== dev.vimacs.analysis.CompileAnalyzerTest ===        PASS: 15 / 15
 === dev.vimacs.analysis.SourceAnalyzerTest ===         PASS: 49 / 49
 === dev.vimacs.buffer.PieceTableTest ===               PASS: 15 / 15
 === dev.vimacs.buffer.PieceTableEdgeCaseTest ===       PASS: 46 / 46
@@ -327,9 +357,18 @@ SourceIndex
 === dev.vimacs.performance.LargeFileTest ===           PASS: 12 / 12
 === dev.vimacs.ui.EditorCanvasTest ===                 PASS: 22 / 22
 === dev.vimacs.ui.KeyboardSimulationTest ===           PASS: 110 / 110
+=== dev.vimacs.ui.RobotKeyInputTest ===                SKIP (headless 環境; 実機で PASS)
 
-合計: 553 テストケース全 PASS
+合計: 568 テストケース全 PASS
 ```
+
+> **RobotKeyInputTest について**: `java.awt.Robot` は `DISPLAY` 環境変数が必要なため CI / headless 環境では自動 SKIP になります。実機（デスクトップ環境）では `Shift` 修飾を含む `:` / `V` / `P` キーの実イベント経由の動作を全件検証済みです。同等のロジックは `KeyboardSimulationTest`（110件）でも網羅されています。
+
+### ⑨ javac-compile-integration で追加したテスト（15件）
+
+| テストクラス | 内容 |
+|---|---|
+| `CompileAnalyzerTest` (15) | 正常ソースでエラー0件・構文エラーの行番号付き検出・未定義型の型エラー・型不一致・複数エラー・メッセージ非空・CompileDiagnostic recordフィールド・DiagnosticKind enum・setDiagnostics/getDiagnostics・null渡しリセット・ガター描画クラッシュなし・INSERT→NORMALフック呼び出し・NORMAL状態ESCでは呼ばれない |
 
 ### ⑧ java-source-analysis で追加したテスト（49件）
 
