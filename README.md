@@ -326,7 +326,7 @@ CompileAnalyzer.analyzeFile(Path path)        ← ファイルパスから解析
 - **ステータスバー右端**: `2 errors, 1 warning` 形式で件数を表示
 - 診断が空のときはガター幅 = 0（既存の描画レイアウトに影響なし）
 
-バックグラウンドコンパイルは `ModalEditor.setOnReturnToNormal(Runnable)` で登録したコールバックを INSERT→NORMAL 復帰時に呼び出すことでトリガーします。UI スレッドをブロックしないよう、コンパイルは仮想スレッドで実行し `SwingUtilities.invokeLater()` で結果を反映します。
+バックグラウンドコンパイルは `ModalEditor.setOnReturnToNormal(Runnable)` で INSERT→NORMAL 復帰時、および `setOnSave(Runnable)` でファイル保存時にトリガーします。UI スレッドをブロックしないよう、コンパイルは仮想スレッドで実行し `SwingUtilities.invokeLater()` で結果を反映します。ファイルパスがある場合は `analyzeFile()` で当該ファイルを解析し、バッファのみの場合は `analyze()` でバッファ内容を解析します。コンパイラが使えない環境でも静かに失敗し、ガターと診断表示をリセットします。
 
 ### GUI描画: EditorCanvas
 
