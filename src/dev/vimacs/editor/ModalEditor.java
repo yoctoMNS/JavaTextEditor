@@ -23,6 +23,8 @@ public class ModalEditor {
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
     private final KeymapRegistry keymap = new KeymapRegistry();
     private Mode mode = Mode.NORMAL;
+    // INSERT → NORMAL 復帰時に呼ばれるコールバック（バックグラウンドコンパイル等）
+    private Runnable onReturnToNormal = null;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -55,6 +57,14 @@ public class ModalEditor {
 
     public void setExitCallback(Runnable callback) {
         this.exitCallback = callback;
+    }
+
+    /**
+     * INSERT モードから NORMAL モードに戻ったときに呼ばれるコールバックを登録する。
+     * バックグラウンドコンパイルのトリガーとして使用する。
+     */
+    public void setOnReturnToNormal(Runnable callback) {
+        this.onReturnToNormal = callback;
     }
 
     public void processKey(int keyCode, char keyChar, int modifiers) {
@@ -166,6 +176,7 @@ public class ModalEditor {
                     case "enter.normal" -> {
                         mode = Mode.NORMAL;
                         clampCursorForNormal();
+                        if (onReturnToNormal != null) onReturnToNormal.run();
                     }
                     case "delete.before" -> handleBackspace();
                     case "insert.newline" -> {
