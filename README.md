@@ -14,6 +14,8 @@ VimのモーダルキーバインドとEmacsのカーソル操作を統合した
 - **縦スクロール**: カーソルが画面外に出ると自動追従
 - **プラグインシステム**: `javax.tools.JavaCompiler` による動的コンパイルで Java ファイルをプラグインとしてロード
 - **プラグイン公開API**: テキスト読み取り・編集・カーソル操作・キーバインド登録を `EditorContext` 経由で提供
+- **境界値テスト**: 空バッファ・1文字・行末・行頭など極端なケースを体系的に網羅
+- **パフォーマンステスト**: 10万行ファイルopen・大規模文書への1000回挿入/削除・offsetOfLine速度計測
 - **Java SE標準APIのみ**: 外部ライブラリ不使用。Java 21で動作
 
 ## 必要環境
@@ -130,14 +132,19 @@ project-root/
 │       └── EditorCanvas.java   # Swing描画コンポーネント
 ├── test/dev/vimacs/
 │   ├── buffer/
-│   │   ├── PieceTableTest.java
-│   │   └── UndoablePieceTableTest.java
+│   │   ├── PieceTableTest.java           # 正常系・基本境界値
+│   │   ├── PieceTableEdgeCaseTest.java   # 空バッファ・多数操作・境界削除
+│   │   ├── UndoablePieceTableTest.java   # アンドゥ/リドゥ基本動作
+│   │   └── UndoRedoDeepTest.java         # 深いアンドゥチェーン・交互操作
 │   ├── editor/
 │   │   ├── KeymapRegistryTest.java
-│   │   └── ModalEditorTest.java
+│   │   ├── ModalEditorTest.java
+│   │   └── ModalEditorEdgeCaseTest.java  # カーソルクランプ・マルチバイト・深いアンドゥ
 │   ├── extension/
 │   │   ├── EditorContextApiTest.java  # EditorContext API の結合テスト
 │   │   └── PluginLoaderTest.java
+│   ├── performance/
+│   │   └── LargeFileTest.java            # 大規模ファイルパフォーマンス計測
 │   └── ui/
 │       ├── EditorCanvasTest.java
 │       ├── ScrollPreview.java       # スクロール動作目視確認用
@@ -279,15 +286,28 @@ public class MyPlugin implements EditorPlugin {
 
 ```
 === dev.vimacs.buffer.PieceTableTest ===               PASS: 15 / 15
+=== dev.vimacs.buffer.PieceTableEdgeCaseTest ===       PASS: 46 / 46
 === dev.vimacs.buffer.UndoablePieceTableTest ===       PASS: 11 / 11
+=== dev.vimacs.buffer.UndoRedoDeepTest ===             PASS: 20 / 20
 === dev.vimacs.editor.KeymapRegistryTest ===           PASS: 46 / 46
 === dev.vimacs.editor.ModalEditorTest ===              PASS: 151 / 151
+=== dev.vimacs.editor.ModalEditorEdgeCaseTest ===      PASS: 23 / 23
 === dev.vimacs.extension.EditorContextApiTest ===      PASS: 39 / 39
 === dev.vimacs.extension.PluginLoaderTest ===          PASS: 9 / 9
+=== dev.vimacs.performance.LargeFileTest ===           PASS: 12 / 12
 === dev.vimacs.ui.EditorCanvasTest ===                 PASS: 22 / 22
 
-合計: 293 テストケース全 PASS
+合計: 394 テストケース全 PASS
 ```
+
+### ⑦ editor-testing-strategy で追加したテスト（101件）
+
+| テストクラス | 内容 |
+|---|---|
+| `PieceTableEdgeCaseTest` (46) | 空バッファ・境界削除・ゼロ長操作・多数挿入/削除整合性・改行のみ文書 |
+| `UndoRedoDeepTest` (20) | 50回深いアンドゥ・交互アンドゥ/リドゥ・リドゥスタック無効化・全アンドゥ→全リドゥ往復 |
+| `ModalEditorEdgeCaseTest` (23) | 空バッファカーソルクランプ・全角文字境界・文書端移動・深いアンドゥ後クランプ・NORMAL末端クランプ |
+| `LargeFileTest` (12) | 10万行ファイルopen・大規模文書1000回挿入/削除・getText速度・offsetOfLine×1000速度 |
 
 ## 技術制約
 
