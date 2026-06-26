@@ -12,6 +12,8 @@ VimのモーダルキーバインドとEmacsのカーソル操作を統合した
 - **VISUAL LINEモード**: 行単位の範囲選択・ヤンク・削除・行単位ペースト
 - **高速バッファ**: ピーステーブル方式により、大規模ファイル（数十万行）でも高速に挿入・削除
 - **縦スクロール**: カーソルが画面外に出ると自動追従
+- **プラグインシステム**: `javax.tools.JavaCompiler` による動的コンパイルで Java ファイルをプラグインとしてロード
+- **プラグイン公開API**: テキスト読み取り・編集・カーソル操作・キーバインド登録を `EditorContext` 経由で提供
 - **Java SE標準APIのみ**: 外部ライブラリ不使用。Java 21で動作
 
 ## 必要環境
@@ -116,9 +118,10 @@ project-root/
 │   │   └── UndoablePieceTable.java  # アンドゥ/リドゥ対応バッファ（PieceTable継承）
 │   ├── editor/
 │   │   ├── KeyBinding.java          # キーバインド（record）
-│   │   ├── KeymapRegistry.java       # モード別キーバインド管理
+│   │   ├── KeymapRegistry.java      # モード別キーバインド管理・カスタムアクション登録
 │   │   └── ModalEditor.java         # モード管理・カーソル管理・キー処理
 │   ├── extension/
+│   │   ├── EditorContext.java       # プラグイン公開APIインタフェース
 │   │   ├── EditorPlugin.java        # プラグインインタフェース
 │   │   ├── PluginLoader.java        # JavaCompiler 動的ロード
 │   │   └── SimpleEditorContext.java # ModalEditor → EditorContext アダプタ
@@ -132,6 +135,9 @@ project-root/
 │   ├── editor/
 │   │   ├── KeymapRegistryTest.java
 │   │   └── ModalEditorTest.java
+│   ├── extension/
+│   │   ├── EditorContextApiTest.java  # EditorContext API の結合テスト
+│   │   └── PluginLoaderTest.java
 │   └── ui/
 │       ├── EditorCanvasTest.java
 │       ├── ScrollPreview.java       # スクロール動作目視確認用
@@ -197,6 +203,65 @@ ModalEditor.processKey(keyCode, keyChar, modifiers)
 - `loadDefaults()`: デフォルトキーマップを定義（Vim標準 + Emacs式INSERTモード移動）
 - `bind(mode, keyBinding, actionName)`: 新規キーバインドの登録・既存バインドの上書き
 - `resolve(mode, keyCode, keyChar, modifiers)`: キー入力からアクション名を解決
+- `registerAction(actionName, handler)`: カスタムアクションハンドラの登録（プラグインから呼び出し可能）
+- `getCustomAction(actionName)`: 登録済みのカスタムハンドラを取得
+
+カスタムアクションはビルトインアクションに優先して実行されるため、既存のキー動作を上書きすることも可能です。
+
+### プラグインシステム
+
+#### プラグインの作り方
+
+`EditorPlugin` インタフェースを実装した Java ファイルを用意し、`PluginLoader.loadPlugin(Path)` でロードします。JDK の `javax.tools.JavaCompiler` を使ってエディタ起動中に動的コンパイル・ロードが行われます。
+
+```java
+// MyPlugin.java
+import dev.vimacs.extension.EditorPlugin;
+import dev.vimacs.extension.EditorContext;
+import dev.vimacs.editor.KeymapRegistry;
+import dev.vimacs.editor.KeyBinding;
+
+public class MyPlugin implements EditorPlugin {
+    public String getName() { return "myplugin"; }
+
+    public void execute(EditorContext ctx) {
+        // テキスト読み取り
+        String line = ctx.getLine(ctx.getCursorRow());
+
+        // テキスト挿入
+        int offset = ctx.offsetAt(ctx.getCursorRow(), 0);
+        ctx.insertAtOffset(offset, "// ");
+
+        // カーソル移動
+        ctx.setCursor(0, 0);
+
+        // カスタムキーバインド登録
+        ctx.getKeymap().registerAction("my.greet",
+            () -> ctx.setStatusMessage("Hello from plugin!"));
+        ctx.getKeymap().bind(KeymapRegistry.Mode.NORMAL,
+            KeyBinding.ofChar('Q', "my.greet"), "my.greet");
+    }
+}
+```
+
+#### EditorContext 公開 API
+
+| カテゴリ | メソッド | 説明 |
+|---|---|---|
+| テキスト読み取り | `getText()` | バッファ全体のテキスト |
+| テキスト読み取り | `length()` | バッファの総文字数 |
+| テキスト読み取り | `getLineCount()` | 総行数 |
+| テキスト読み取り | `getLine(int row)` | 指定行のテキスト（0始まり、範囲外は空文字列） |
+| テキスト操作 | `insertAtOffset(int, String)` | 指定オフセットに文字列を挿入 |
+| テキスト操作 | `deleteRange(int, int)` | 指定範囲（排他）を削除 |
+| カーソル読み取り | `getCursorRow()` | カーソルの行番号 |
+| カーソル読み取り | `getCursorCol()` | カーソルの列番号 |
+| カーソル読み取り | `offsetAt(int row, int col)` | (row, col) を絶対文字オフセットに変換 |
+| カーソル操作 | `setCursor(int row, int col)` | カーソルを移動（範囲外は自動クランプ） |
+| モード問い合わせ | `isNormalMode()` | NORMALモードなら true |
+| モード問い合わせ | `isInsertMode()` | INSERTモードなら true |
+| UI | `setStatusMessage(String)` | ステータスバーにメッセージ表示 |
+| キーマップ | `getKeymap()` | `KeymapRegistry` を返す（キーバインド登録・変更に使用） |
 
 ### GUI描画: EditorCanvas
 
