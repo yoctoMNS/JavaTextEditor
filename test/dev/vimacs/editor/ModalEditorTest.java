@@ -628,7 +628,8 @@ public class ModalEditorTest {
         pressKey(ed, 'y');
         check("yankRegister=\"ab\"", ed.getYankRegister().equals("ab"));
 
-        // カーソルを列2に移動して p
+        // Vim仕様: v y 後カーソルは選択開始(col=0)に戻るため、col=2 へは l を2回押す
+        pressKey(ed, 'l');
         pressKey(ed, 'l');
         pressKey(ed, 'p');
         // cursor=(0,2) で offset=3, "abc"のoffset 3に"ab"を挿入 → "abcab"
@@ -646,7 +647,8 @@ public class ModalEditorTest {
         pressKey(ed, 'l');
         pressKey(ed, 'y');
 
-        // カーソルを列3に移動（'4' 上）
+        // Vim仕様: v y 後カーソルは選択開始(col=0)に戻るため、col=4 へは l を4回押す
+        pressKey(ed, 'l');
         pressKey(ed, 'l');
         pressKey(ed, 'l');
         pressKey(ed, 'l');

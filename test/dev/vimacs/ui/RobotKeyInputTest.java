@@ -1,5 +1,6 @@
 package dev.vimacs.ui;
 
+import dev.vimacs.analysis.JdkClassIndex;
 import dev.vimacs.editor.ModalEditor;
 import java.awt.KeyboardFocusManager;
 import java.awt.Robot;
@@ -70,6 +71,7 @@ public class RobotKeyInputTest {
         testCommandModeInteraction();
         testVisualModeYankDelete();
         testVisualLineModeYankDelete();
+        testJdkDocLookup();             // Shift+K jdk.doc 動作確認
 
         teardown();
 
@@ -407,6 +409,66 @@ public class RobotKeyInputTest {
         robot.keyRelease(keyCode);
         robot.keyRelease(KeyEvent.VK_CONTROL);
         Thread.sleep(KEY_DELAY_MS);
+    }
+
+    /**
+     * Shift+K (jdk.doc): カーソル位置の識別子を JDK クラスとして検索しステータスメッセージをセット。
+     * JdkClassIndex はバックグラウンド構築なので、isReady() 前後の両ケースを確認する。
+     */
+    static void testJdkDocLookup() throws Exception {
+        System.out.println("\n--- Shift+K: JDK APIナビゲーション ---");
+
+        // (1) jdkIndex 未設定の状態: "JDK index building..." が返る
+        resetEditorTo("String");
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg1 = editor.getStatusMessage();
+        // jdkIndex が null か未完了 → "JDK index building..." / "Not found..." / 実際の情報 のいずれか
+        check("Shift+K: ステータスが空でない", true, !msg1.isEmpty());
+
+        // (2) JdkClassIndex をセットして同期的に構築し、"String" にカーソルを当てて検索
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        resetEditorTo("String");
+        editor.setJdkClassIndex(idx);   // resetEditorTo の後にセット（新しい ModalEditor に対して）
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg2 = editor.getStatusMessage();
+        check("Shift+K: String が含まれる", true, msg2.contains("String"));
+        check("Shift+K: class または interface が含まれる", true,
+              msg2.contains("class") || msg2.contains("interface"));
+
+        // (3) 非識別子（スペース）にカーソルがある場合
+        resetEditorTo("  foo");
+        editor.setJdkClassIndex(idx);   // resetEditorTo の後にセット
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K); // cursor at col=0, char=' '
+        Thread.sleep(SETTLE_MS);
+        String msg3 = editor.getStatusMessage();
+        check("Shift+K: 非識別子で 'No identifier' が含まれる", true,
+              msg3.contains("No identifier") || msg3.contains("Not found"));
+
+        // (4) JDK に存在しない識別子
+        resetEditorTo("XyzNoSuchClass12345");
+        editor.setJdkClassIndex(idx);   // resetEditorTo の後にセット
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg4 = editor.getStatusMessage();
+        check("Shift+K: 未知クラスで 'Not found' が含まれる", true, msg4.contains("Not found"));
+
+        // (5) Robot で実際に Shift+K を2回押しても安定して動くことの確認（バウンス・重複実行なし）
+        resetEditorTo("List");
+        editor.setJdkClassIndex(idx);   // resetEditorTo の後にセット
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg5a = editor.getStatusMessage();
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg5b = editor.getStatusMessage();
+        check("Shift+K 2回: 同じメッセージが返る", msg5a, msg5b);
     }
 
     static void check(String name, Object expected, Object actual) {
