@@ -324,6 +324,9 @@ public class ModalEditor {
             case "yank" -> {
                 yankRegister = getSelectedText();
                 yankType = "char";
+                // Vim 仕様: y 後はカーソルを選択開始位置に戻す
+                int startOffset = Math.min(offsetAt(anchorRow, anchorCol), offsetOfCursor());
+                moveCursorToOffset(startOffset);
                 mode = Mode.NORMAL;
             }
             case "delete" -> {

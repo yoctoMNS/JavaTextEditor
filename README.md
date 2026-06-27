@@ -374,7 +374,7 @@ K キー押下: wordAtCursor() でカーソル位置の識別子を抽出
 === dev.vimacs.buffer.PieceTableEdgeCaseTest ===       PASS: 46 / 46
 === dev.vimacs.buffer.UndoablePieceTableTest ===       PASS: 11 / 11
 === dev.vimacs.buffer.UndoRedoDeepTest ===             PASS: 20 / 20
-=== dev.vimacs.editor.KeymapRegistryTest ===           PASS: 46 / 46
+=== dev.vimacs.editor.KeymapRegistryTest ===           PASS: 49 / 49
 === dev.vimacs.editor.ModalEditorTest ===              PASS: 151 / 151
 === dev.vimacs.editor.ModalEditorEdgeCaseTest ===      PASS: 23 / 23
 === dev.vimacs.extension.EditorContextApiTest ===      PASS: 39 / 39
@@ -382,19 +382,20 @@ K キー押下: wordAtCursor() でカーソル位置の識別子を抽出
 === dev.vimacs.performance.LargeFileTest ===           PASS: 12 / 12
 === dev.vimacs.ui.EditorCanvasTest ===                 PASS: 22 / 22
 === dev.vimacs.ui.KeyboardSimulationTest ===           PASS: 110 / 110
-=== dev.vimacs.ui.RobotKeyInputTest ===                SKIP (headless 環境; 実機で PASS)
+=== dev.vimacs.ui.RobotKeyInputTest ===                PASS: 71 / 71  (Xvfb 仮想ディスプレイ)
 
-合計: 586 テストケース全 PASS
+合計: 660 テストケース全 PASS
 ```
 
-> **RobotKeyInputTest について**: `java.awt.Robot` は `DISPLAY` 環境変数が必要なため CI / headless 環境では自動 SKIP になります。実機（デスクトップ環境）では `Shift` 修飾を含む `:` / `V` / `P` キーの実イベント経由の動作を全件検証済みです。同等のロジックは `KeyboardSimulationTest`（110件）でも網羅されています。
+> **RobotKeyInputTest について**: `java.awt.Robot` は `DISPLAY` 環境変数が必要です。Xvfb（`Xvfb :99`）などの仮想ディスプレイがあれば CI 環境でも実行可能です。`Shift` 修飾を含む `:` / `V` / `P` / `Shift+K` キーの実イベント経由の動作を全件検証しています。
 
-### ⑩ jdk-api-navigation で追加したテスト（18件）
+### ⑩ jdk-api-navigation で追加したテスト（24件）
 
 | テストクラス | 内容 |
 |---|---|
 | `JdkClassIndexTest` (18) | jrt:/ からクラス数1000件以上・lookup("List")にjava.util.List含む・lookup("String")にjava.lang.String含む・存在しない名前で空リスト・結果リストは変更不可・loadClass動作・java.util.Listはインタフェース・JdkTypeInfo kind/methods/fields・toStatusLine()フォーマット・インデックス構築5秒以内 |
-
+| `KeymapRegistryTest` (+3) | Shift+K (keyChar='K') → jdk.doc・Shift+K (keyChar='k') → jdk.doc（プラットフォーム差吸収）・k (Shift なし) → cursor.up |
+| `RobotKeyInputTest` (+6) | Shift+K でステータス非空・String クラス情報表示・class/interface 種別表示・非識別子で No identifier・未知クラスで Not found・2回押しで同一メッセージ（安定性） |
 ### ⑨ javac-compile-integration で追加したテスト（15件）
 
 | テストクラス | 内容 |

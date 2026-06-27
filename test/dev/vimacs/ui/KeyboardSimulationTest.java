@@ -284,8 +284,9 @@ public class KeyboardSimulationTest {
         key('l'); // col=1
         key('v'); key('l'); key('l'); // VISUAL select 'BCD' (col 1-3)
         key('y'); // yank "BCD", NORMAL
-        key('p'); // paste after cursor (col=1, 'B' の後ろ)
-        check("p後テキスト", "ABCDBCDE", ed.getText());
+        // Vim仕様: v y 後カーソルは選択開始(col=1)に戻る → p は col=1 の後ろ(offset=2)に挿入
+        key('p'); // paste after cursor (col=1)
+        check("p後テキスト", "ABBCDCDE", ed.getText());
     }
 
     // 'P' は Shift+p → modifiers に SHIFT_DOWN_MASK が付く → バグ修正確認
@@ -295,8 +296,9 @@ public class KeyboardSimulationTest {
         key('v'); key('l'); // VISUAL select 'CD'
         key('y'); // yank "CD"
         // cursor at col=2
+        // Vim仕様: v y 後カーソルは選択開始(col=2)に戻る → P は col=2 の前(offset=2)に挿入
         keyWithModifiers(KeyEvent.VK_P, 'P', KeyEvent.SHIFT_DOWN_MASK); // 'P' で前に貼り付け
-        check("P (SHIFT付き)後テキスト", "ABCCDDE", ed.getText());
+        check("P (SHIFT付き)後テキスト", "ABCDCDE", ed.getText());
 
         // modifiers=0 でも動くことを確認
         reset("XY");
