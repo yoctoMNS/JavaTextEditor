@@ -1,6 +1,7 @@
 package dev.vimacs.editor;
 
 import dev.vimacs.analysis.JdkClassIndex;
+import dev.vimacs.analysis.JdkJavadocReader;
 import dev.vimacs.analysis.JdkTypeInfo;
 import dev.vimacs.buffer.PieceTable;
 import dev.vimacs.buffer.UndoablePieceTable;
@@ -44,6 +45,7 @@ public class ModalEditor {
     private Runnable exitCallback = () -> System.exit(0);
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
+    private final JdkJavadocReader javadocReader = new JdkJavadocReader();
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -748,11 +750,12 @@ public class ModalEditor {
         }
         // 候補が1件なら即詳細表示、複数ならリスト表示
         if (candidates.size() == 1) {
-            Optional<Class<?>> cls = jdkIndex.loadClass(candidates.get(0));
+            String fqn = candidates.get(0);
+            Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
             if (cls.isPresent()) {
-                setStatusMessage(JdkTypeInfo.from(cls.get()).toStatusLine());
+                setStatusMessage(buildDocLine(fqn, cls.get(), ""));
             } else {
-                setStatusMessage(candidates.get(0) + " (cannot load)");
+                setStatusMessage(fqn + " (cannot load)");
             }
         } else {
             // 最初の候補を優先表示（java.lang > java.util > その他）
@@ -766,11 +769,24 @@ public class ModalEditor {
             Optional<Class<?>> cls = jdkIndex.loadClass(best);
             String extra = candidates.size() > 1 ? " (+" + (candidates.size() - 1) + " more)" : "";
             if (cls.isPresent()) {
-                setStatusMessage(JdkTypeInfo.from(cls.get()).toStatusLine() + extra);
+                setStatusMessage(buildDocLine(best, cls.get(), extra));
             } else {
                 setStatusMessage(best + " (cannot load)" + extra);
             }
         }
+    }
+
+    /**
+     * Javadoc サマリが取得できればそれを優先し、なければ JdkTypeInfo のフォールバック表示を返す。
+     * suffix は "(+N more)" などの付加文字列。
+     */
+    private String buildDocLine(String fqn, Class<?> cls, String suffix) {
+        Optional<String> summary = javadocReader.readSummary(fqn);
+        if (summary.isPresent()) {
+            String simpleName = fqn.contains(".") ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+            return simpleName + ": " + summary.get() + suffix;
+        }
+        return JdkTypeInfo.from(cls).toStatusLine() + suffix;
     }
 
     /** カーソル位置の Java 識別子（単語）を返す。識別子がなければ空文字列。 */
