@@ -399,12 +399,19 @@ K キー押下: wordAtCursor() でカーソル位置の識別子を抽出
 === dev.vimacs.performance.LargeFileTest ===           PASS: 12 / 12
 === dev.vimacs.ui.EditorCanvasTest ===                 PASS: 22 / 22
 === dev.vimacs.ui.KeyboardSimulationTest ===           PASS: 110 / 110
-=== dev.vimacs.ui.RobotKeyInputTest ===                PASS: 71 / 71  (Xvfb 仮想ディスプレイ)
+=== dev.vimacs.ui.RobotKeyInputTest ===                PASS: 83 / 83  (Xvfb 仮想ディスプレイ)
 
-合計: 675 テストケース全 PASS
+合計: 711 テストケース全 PASS
 ```
 
-> **RobotKeyInputTest について**: `java.awt.Robot` は `DISPLAY` 環境変数が必要です。Xvfb（`Xvfb :99`）などの仮想ディスプレイがあれば CI 環境でも実行可能です。`Shift` 修飾を含む `:` / `V` / `P` / `Shift+K` キーの実イベント経由の動作を全件検証しています。
+> **RobotKeyInputTest について**: `java.awt.Robot` は `DISPLAY` 環境変数が必要です。Xvfb（`Xvfb :99`）などの仮想ディスプレイがあれば CI 環境でも実行可能です。`Shift` 修飾を含む `:` / `V` / `P` / `Shift+K` キーの実イベント経由の動作と auto-import の選択 UI を全件検証しています。
+
+### ⑯ auto-import-handler で追加したテスト（36件）
+
+| テストクラス | 内容 |
+|---|---|
+| `AutoImportHandlerTest` (26) | findMissingSymbols（エラーなし・class/interface/enum・重複排除・WARNINGは無視）・findImportInsertOffset（package後・import後・複数import後・何もなし）・applyImport（新規挿入・既存import後・重複スキップ）・applyImports（複数挿入）・resolveCandidates（エラーなし・既インポート除外・未知シンボル）・suggestNew/alreadyImported |
+| `RobotKeyInputTest` (+10) | auto-import 候補1件で自動挿入（ユーザー入力不要）・複数候補でプロンプト表示（[1]/[Esc]=skipを含む）・数字キー1で候補選択・import 文挿入確認・Escでスキップ（待ち解消・import文なし）・エラーなしで何もしない（テキスト変化なし） |
 
 ### ⑪ javadoc-viewer で追加したテスト（15件）
 

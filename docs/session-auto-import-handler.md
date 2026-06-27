@@ -59,7 +59,17 @@ import List? [1] java.util.List  [2] java.awt.List  [Esc]=skip
 
 ```
 === AutoImportHandlerTest: 26/26 passed ===
+=== RobotKeyInputTest: PASS: 83 / 83  (auto-import 10件を含む)
 === Summary: 18 class(es) passed, 0 class(es) failed ===
 ```
 
-合計テスト数: 675（既存）+ 26（新規）= **701 テスト全 PASS**
+合計テスト数: 675（既存）+ 26（AutoImportHandlerTest）+ 10（RobotKeyInputTest 追加）= **711 テスト全 PASS**
+
+## Robot テストの追加内容
+
+| テスト名 | 検証内容 |
+|---|---|
+| `testAutoImportSingleCandidate` | ArrayList など候補1件のシンボルが自動挿入され待ち状態にならないこと |
+| `testAutoImportMultipleSelection` | List など複数候補があると待ち状態になり、プロンプト（[1]/[Esc]=skip）が表示され、数字キー '1' で選択・挿入できること |
+| `testAutoImportEscapeSkip` | Esc でスキップすると待ち状態が解消され import が挿入されないこと |
+| `testAutoImportNoDiagnostics` | コンパイルエラーがない場合は何も起きないこと |

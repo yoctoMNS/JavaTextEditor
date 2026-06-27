@@ -1,10 +1,16 @@
 package dev.vimacs.ui;
 
+import dev.vimacs.analysis.AutoImportHandler;
+import dev.vimacs.analysis.CompileDiagnostic;
+import dev.vimacs.analysis.DiagnosticKind;
+import dev.vimacs.analysis.ImportSuggester;
 import dev.vimacs.analysis.JdkClassIndex;
+import dev.vimacs.analysis.SourceAnalyzer;
 import dev.vimacs.editor.ModalEditor;
 import java.awt.KeyboardFocusManager;
 import java.awt.Robot;
 import java.awt.event.KeyEvent;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import javax.swing.JFrame;
@@ -72,6 +78,10 @@ public class RobotKeyInputTest {
         testVisualModeYankDelete();
         testVisualLineModeYankDelete();
         testJdkDocLookup();             // Shift+K jdk.doc 動作確認
+        testAutoImportSingleCandidate();  // auto-import: 候補1件自動挿入
+        testAutoImportMultipleSelection(); // auto-import: 複数候補を数字キーで選択
+        testAutoImportEscapeSkip();       // auto-import: Esc でスキップ
+        testAutoImportNoDiagnostics();    // auto-import: エラーなしで何もしない
 
         teardown();
 
@@ -469,6 +479,153 @@ public class RobotKeyInputTest {
         Thread.sleep(SETTLE_MS);
         String msg5b = editor.getStatusMessage();
         check("Shift+K 2回: 同じメッセージが返る", msg5a, msg5b);
+    }
+
+    // =========================================================================
+    // auto-import テスト
+    // =========================================================================
+
+    /**
+     * 候補が1件の場合: import が自動挿入され、ユーザー入力は不要。
+     * java.util.ArrayList は JDK に1候補（java.util.ArrayList）のみ存在するはず。
+     */
+    static void testAutoImportSingleCandidate() throws Exception {
+        System.out.println("\n--- auto-import: 候補1件 → 自動挿入 ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        List<String> candidates = idx.lookup("ArrayList");
+        if (candidates.size() != 1) {
+            System.out.println("[SKIP] auto-import single: ArrayList の候補が1件でない (" + candidates.size() + ")");
+            return;
+        }
+
+        String src = "package foo;\nclass X { ArrayList x; }";
+        resetEditorTo(src);
+        AutoImportHandler handler = new AutoImportHandler(
+            new ImportSuggester(idx), new SourceAnalyzer());
+        editor.setAutoImportHandler(handler);
+
+        // 疑似的にコンパイルエラーを渡す
+        CompileDiagnostic diag = new CompileDiagnostic(1, 10,
+            "error: cannot find symbol\n  symbol:   class ArrayList", DiagnosticKind.ERROR);
+        CountDownLatch latch = new CountDownLatch(1);
+        SwingUtilities.invokeLater(() -> {
+            editor.handleAutoImport(java.util.List.of(diag));
+            latch.countDown();
+        });
+        latch.await(3, TimeUnit.SECONDS);
+        Thread.sleep(SETTLE_MS);
+
+        // 候補1件なので選択待ちにならず即挿入
+        check("single: import 待ちなし", false, editor.hasImportPending());
+        check("single: import 文が挿入された",
+              true, editor.getText().contains("import java.util.ArrayList;"));
+    }
+
+    /**
+     * 候補が複数件の場合: ステータスバーに候補を表示し、数字キー '1' で選択して挿入。
+     * "List" は java.util.List / java.awt.List など複数候補があるはず。
+     */
+    static void testAutoImportMultipleSelection() throws Exception {
+        System.out.println("\n--- auto-import: 複数候補 → 数字キーで選択 ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        List<String> candidates = idx.lookup("List");
+        if (candidates.size() < 2) {
+            System.out.println("[SKIP] auto-import multi: List の候補が2件未満");
+            return;
+        }
+
+        String src = "package foo;\nclass X { List x; }";
+        resetEditorTo(src);
+        AutoImportHandler handler = new AutoImportHandler(
+            new ImportSuggester(idx), new SourceAnalyzer());
+        editor.setAutoImportHandler(handler);
+
+        CompileDiagnostic diag = new CompileDiagnostic(1, 10,
+            "error: cannot find symbol\n  symbol:   class List", DiagnosticKind.ERROR);
+        CountDownLatch latch = new CountDownLatch(1);
+        SwingUtilities.invokeLater(() -> {
+            editor.handleAutoImport(java.util.List.of(diag));
+            latch.countDown();
+        });
+        latch.await(3, TimeUnit.SECONDS);
+        Thread.sleep(SETTLE_MS);
+
+        check("multi: import 待ち状態", true, editor.hasImportPending());
+        String prompt = editor.getStatusMessage();
+        check("multi: プロンプトに [1] が含まれる", true, prompt.contains("[1]"));
+        check("multi: プロンプトに [Esc]=skip が含まれる", true, prompt.contains("[Esc]=skip"));
+
+        // '1' を押して最初の候補を選択
+        pressChar('1');
+        Thread.sleep(SETTLE_MS);
+
+        check("multi: 選択後 import 待ち解消", false, editor.hasImportPending());
+        String firstFqn = candidates.get(0);
+        check("multi: 選択した import が挿入された",
+              true, editor.getText().contains("import " + firstFqn + ";"));
+    }
+
+    /**
+     * 複数候補で Escape を押すとスキップして待ち状態が解消される。
+     */
+    static void testAutoImportEscapeSkip() throws Exception {
+        System.out.println("\n--- auto-import: Esc でスキップ ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        List<String> candidates = idx.lookup("List");
+        if (candidates.size() < 2) {
+            System.out.println("[SKIP] auto-import escape: List の候補が2件未満");
+            return;
+        }
+
+        String src = "class X { List x; }";
+        resetEditorTo(src);
+        AutoImportHandler handler = new AutoImportHandler(
+            new ImportSuggester(idx), new SourceAnalyzer());
+        editor.setAutoImportHandler(handler);
+
+        CompileDiagnostic diag = new CompileDiagnostic(0, 10,
+            "error: cannot find symbol\n  symbol:   class List", DiagnosticKind.ERROR);
+        CountDownLatch latch = new CountDownLatch(1);
+        SwingUtilities.invokeLater(() -> {
+            editor.handleAutoImport(java.util.List.of(diag));
+            latch.countDown();
+        });
+        latch.await(3, TimeUnit.SECONDS);
+        Thread.sleep(SETTLE_MS);
+
+        check("escape: import 待ち状態", true, editor.hasImportPending());
+
+        pressEscape(); // スキップ
+        Thread.sleep(SETTLE_MS);
+
+        check("escape: Esc でスキップ後 import 待ち解消", false, editor.hasImportPending());
+        // import は挿入されていない
+        check("escape: import 文なし", false,
+              editor.getText().contains("import java.util.List;"));
+    }
+
+    /**
+     * コンパイルエラーがない場合は何もしない（待ち状態にならない）。
+     */
+    static void testAutoImportNoDiagnostics() throws Exception {
+        System.out.println("\n--- auto-import: エラーなしで何もしない ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        String src = "class X {}";
+        resetEditorTo(src);
+        AutoImportHandler handler = new AutoImportHandler(
+            new ImportSuggester(idx), new SourceAnalyzer());
+        editor.setAutoImportHandler(handler);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        SwingUtilities.invokeLater(() -> {
+            editor.handleAutoImport(java.util.List.of());
+            latch.countDown();
+        });
+        latch.await(3, TimeUnit.SECONDS);
+        Thread.sleep(SETTLE_MS);
+
+        check("no-diag: import 待ちなし", false, editor.hasImportPending());
+        check("no-diag: テキスト変化なし", src, editor.getText());
     }
 
     static void check(String name, Object expected, Object actual) {

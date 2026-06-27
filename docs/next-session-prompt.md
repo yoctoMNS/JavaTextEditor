@@ -1,149 +1,81 @@
-# Vimacs Editor — ② modal-editing-engine v3 実装指示
+# 次セッション指示プロンプト
 
-## セッション開始時に必ず読むファイル（この順で・読み終えるまで実装着手禁止）
+## 現在の状態
 
-1. `CLAUDE.md` — 技術制約・パッケージ名・ロードマップ（厳守事項の源泉）
-2. `docs/session-log.md` — 全作業履歴と前セッション引き継ぎ事項
-3. `docs/handover-modal-editor-v3.md` — 今セッションの詳細仕様書（必読）
-4. `.claude/skills/editor-buffer-architecture/references/piece-table-delete-and-undo.md` — アンドゥ設計の根拠（必読）
-5. `src/dev/vimacs/buffer/PieceTable.java` — 変更対象：protected メソッドを追加する
-6. `src/dev/vimacs/editor/ModalEditor.java` — 変更対象：buffer 型変更・u/Ctrl+R 追加
-7. `test/dev/vimacs/editor/ModalEditorTest.java` — 既存テスト構造の把握
+Skill ⑯ `auto-import-handler` が完了し、main ブランチにマージ済み。全 711 テストケース PASS（Robot テスト含む）。
 
----
+INSERT→NORMAL 復帰時に `CompileAnalyzer` のエラー結果を `AutoImportHandler` に渡し、
+「cannot find symbol: class/interface/enum X」から型名を抽出→ JDK 索引で FQN 候補を取得→
+候補1件なら即自動挿入・複数件ならステータスバーに `[1] java.util.List  [2] java.awt.List  [Esc]=skip`
+形式で表示して数字キーで選択する機能が動作している。
 
-## 現在の実装状態（前セッション完了済み）
+## 完了済み Skill 一覧（参考）
 
-| Skill | 状態 | テスト数 |
+| # | Skill 名 | 状態 |
 |---|---|---|
-| ① editor-buffer-architecture | ✅ 完了 | 15/15 |
-| ② modal-editing-engine | ✅ v2 完了（NORMAL/INSERT/COMMAND・:w/:e/:q/:wq） | 60/60 |
-| ⑤ gui-rendering-pipeline | ✅ v2 完了（縦スクロール） | 8/8 |
+| ① | editor-buffer-architecture | ✅ 完了 |
+| ② | modal-editing-engine | ✅ 完了 |
+| ③ | extension-language-runtime | ✅ 完了 |
+| ④ | keymap-conflict-resolution | ✅ 完了 |
+| ⑤ | gui-rendering-pipeline | ✅ 完了 |
+| ⑥ | plugin-api-design | ✅ 完了 |
+| ⑦ | editor-testing-strategy | ✅ 完了 |
+| ⑧ | java-source-analysis | ✅ 完了 |
+| ⑨ | javac-compile-integration | ✅ 完了 |
+| ⑩ | jdk-api-navigation | ✅ 完了 |
+| ⑪ | javadoc-viewer | ✅ 完了 |
+| ⑯ | auto-import-handler | ✅ 完了 |
 
-**main ブランチは最新。新しいフィーチャーブランチを作成してから作業を開始すること。**
+## 次のタスク候補（未着手）
 
-```bash
-git checkout main && git checkout -b claude/undo-redo-v3-XXXXXX
-```
+| # | Skill 名 | 概要 | 依存 |
+|---|---|---|---|
+| ⑫ | `openjdk-source-tracing` | JNI/HotSpot レベルのソーストレース | ⑩ |
+| ⑬ | `project-wide-search` | 作業ディレクトリ配下の grep 的検索 | ① |
+| ⑭ | `multi-file-refactoring` | シンボル単位の複数ファイルリファクタリング | ①⑧ |
 
----
+## 推奨: Skill ⑬ project-wide-search
 
-## 今セッションで実装する機能
+### 目標
 
-### ② v3：アンドゥ/リドゥ
+エディタ内から作業ディレクトリ配下のファイルを grep 的に検索し、結果をエディタ内で
+閲覧・ジャンプできるようにする。
 
-#### 変更1：PieceTable に protected アクセサを追加
+### 設計方針（検討ポイント）
 
-`src/dev/vimacs/buffer/PieceTable.java` に以下を追加する。
-サブクラス（`UndoablePieceTable`）からのみ参照できるよう `protected` にすること。
+1. **トリガー**:
+   - `:grep <pattern>` コマンドで手動トリガー
+   - または NORMALモードの `Ctrl+/` などのキーバインド
 
-```java
-protected List<Piece> getPieces() {
-    return List.copyOf(pieces);
-}
+2. **検索エンジン**:
+   - Java SE 標準の `Files.walkFileTree()` + `Files.readAllLines()` で実装
+   - バックグラウンドスレッドで走査してメインスレッドをブロックしない
+   - 正規表現対応（`java.util.regex.Pattern`）
 
-protected void restorePieces(List<Piece> snapshot) {
-    pieces.clear();
-    pieces.addAll(snapshot);
-}
-```
+3. **結果表示**:
+   - 結果を新しいバッファ（疑似ファイル "*grep*"）に一覧表示
+   - `file:lineNumber: matchedLine` 形式
+   - Enter/`gf` で該当ファイルへジャンプ
 
-#### 変更2：UndoablePieceTable を新規作成
+4. **作業ディレクトリの扱い**:
+   - エディタ起動時の作業ディレクトリ（`System.getProperty("user.dir")`）を基点
+   - `.gitignore` 対応は optional（最初は全ファイル対象でもよい）
 
-`src/dev/vimacs/buffer/UndoablePieceTable.java` を新規作成する。
-設計の詳細は `handover-modal-editor-v3.md` と `piece-table-delete-and-undo.md` を参照。
+### 着手前に確認すること
 
-重要な設計判断：
-- `snapshotBeforeEdit()` を `insert`/`delete` の先頭で呼ぶ（`@Override` で透過的に差し込む）
-- 新しい `insert`/`delete` が呼ばれた瞬間に `redoStack.clear()` して履歴を無効化する
-- `canUndo()` / `canRedo()` はステータス行への表示や将来のキーバインド制御に使う
+- `src/dev/vimacs/editor/ModalEditor.java` の `executeCommand()` を読んでコマンド追加方法を把握する
+- `src/dev/vimacs/Main.java` のペイン切り替えロジックを確認し、grep 結果バッファをどちらのペインに表示するか設計する
+- `docs/session-auto-import-handler.md` を参照して設計経緯を把握する
+- `.claude/skills/` 配下の関連 SKILL.md を必ず参照すること
 
-#### 変更3：ModalEditor の変更
+### ブランチ
 
-追加するキーバインド：
+`claude/project-wide-search`（新規作成して作業）
 
-| モード | キー | 動作 |
-|---|---|---|
-| NORMAL | `u` | `buffer.undo()` を呼び、カーソルをクランプ |
-| NORMAL | `Ctrl+R` | `buffer.redo()` を呼び、カーソルをクランプ |
+### 完了条件
 
-Ctrl+R は `processNormalKey(char keyChar)` にキャラクタが渡らないため、
-`processKey()` の冒頭で `mode == NORMAL && ctrl && keyCode == VK_R` を先に捌くこと。
-
-アンドゥ/リドゥ後のカーソルクランプ：テキストが短くなった場合に
-`cursorRow` / `cursorCol` が範囲外になるため `clampCursorAfterUndoRedo()` で正規化する。
-
----
-
-## テスト追加要件
-
-### 新規ファイル：UndoablePieceTableTest
-
-`test/dev/vimacs/buffer/UndoablePieceTableTest.java` を新規作成する。
-既存の `PieceTableTest` と同形式（`main` メソッド形式・JUnit 不使用）。
-
-```
-[アンドゥ基本]
-  PASS: insert 後に undo() でテキストが元に戻る
-  PASS: delete 後に undo() でテキストが元に戻る
-  PASS: undoStack が空のとき undo() を呼んでも例外なく何も起きない
-
-[リドゥ基本]
-  PASS: undo() 後に redo() でテキストが再適用される
-  PASS: redoStack が空のとき redo() を呼んでも例外なく何も起きない
-
-[アンドゥ連続]
-  PASS: 3回 insert 後、3回 undo() で初期テキストに戻る
-  PASS: 3回 undo() 後に 3回 redo() で最終テキストに戻る
-
-[リドゥ無効化]
-  PASS: undo() 後に新しい insert() をすると canRedo()==false になる
-
-[canUndo / canRedo]
-  PASS: 初期状態で canUndo()==false かつ canRedo()==false
-  PASS: insert 後に canUndo()==true
-  PASS: undo 後に canRedo()==true
-```
-
-### ModalEditorTest への追記
-
-既存の 60 ケースはすべて PASS のまま保つこと（回帰禁止）。
-
-```
-[u キー: アンドゥ]
-  PASS: INSERT で文字入力後 ESC → u でテキストが元に戻る
-  PASS: アンドゥ後にカーソルが有効範囲内にクランプされる
-  PASS: アンドゥできない状態で u を押してもクラッシュしない
-
-[Ctrl+R キー: リドゥ]
-  PASS: u の後 Ctrl+R でテキストが再適用される
-  PASS: リドゥできない状態で Ctrl+R を押してもクラッシュしない
-```
-
----
-
-## 完了条件（すべて満たしてからコミット・プッシュ）
-
-1. `./scripts/test.sh` で全テストクラスが PASS
-   - `UndoablePieceTableTest` が新規追加されていること
-   - `ModalEditorTest` のケース数が 60 より増えていること
-   - 既存ケースの回帰なし
-2. `./scripts/run.sh` で起動 → テキスト編集 → `u` でアンドゥ → `Ctrl+R` でリドゥ（目視確認）
-3. `docs/session-log.md` に今セッションの作業記録・次フェーズ引き継ぎ事項を追記
-4. コミット・プッシュ完了（main へのマージはユーザーの指示を待つ）
-
----
-
-## 制約（変更禁止）
-
-- Java 21 / Java SE 標準 API のみ（外部ライブラリ禁止）
-- ビルド: `./scripts/build.sh` のみ（Maven/Gradle 禁止）
-- テスト: `main` メソッド形式のみ（JUnit 禁止）
-- `Files.writeString` / `Files.readString` は Java SE 標準 API（`java.nio.file`）
-
-## このセッションでは実装しない（スコープ外）
-
-- アンドゥ単位のグループ化（複合コマンドを1アンドゥ単位にまとめる「トランザクション」）
-- VISUALモード・範囲選択（② v4 以降）
-- 横スクロール（⑤ v3 で別途対応）
-- `:set` コマンドや補完・履歴
+- `ProjectSearchTest` が全 PASS
+- 既存 711 テストケースが引き続き PASS（Robot テスト含む）
+- README.md にキーバインドと動作説明を追記
+- `docs/session-project-wide-search.md` に作業ログを記録
+- main ブランチにマージ
