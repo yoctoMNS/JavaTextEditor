@@ -87,7 +87,7 @@ project-root/
 | ⑧ | `java-source-analysis` | Compiler Tree APIによるAST解析・auto-import索引基盤 | ✅ 完了（49/49テスト・import索引/シンボル索引/graceful degradation） |
 | ⑨ | `javac-compile-integration` | javac連携・コンパイルエラー表示 | ✅ 完了（15/15テスト・ガター描画・波下線・INSERTモード離脱フック） |
 | ⑩ | `jdk-api-navigation` | JDKクラス/メソッド/フィールドの参照・ナビゲーション | ✅ 完了（18/18テスト・K キー・jrt:/ 索引・リフレクション表示） |
-| ⑪ | `javadoc-viewer` | ローカルJavadoc(HTML)のエディタ内表示 | 未着手 |
+| ⑪ | `javadoc-viewer` | ローカルJavadoc(HTML)のエディタ内表示 | ✅ 完了（15/15テスト・graceful degradation・`K`キーでサマリ表示） |
 | ⑫ | `openjdk-source-tracing` | JNI/HotSpotレベルのソーストレース | 未着手 |
 | ⑬ | `project-wide-search` | 作業ディレクトリ配下のgrep的検索 | 未着手 |
 | ⑭ | `multi-file-refactoring` | シンボル単位の複数ファイルリファクタリング | 未着手 |
