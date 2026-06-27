@@ -1,9 +1,12 @@
 package dev.vimacs;
 
 import dev.vimacs.analysis.AnalysisException;
+import dev.vimacs.analysis.AutoImportHandler;
 import dev.vimacs.analysis.CompileAnalyzer;
 import dev.vimacs.analysis.CompileDiagnostic;
+import dev.vimacs.analysis.ImportSuggester;
 import dev.vimacs.analysis.JdkClassIndex;
+import dev.vimacs.analysis.SourceAnalyzer;
 import dev.vimacs.editor.ModalEditor;
 import dev.vimacs.ui.EditorCanvas;
 import dev.vimacs.ui.Theme;
@@ -30,6 +33,12 @@ public class Main {
     /** JDK クラスインデックス（起動時にバックグラウンドで構築） */
     private static final JdkClassIndex JDK_INDEX = JdkClassIndex.build();
 
+    /** auto-import で使う SourceAnalyzer / ImportSuggester / AutoImportHandler */
+    private static final SourceAnalyzer SOURCE_ANALYZER = new SourceAnalyzer();
+    private static final ImportSuggester IMPORT_SUGGESTER = new ImportSuggester(JDK_INDEX);
+    private static final AutoImportHandler AUTO_IMPORT_HANDLER =
+        new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
+
     /**
      * editor と canvas を接続し、INSERT→NORMAL 復帰時・保存時に
      * バックグラウンドでコンパイル解析を実行してガター表示を更新する。
@@ -43,7 +52,10 @@ public class Main {
                     List<CompileDiagnostic> diags = (filePath != null)
                         ? COMPILE_ANALYZER.analyzeFile(Path.of(filePath))
                         : COMPILE_ANALYZER.analyze(source);
-                    SwingUtilities.invokeLater(() -> canvas.setDiagnostics(diags));
+                    SwingUtilities.invokeLater(() -> {
+                        canvas.setDiagnostics(diags);
+                        editor.handleAutoImport(diags);
+                    });
                 } catch (AnalysisException e) {
                     // コンパイラが使えない環境でも静かに失敗する
                     SwingUtilities.invokeLater(() -> canvas.setDiagnostics(List.of()));
@@ -93,6 +105,7 @@ public class Main {
             ModalEditor leftEditor = new ModalEditor(text, path, leftCanvas);
             setupCompileAnalysis(leftEditor, leftCanvas);
             leftEditor.setJdkClassIndex(JDK_INDEX);
+            leftEditor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
 
             // --- 右ペイン ---
             EditorCanvas rightCanvas = new EditorCanvas();
@@ -100,6 +113,7 @@ public class Main {
             ModalEditor rightEditor = new ModalEditor(text, path, rightCanvas);
             setupCompileAnalysis(rightEditor, rightCanvas);
             rightEditor.setJdkClassIndex(JDK_INDEX);
+            rightEditor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
 
             // JSplitPane で左右に並べる
             JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftCanvas, rightCanvas);

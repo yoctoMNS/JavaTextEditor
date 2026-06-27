@@ -1,5 +1,7 @@
 package dev.vimacs.editor;
 
+import dev.vimacs.analysis.AutoImportHandler;
+import dev.vimacs.analysis.CompileDiagnostic;
 import dev.vimacs.analysis.JdkClassIndex;
 import dev.vimacs.analysis.JdkJavadocReader;
 import dev.vimacs.analysis.JdkTypeInfo;
@@ -10,7 +12,9 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -46,6 +50,11 @@ public class ModalEditor {
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
     private final JdkJavadocReader javadocReader = new JdkJavadocReader();
+    // auto-import: 複数候補が見つかった場合に選択待ちとなる状態
+    private AutoImportHandler autoImportHandler = null;
+    // 選択待ち候補: 単純名 → FQN 候補リストのペアを順番通りに保持
+    private final List<Map.Entry<String, List<String>>> pendingImports = new ArrayList<>();
+    private int pendingImportIdx = 0; // 現在選択中の単純名インデックス
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -110,6 +119,23 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+        // import 選択待ち状態の処理
+        if (!pendingImports.isEmpty()) {
+            if (keyCode == KeyEvent.VK_ESCAPE) {
+                // Esc: このシンボルをスキップして次へ
+                advanceImportPrompt();
+            } else if (keyChar >= '1' && keyChar <= '9') {
+                int choice = keyChar - '1';
+                List<String> fqns = pendingImports.get(pendingImportIdx).getValue();
+                if (choice < fqns.size()) {
+                    autoImportHandler.applyImport(fqns.get(choice), buffer);
+                }
+                advanceImportPrompt();
+            }
+            syncCanvas();
+            return;
+        }
+
         // 2打鍵シーケンス（yy / dd）の処理
         if (pendingNormalChar != 0) {
             char prev = pendingNormalChar;
@@ -730,6 +756,77 @@ public class ModalEditor {
     /** JDK クラスインデックスを設定する（Main.java からバックグラウンド構築後に呼ぶ）。 */
     public void setJdkClassIndex(JdkClassIndex index) {
         this.jdkIndex = index;
+    }
+
+    /** auto-import ハンドラを設定する。 */
+    public void setAutoImportHandler(AutoImportHandler handler) {
+        this.autoImportHandler = handler;
+    }
+
+    /**
+     * コンパイル診断から未解決シンボルを検出し、import の自動挿入または選択を行う。
+     * 候補が1件の場合は即座に挿入。複数の場合は選択待ちモードへ。
+     * Must be called on the EDT.
+     */
+    public void handleAutoImport(List<CompileDiagnostic> diags) {
+        if (autoImportHandler == null) return;
+        Map<String, List<String>> candidates =
+            autoImportHandler.resolveCandidates(diags, buffer.getText());
+        if (candidates.isEmpty()) return;
+
+        List<Map.Entry<String, List<String>>> entries = new ArrayList<>(candidates.entrySet());
+
+        // 候補が1件のみのシンボルをまず自動挿入
+        List<Map.Entry<String, List<String>>> multi = new ArrayList<>();
+        for (Map.Entry<String, List<String>> e : entries) {
+            if (e.getValue().size() == 1) {
+                autoImportHandler.applyImport(e.getValue().get(0), buffer);
+            } else {
+                multi.add(e);
+            }
+        }
+
+        if (!multi.isEmpty()) {
+            pendingImports.clear();
+            pendingImports.addAll(multi);
+            pendingImportIdx = 0;
+            showImportPrompt();
+        }
+        syncCanvas();
+    }
+
+    /** 選択待ちの import が存在するかどうか。 */
+    public boolean hasImportPending() {
+        return !pendingImports.isEmpty();
+    }
+
+    /** 現在のシンボルの選択を完了（または skip）して次へ進む。 */
+    private void advanceImportPrompt() {
+        pendingImportIdx++;
+        if (pendingImportIdx >= pendingImports.size()) {
+            pendingImports.clear();
+            pendingImportIdx = 0;
+            statusMessage = "";
+        } else {
+            showImportPrompt();
+        }
+    }
+
+    /** 現在の選択待ちプロンプトを statusMessage に設定する。 */
+    private void showImportPrompt() {
+        if (pendingImports.isEmpty()) return;
+        Map.Entry<String, List<String>> entry = pendingImports.get(pendingImportIdx);
+        StringBuilder sb = new StringBuilder();
+        sb.append("import ").append(entry.getKey()).append("? ");
+        List<String> fqns = entry.getValue();
+        int limit = Math.min(fqns.size(), 9);
+        for (int i = 0; i < limit; i++) {
+            sb.append("[").append(i + 1).append("] ").append(fqns.get(i));
+            if (i < limit - 1) sb.append("  ");
+        }
+        if (fqns.size() > 9) sb.append("  (+").append(fqns.size() - 9).append(" more)");
+        sb.append("  [Esc]=skip");
+        statusMessage = sb.toString();
     }
 
     /** NORMALモードの K キー: カーソル位置の識別子を JDK クラスとして検索し、ステータスバーに表示。 */

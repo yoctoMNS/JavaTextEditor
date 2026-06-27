@@ -91,7 +91,7 @@ project-root/
 | ⑫ | `openjdk-source-tracing` | JNI/HotSpotレベルのソーストレース | 未着手 |
 | ⑬ | `project-wide-search` | 作業ディレクトリ配下のgrep的検索 | 未着手 |
 | ⑭ | `multi-file-refactoring` | シンボル単位の複数ファイルリファクタリング | 未着手 |
-| ⑯ | `auto-import-handler` | 未定義シンボルの import 自動挿入 | 未着手 |
+| ⑯ | `auto-import-handler` | 未定義シンボルの import 自動挿入 | ✅ 完了（26/26テスト・INSERT→NORMAL フック・候補1件自動挿入・複数候補選択UI） |
 
 ### 依存関係（Skillを作る順序の制約）
 
@@ -106,7 +106,7 @@ project-root/
 
 **補足**: ⑧〜⑭はいずれも「裏側のロジック」と「画面への表示」が分かれている。ロジック部分は上表の依存関係で着手できるが、実際に画面に結果を表示する部分は⑤の完成が前提になる。
 
-**⑧ と ⑯ の関係**: ⑧ `java-source-analysis` は「既存の import 文を読む索引」と「シンボルを解析する基盤」のみ提供。⑯ `auto-import-handler` は ⑧ の索引と ⑨ のコンパイルエラー（未定義シンボル）を組み合わせて、「import 文の自動挿入」UI を実装する（未着手・次セッション以降）。
+**⑧ と ⑯ の関係**: ⑧ `java-source-analysis` は「既存の import 文を読む索引」と「シンボルを解析する基盤」のみ提供。⑯ `auto-import-handler` は ⑧ の索引と ⑨ のコンパイルエラー（未定義シンボル）を組み合わせて、「import 文の自動挿入」UI を実装する（✅ 完了）。
 
 **注意**: `TextEditorSettings.java`（テーマ等の設定ファイル）は通常の`.java`ファイルとして他のソースと一緒に`javac`でビルドするだけで良く、③（`extension-language-runtime`の動的コンパイル機構）には依存しない。③は「エディタ起動中に新しいプラグイン/マクロをその場で読み込む」という、より高度な用途専用。設定ファイルとプラグイン機構を混同しないこと。
 
