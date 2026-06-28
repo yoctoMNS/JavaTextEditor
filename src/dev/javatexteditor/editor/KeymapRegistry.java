@@ -102,7 +102,8 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('$', "line.end"),             "line.end");
         // ファイル末尾（先頭は gg シーケンス）
         bind(Mode.NORMAL, KeyBinding.ofChar('G', "file.end"),    "file.end");
-        bind(Mode.NORMAL, KeyBinding.ofChar('g', "goto.pending"), "goto.pending");
+        bind(Mode.NORMAL, KeyBinding.ofChar('g', "goto.pending"),  "goto.pending");
+        bind(Mode.NORMAL, KeyBinding.ofChar('s', "split.pending"), "split.pending");
 
         // INSERT モード
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");

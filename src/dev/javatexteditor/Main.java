@@ -173,6 +173,29 @@ public class Main {
         editor.setOnSave(trigger);
     }
 
+    /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
+    private static void setupSplitCallbacks(
+            JFrame frame, PaneNode[] root, Leaf[] active, Leaf leaf) {
+        leaf.editor().setSplitHorizontalCallback(() -> {
+            Leaf cur     = active[0];
+            Leaf newLeaf = createLeaf(cur.editor().getText(),
+                                      cur.editor().getCurrentFilePath());
+            root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
+            active[0] = newLeaf;
+            rebuildLayout(frame, root[0], active[0]);
+            refreshCallbacks(frame, root, active);
+        });
+        leaf.editor().setSplitVerticalCallback(() -> {
+            Leaf cur     = active[0];
+            Leaf newLeaf = createLeaf(cur.editor().getText(),
+                                      cur.editor().getCurrentFilePath());
+            root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
+            active[0] = newLeaf;
+            rebuildLayout(frame, root[0], active[0]);
+            refreshCallbacks(frame, root, active);
+        });
+    }
+
     /** 新しいリーフを生成してコールバックを設定する。 */
     private static Leaf createLeaf(String text, String path) {
         EditorCanvas canvas = new EditorCanvas();
@@ -191,6 +214,7 @@ public class Main {
     private static void refreshCallbacks(
             JFrame frame, PaneNode[] root, Leaf[] active) {
         for (Leaf leaf : allLeaves(root[0])) {
+            setupSplitCallbacks(frame, root, active, leaf);
             leaf.editor().setExitCallback(() -> {
                 List<Leaf> leaves = allLeaves(root[0]);
                 if (leaves.size() <= 1) {
@@ -272,31 +296,6 @@ public class Main {
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
                     if (e.getID() != KeyEvent.KEY_PRESSED) return false;
-                    boolean ctrl = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) != 0;
-
-                    // Ctrl+W: アクティブペインを左右に分割
-                    if (ctrl && e.getKeyCode() == KeyEvent.VK_W) {
-                        Leaf cur    = active[0];
-                        Leaf newLeaf = createLeaf(cur.editor().getText(),
-                                                  cur.editor().getCurrentFilePath());
-                        root[0]  = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
-                        active[0] = newLeaf;
-                        rebuildLayout(frame, root[0], active[0]);
-                        refreshCallbacks(frame, root, active);
-                        return true;
-                    }
-
-                    // Ctrl+E: アクティブペインを上下に分割
-                    if (ctrl && e.getKeyCode() == KeyEvent.VK_E) {
-                        Leaf cur     = active[0];
-                        Leaf newLeaf = createLeaf(cur.editor().getText(),
-                                                  cur.editor().getCurrentFilePath());
-                        root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
-                        active[0] = newLeaf;
-                        rebuildLayout(frame, root[0], active[0]);
-                        refreshCallbacks(frame, root, active);
-                        return true;
-                    }
 
                     active[0].editor().processKey(
                         e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());

@@ -54,6 +54,8 @@ public class ModalEditor {
     private String statusMessage = "";
     private Runnable exitCallback = () -> System.exit(0);
     private Runnable closeBlockedCallback = null; // 最後の1ペインで :q を拒否するとき呼ぶ
+    private Runnable splitHorizontalCallback = null; // sv: 左右分割
+    private Runnable splitVerticalCallback   = null; // ss: 上下分割
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
     private final JdkJavadocReader javadocReader = new JdkJavadocReader();
@@ -92,6 +94,14 @@ public class ModalEditor {
 
     public void setCloseBlockedCallback(Runnable callback) {
         this.closeBlockedCallback = callback;
+    }
+
+    public void setSplitHorizontalCallback(Runnable callback) {
+        this.splitHorizontalCallback = callback;
+    }
+
+    public void setSplitVerticalCallback(Runnable callback) {
+        this.splitVerticalCallback = callback;
     }
 
     /**
@@ -169,6 +179,14 @@ public class ModalEditor {
             if (prev == 'y' && keyChar == 'y') { yankCurrentLine(); return; }
             if (prev == 'd' && keyChar == 'd') { deleteCurrentLine(); return; }
             if (prev == 'g' && keyChar == 'g') { moveFileStart(); return; }
+            if (prev == 's' && keyChar == 'v') {
+                if (splitHorizontalCallback != null) splitHorizontalCallback.run();
+                return;
+            }
+            if (prev == 's' && keyChar == 's') {
+                if (splitVerticalCallback != null) splitVerticalCallback.run();
+                return;
+            }
             // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
 
@@ -231,7 +249,8 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingNormalChar = 'y';
             case "delete.pending" -> pendingNormalChar = 'd';
-            case "goto.pending" -> pendingNormalChar = 'g';
+            case "goto.pending"  -> pendingNormalChar = 'g';
+            case "split.pending" -> pendingNormalChar = 's';
             case "word.forward"  -> moveWordForward();
             case "word.backward" -> moveWordBackward();
             case "word.end"      -> moveWordEnd();
