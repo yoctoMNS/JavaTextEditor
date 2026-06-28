@@ -82,6 +82,7 @@ public class RobotKeyInputTest {
         testAutoImportMultipleSelection(); // auto-import: 複数候補を数字キーで選択
         testAutoImportEscapeSkip();       // auto-import: Esc でスキップ
         testAutoImportNoDiagnostics();    // auto-import: エラーなしで何もしない
+        testRenameCommand();               // :rename コマンドでバッファが *rename* ヘッダを含む
 
         teardown();
 
@@ -626,6 +627,51 @@ public class RobotKeyInputTest {
 
         check("no-diag: import 待ちなし", false, editor.hasImportPending());
         check("no-diag: テキスト変化なし", src, editor.getText());
+    }
+
+    /**
+     * :rename <old> <new> コマンドのエンドツーエンド検証。
+     * 一時ディレクトリにファイルを作成し、user.dir を差し替えてコマンドを実行する。
+     */
+    static void testRenameCommand() throws Exception {
+        System.out.println("\n--- :rename コマンド: プロジェクト全体リネーム ---");
+
+        // 一時ディレクトリとファイルを用意
+        java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("robot_rename_");
+        java.nio.file.Files.writeString(tmpDir.resolve("Alpha.java"), "class Alpha { Alpha() {} }\n");
+        java.nio.file.Files.writeString(tmpDir.resolve("Beta.java"),  "Alpha a = new Alpha();\n");
+
+        String origUserDir = System.getProperty("user.dir");
+        System.setProperty("user.dir", tmpDir.toString());
+        try {
+            resetEditorTo("// current file");
+            Thread.sleep(SETTLE_MS);
+
+            // ESC → ':' → "rename Alpha Gamma" → Enter
+            pressEscape();
+            pressShiftKey(KeyEvent.VK_SEMICOLON); // ':'
+            Thread.sleep(SETTLE_MS);
+            for (char c : "rename Alpha Gamma".toCharArray()) pressChar(c);
+            pressEnter();
+            Thread.sleep(SETTLE_MS * 2);
+
+            String buf = editor.getText();
+            String status = editor.getStatusMessage();
+
+            check(":rename: バッファが *rename* ヘッダを含む", true, buf.contains("*rename*"));
+            check(":rename: Alpha→Gamma が表示される", true, buf.contains("Alpha") && buf.contains("Gamma"));
+            check(":rename: ステータスに replacement(s) が含まれる", true,
+                  status.contains("replacement(s)"));
+
+            // 実際のファイルが変更されているか確認
+            String alpha = java.nio.file.Files.readString(tmpDir.resolve("Alpha.java"));
+            String beta  = java.nio.file.Files.readString(tmpDir.resolve("Beta.java"));
+            check(":rename: Alpha.java に Gamma が含まれる", true, alpha.contains("Gamma"));
+            check(":rename: Alpha.java から Alpha が消えた", false, alpha.contains("Alpha"));
+            check(":rename: Beta.java に Gamma が含まれる", true, beta.contains("Gamma"));
+        } finally {
+            System.setProperty("user.dir", origUserDir);
+        }
     }
 
     static void check(String name, Object expected, Object actual) {
