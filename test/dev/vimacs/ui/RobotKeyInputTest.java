@@ -83,6 +83,7 @@ public class RobotKeyInputTest {
         testAutoImportEscapeSkip();       // auto-import: Esc でスキップ
         testAutoImportNoDiagnostics();    // auto-import: エラーなしで何もしない
         testRenameCommand();               // :rename コマンドでバッファが *rename* ヘッダを含む
+        testNativeMethodTracing();         // Shift+K on ClassName.method で native トレース
 
         teardown();
 
@@ -672,6 +673,53 @@ public class RobotKeyInputTest {
         } finally {
             System.setProperty("user.dir", origUserDir);
         }
+    }
+
+    /**
+     * Shift+K on "System.arraycopy": native メソッドのJNIトレース結果が表示されること。
+     */
+    static void testNativeMethodTracing() throws Exception {
+        System.out.println("\n--- Shift+K: native メソッドのソーストレース ---");
+
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+
+        // (1) "System.arraycopy" の "arraycopy" 上で K → [native] JNI名が表示される
+        // カーソルを arraycopy の先頭文字 'a'（col=7）に置く
+        resetEditorTo("System.arraycopy");
+        editor.setJdkClassIndex(idx);
+        Thread.sleep(SETTLE_MS);
+        // l で9回右移動して col=9（arraycopy の 'a' の位置）にカーソルを置く
+        for (int i = 0; i < 9; i++) pressChar('l');
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg1 = editor.getStatusMessage();
+        check("native trace: [native] が含まれる", true, msg1.contains("[native]"));
+        check("native trace: JNI名が含まれる", true, msg1.contains("Java_java_lang_System_arraycopy"));
+
+        // (2) "String.intern" の "intern" 上で K → [native] が表示される
+        resetEditorTo("String.intern");
+        editor.setJdkClassIndex(idx);
+        Thread.sleep(SETTLE_MS);
+        for (int i = 0; i < 7; i++) pressChar('l');
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg2 = editor.getStatusMessage();
+        check("native trace: String.intern [native] が含まれる", true, msg2.contains("[native]"));
+
+        // (3) "String.length" の "length" 上: 非native → 通常の K 動作（[native]なし）
+        resetEditorTo("String.length");
+        editor.setJdkClassIndex(idx);
+        Thread.sleep(SETTLE_MS);
+        for (int i = 0; i < 7; i++) pressChar('l');
+        Thread.sleep(SETTLE_MS);
+        pressShiftKey(KeyEvent.VK_K);
+        Thread.sleep(SETTLE_MS);
+        String msg3 = editor.getStatusMessage();
+        // 非native なので [native] は含まれない（クラス情報か Not found が表示）
+        check("非native: [native] が含まれない", false, msg3.contains("[native]"));
+        check("非native: ステータスが空でない", true, !msg3.isEmpty());
     }
 
     static void check(String name, Object expected, Object actual) {

@@ -2,80 +2,47 @@
 
 ## 現在の状態
 
-Skill ⑯ `auto-import-handler` が完了し、main ブランチにマージ済み。全 711 テストケース PASS（Robot テスト含む）。
+Skill ⑫ `openjdk-source-tracing` が完了し、main ブランチにマージ済み。
+全 770 テストケース PASS（OpenjdkSourceTracingTest 29件 + RobotKeyInputTest +5件追加）。
 
-INSERT→NORMAL 復帰時に `CompileAnalyzer` のエラー結果を `AutoImportHandler` に渡し、
-「cannot find symbol: class/interface/enum X」から型名を抽出→ JDK 索引で FQN 候補を取得→
-候補1件なら即自動挿入・複数件ならステータスバーに `[1] java.util.List  [2] java.awt.List  [Esc]=skip`
-形式で表示して数字キーで選択する機能が動作している。
+`K` キーで `ClassName.methodName` 形式のカーソル位置にある native メソッドを検出し、
+JNI マングル名（`Java_java_lang_System_arraycopy` 等）をステータスバーに表示する機能が動作している。
+`src.zip`（JDK 付属）が存在すれば C/C++ 実装ファイルの位置も表示。存在しない場合は graceful degradation。
 
-## 完了済み Skill 一覧（参考）
+## 完了済み Skill 一覧
 
-| # | Skill 名 | 状態 |
-|---|---|---|
-| ① | editor-buffer-architecture | ✅ 完了 |
-| ② | modal-editing-engine | ✅ 完了 |
-| ③ | extension-language-runtime | ✅ 完了 |
-| ④ | keymap-conflict-resolution | ✅ 完了 |
-| ⑤ | gui-rendering-pipeline | ✅ 完了 |
-| ⑥ | plugin-api-design | ✅ 完了 |
-| ⑦ | editor-testing-strategy | ✅ 完了 |
-| ⑧ | java-source-analysis | ✅ 完了 |
-| ⑨ | javac-compile-integration | ✅ 完了 |
-| ⑩ | jdk-api-navigation | ✅ 完了 |
-| ⑪ | javadoc-viewer | ✅ 完了 |
-| ⑯ | auto-import-handler | ✅ 完了 |
+① editor-buffer-architecture ✅  ② modal-editing-engine ✅
+③ extension-language-runtime ✅  ④ keymap-conflict-resolution ✅
+⑤ gui-rendering-pipeline ✅      ⑥ plugin-api-design ✅
+⑦ editor-testing-strategy ✅     ⑧ java-source-analysis ✅
+⑨ javac-compile-integration ✅   ⑩ jdk-api-navigation ✅
+⑪ javadoc-viewer ✅              ⑫ openjdk-source-tracing ✅
+⑬ project-wide-search ✅         ⑭ multi-file-refactoring ✅
+⑯ auto-import-handler ✅
 
-## 次のタスク候補（未着手）
+**ロードマップに定義されたすべての Skill が完了しました。**
 
-| # | Skill 名 | 概要 | 依存 |
-|---|---|---|---|
-| ⑫ | `openjdk-source-tracing` | JNI/HotSpot レベルのソーストレース | ⑩ |
-| ⑬ | `project-wide-search` | 作業ディレクトリ配下の grep 的検索 | ① |
-| ⑭ | `multi-file-refactoring` | シンボル単位の複数ファイルリファクタリング | ①⑧ |
+## 推奨: 追加機能の拡張候補
 
-## 推奨: Skill ⑬ project-wide-search
+### 候補 A: src.zip スニペット表示の強化
 
-### 目標
+現在の ⑫ は src.zip が存在しない環境では graceful degradation のみ。
+`openjdk-21-source` パッケージがインストールされた環境では C/C++ スニペットを
+`*jni*` 疑似バッファに表示する機能を追加できる。
 
-エディタ内から作業ディレクトリ配下のファイルを grep 的に検索し、結果をエディタ内で
-閲覧・ジャンプできるようにする。
+### 候補 B: セッション保存・復元
 
-### 設計方針（検討ポイント）
+`:e` で開いたファイル履歴を `~/.vimacs/session.json` に保存し、
+次回起動時に最後に開いたファイルを自動復元する機能。
 
-1. **トリガー**:
-   - `:grep <pattern>` コマンドで手動トリガー
-   - または NORMALモードの `Ctrl+/` などのキーバインド
+### 候補 C: `:sp` / `:vs` による分割ウィンドウ強化
 
-2. **検索エンジン**:
-   - Java SE 標準の `Files.walkFileTree()` + `Files.readAllLines()` で実装
-   - バックグラウンドスレッドで走査してメインスレッドをブロックしない
-   - 正規表現対応（`java.util.regex.Pattern`）
+`:sp <path>` で水平分割して別ファイルを開く、`:vs <path>` で垂直分割する機能。
+現状の `Ctrl+W` による JSplitPane トグルを拡張する。
 
-3. **結果表示**:
-   - 結果を新しいバッファ（疑似ファイル "*grep*"）に一覧表示
-   - `file:lineNumber: matchedLine` 形式
-   - Enter/`gf` で該当ファイルへジャンプ
+## 新機能着手時の手順
 
-4. **作業ディレクトリの扱い**:
-   - エディタ起動時の作業ディレクトリ（`System.getProperty("user.dir")`）を基点
-   - `.gitignore` 対応は optional（最初は全ファイル対象でもよい）
-
-### 着手前に確認すること
-
-- `src/dev/vimacs/editor/ModalEditor.java` の `executeCommand()` を読んでコマンド追加方法を把握する
-- `src/dev/vimacs/Main.java` のペイン切り替えロジックを確認し、grep 結果バッファをどちらのペインに表示するか設計する
-- `docs/session-auto-import-handler.md` を参照して設計経緯を把握する
-- `.claude/skills/` 配下の関連 SKILL.md を必ず参照すること
-
-### ブランチ
-
-`claude/project-wide-search`（新規作成して作業）
-
-### 完了条件
-
-- `ProjectSearchTest` が全 PASS
-- 既存 711 テストケースが引き続き PASS（Robot テスト含む）
-- README.md にキーバインドと動作説明を追記
-- `docs/session-project-wide-search.md` に作業ログを記録
-- main ブランチにマージ
+1. `claude/new-session-<feature>` ブランチを新規作成
+2. 関連する `.claude/skills/` SKILL.md を確認
+3. テスト → 実装 → Robot テスト → README 更新 → main マージ
+4. 完了条件: 既存 770 テスト全 PASS + 新テスト追加 + docs 記録
