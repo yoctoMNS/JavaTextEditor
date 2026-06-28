@@ -11,6 +11,7 @@ import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.Theme;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -26,7 +27,6 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
-import javax.swing.JPanel;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
 
@@ -42,6 +42,94 @@ public class Main {
     private static final ImportSuggester IMPORT_SUGGESTER = new ImportSuggester(JDK_INDEX);
     private static final AutoImportHandler AUTO_IMPORT_HANDLER =
         new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
+
+    // -------------------------------------------------------------------------
+    // ペインツリー
+    // -------------------------------------------------------------------------
+
+    sealed interface PaneNode permits Leaf, Split {}
+
+    record Leaf(EditorCanvas canvas, ModalEditor editor) implements PaneNode {}
+
+    static final class Split implements PaneNode {
+        final int orientation; // JSplitPane.HORIZONTAL_SPLIT or VERTICAL_SPLIT
+        PaneNode left, right;
+        Split(int orientation, PaneNode left, PaneNode right) {
+            this.orientation = orientation;
+            this.left  = left;
+            this.right = right;
+        }
+    }
+
+    /** ツリーを Swing コンポーネントに変換する。 */
+    private static Component buildComponent(PaneNode node) {
+        return switch (node) {
+            case Leaf l -> l.canvas();
+            case Split s -> {
+                JSplitPane sp = new JSplitPane(s.orientation,
+                    buildComponent(s.left), buildComponent(s.right));
+                sp.setResizeWeight(0.5);
+                sp.setDividerSize(4);
+                sp.setBorder(null);
+                yield sp;
+            }
+        };
+    }
+
+    /** ツリー内のすべてのリーフを収集する。 */
+    private static List<Leaf> allLeaves(PaneNode node) {
+        List<Leaf> result = new ArrayList<>();
+        collectLeaves(node, result);
+        return result;
+    }
+
+    private static void collectLeaves(PaneNode node, List<Leaf> out) {
+        switch (node) {
+            case Leaf l    -> out.add(l);
+            case Split s   -> { collectLeaves(s.left, out); collectLeaves(s.right, out); }
+        }
+    }
+
+    /**
+     * target リーフを指定の向きで分割し、右/下に新リーフを挿入した新ツリーを返す。
+     * root が target 自身の場合は Split を直接返す。
+     */
+    private static PaneNode splitLeaf(PaneNode node, Leaf target, Leaf newLeaf, int orientation) {
+        return switch (node) {
+            case Leaf l -> (l == target)
+                ? new Split(orientation, l, newLeaf)
+                : l;
+            case Split s -> {
+                s.left  = splitLeaf(s.left,  target, newLeaf, orientation);
+                s.right = splitLeaf(s.right, target, newLeaf, orientation);
+                yield s;
+            }
+        };
+    }
+
+    /**
+     * target リーフを取り除いたツリーを返す。
+     * 親 Split は兄弟ノードに置き換わる。
+     * ルートが target の場合は null を返す（最後の1ペイン）。
+     */
+    private static PaneNode removeLeaf(PaneNode node, Leaf target) {
+        return switch (node) {
+            case Leaf l -> (l == target) ? null : l;
+            case Split s -> {
+                PaneNode newLeft  = removeLeaf(s.left,  target);
+                PaneNode newRight = removeLeaf(s.right, target);
+                if (newLeft  == null) yield newRight;
+                if (newRight == null) yield newLeft;
+                s.left  = newLeft;
+                s.right = newRight;
+                yield s;
+            }
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // 画面操作
+    // -------------------------------------------------------------------------
 
     private static GraphicsConfiguration detectMouseScreen() {
         try {
@@ -85,120 +173,66 @@ public class Main {
         editor.setOnSave(trigger);
     }
 
-    /** ペインのリストから JSplitPane ツリーを再帰的に構築する。 */
-    private static java.awt.Component buildLayout(List<EditorCanvas> canvases, int from, int to) {
-        if (to - from == 1) return canvases.get(from);
-        int mid = (from + to) / 2;
-        JSplitPane sp = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
-            buildLayout(canvases, from, mid),
-            buildLayout(canvases, mid, to));
-        sp.setResizeWeight(0.5);
-        sp.setDividerSize(4);
-        sp.setBorder(null);
-        return sp;
-    }
-
-    /** フレームのコンテンツペインを現在のペインリストで再構築する。 */
-    private static void rebuildLayout(JFrame frame, List<EditorCanvas> canvases, int activeIdx) {
-        frame.getContentPane().removeAll();
-        java.awt.Component layout = buildLayout(canvases, 0, canvases.size());
-        frame.getContentPane().add(layout);
-        frame.revalidate();
-        frame.repaint();
-        // 分割位置を均等に設定（次の EDT サイクルで確定させる）
-        SwingUtilities.invokeLater(() -> setDividerLocations(layout, frame.getWidth(), canvases.size()));
-        updateBorders(canvases, activeIdx);
-    }
-
-    /** JSplitPane ツリーを幅均等になるよう再帰的に分割位置を設定する。 */
-    private static void setDividerLocations(java.awt.Component comp, int totalWidth, int paneCount) {
-        if (!(comp instanceof JSplitPane sp)) return;
-        // 左側に占めるペイン数を推定
-        int leftPanes = paneCount / 2;
-        int divLoc = (int)((double) totalWidth * leftPanes / paneCount);
-        sp.setDividerLocation(divLoc);
-        setDividerLocations(sp.getLeftComponent(),  divLoc, leftPanes);
-        setDividerLocations(sp.getRightComponent(), totalWidth - divLoc - sp.getDividerSize(), paneCount - leftPanes);
-    }
-
-    private static void updateBorders(List<EditorCanvas> canvases, int activeIdx) {
-        for (int i = 0; i < canvases.size(); i++) {
-            canvases.get(i).setBorder(i == activeIdx
-                ? BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2)
-                : BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
-        }
-    }
-
-    /** 新しいペインを作成してリストへ追加し、各コールバックを設定する。 */
-    private static void addPane(
-            JFrame frame,
-            List<EditorCanvas> canvases,
-            List<ModalEditor> editors,
-            int[] activePaneIdx,
-            String text, String path) {
-
+    /** 新しいリーフを生成してコールバックを設定する。 */
+    private static Leaf createLeaf(String text, String path) {
         EditorCanvas canvas = new EditorCanvas();
         canvas.setTheme(Theme.DARK_MODE);
         ModalEditor editor = new ModalEditor(text, path, canvas);
         setupCompileAnalysis(editor, canvas);
         editor.setJdkClassIndex(JDK_INDEX);
         editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
-
-        // アクティブの右隣に挿入
-        int insertAt = activePaneIdx[0] + 1;
-        canvases.add(insertAt, canvas);
-        editors.add(insertAt, editor);
-
-        // 新しいペインをアクティブにする
-        activePaneIdx[0] = insertAt;
-
-        setupPaneCallbacks(frame, canvases, editors, activePaneIdx, editor);
-        rebuildLayout(frame, canvases, activePaneIdx[0]);
+        return new Leaf(canvas, editor);
     }
 
     /**
-     * エディタの :q / exitCallback / closeBlockedCallback を設定する。
-     * ペインリストの状態に依存するため、ペイン追加・削除のたびに全ペインへ再設定する。
+     * 全リーフの exitCallback を再設定する。
+     * :q 時、ペインが1つなら終了、複数なら現在のリーフを閉じる。
      */
-    private static void setupPaneCallbacks(
-            JFrame frame,
-            List<EditorCanvas> canvases,
-            List<ModalEditor> editors,
-            int[] activePaneIdx,
-            ModalEditor editor) {
+    private static void refreshCallbacks(
+            JFrame frame, PaneNode[] root, Leaf[] active) {
+        for (Leaf leaf : allLeaves(root[0])) {
+            leaf.editor().setExitCallback(() -> {
+                List<Leaf> leaves = allLeaves(root[0]);
+                if (leaves.size() <= 1) {
+                    System.exit(0);
+                    return;
+                }
+                // アクティブを閉じる
+                Leaf closing = active[0];
+                PaneNode newRoot = removeLeaf(root[0], closing);
+                root[0] = newRoot;
 
-        editor.setExitCallback(() -> {
-            if (canvases.size() == 1) {
-                // 最後の1ペイン → アプリ終了
-                System.exit(0);
-            }
-            closeActivePane(frame, canvases, editors, activePaneIdx);
-        });
+                // 次のアクティブは閉じたリーフの直前 or 先頭
+                List<Leaf> remaining = allLeaves(root[0]);
+                int idx = leaves.indexOf(closing);
+                active[0] = remaining.get(Math.min(idx, remaining.size() - 1));
 
-        editor.setCloseBlockedCallback(null); // 1ペイン以上なら常に閉じられる
-
-        // 最後の1ペインになったとき用に全ペインのコールバックを同期させる
-        // （実際の制御は setExitCallback 内の canvases.size() チェックで行う）
+                rebuildLayout(frame, root[0], active[0]);
+                refreshCallbacks(frame, root, active);
+            });
+        }
     }
 
-    /** アクティブペインを閉じてレイアウトを再構築する。 */
-    private static void closeActivePane(
-            JFrame frame,
-            List<EditorCanvas> canvases,
-            List<ModalEditor> editors,
-            int[] activePaneIdx) {
-
-        if (canvases.size() <= 1) return; // 1ペイン以下は閉じない
-
-        int idx = activePaneIdx[0];
-        canvases.remove(idx);
-        editors.remove(idx);
-
-        // 閉じた後のアクティブインデックスを決定
-        activePaneIdx[0] = Math.min(idx, canvases.size() - 1);
-
-        rebuildLayout(frame, canvases, activePaneIdx[0]);
+    /** フレームのコンテンツを再構築してボーダーを更新する。 */
+    private static void rebuildLayout(JFrame frame, PaneNode root, Leaf active) {
+        frame.getContentPane().removeAll();
+        frame.getContentPane().add(buildComponent(root));
+        frame.revalidate();
+        frame.repaint();
+        updateBorders(allLeaves(root), active);
     }
+
+    private static void updateBorders(List<Leaf> leaves, Leaf active) {
+        for (Leaf l : leaves) {
+            l.canvas().setBorder(l == active
+                ? BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2)
+                : BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // エントリポイント
+    // -------------------------------------------------------------------------
 
     public static void main(String[] args) {
         String initialPath = (args.length > 0) ? args[0] : null;
@@ -225,51 +259,65 @@ public class Main {
             frame.setSize(WINDOW_WIDTH, WINDOW_HEIGHT);
             centerOnScreen(frame, targetScreen);
 
-            // ペイン管理リスト
-            List<EditorCanvas> canvases = new ArrayList<>();
-            List<ModalEditor> editors   = new ArrayList<>();
-            int[] activePaneIdx = {0};
+            Leaf firstLeaf = createLeaf(text, path);
+            if (splash) firstLeaf.canvas().setShowSplash(true);
 
-            // 初期ペインを作成
-            EditorCanvas firstCanvas = new EditorCanvas();
-            firstCanvas.setTheme(Theme.DARK_MODE);
-            if (splash) firstCanvas.setShowSplash(true);
-            ModalEditor firstEditor = new ModalEditor(text, path, firstCanvas);
-            setupCompileAnalysis(firstEditor, firstCanvas);
-            firstEditor.setJdkClassIndex(JDK_INDEX);
-            firstEditor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
+            PaneNode[] root   = { firstLeaf };
+            Leaf[]     active = { firstLeaf };
 
-            canvases.add(firstCanvas);
-            editors.add(firstEditor);
-            setupPaneCallbacks(frame, canvases, editors, activePaneIdx, firstEditor);
-            updateBorders(canvases, 0);
-            frame.add(firstCanvas);
+            refreshCallbacks(frame, root, active);
+            updateBorders(List.of(firstLeaf), firstLeaf);
+            frame.add(firstLeaf.canvas());
 
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
                     if (e.getID() != KeyEvent.KEY_PRESSED) return false;
                     boolean ctrl = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) != 0;
 
+                    // Ctrl+W: アクティブペインを左右に分割
                     if (ctrl && e.getKeyCode() == KeyEvent.VK_W) {
-                        // アクティブペインを右に分割（新ペインを追加）
-                        int idx = activePaneIdx[0];
-                        String t = editors.get(idx).getText();
-                        String p = editors.get(idx).getCurrentFilePath();
-                        addPane(frame, canvases, editors, activePaneIdx, t, p);
-                        // 追加後は全ペインのコールバックを再設定
-                        for (ModalEditor ed : editors) {
-                            setupPaneCallbacks(frame, canvases, editors, activePaneIdx, ed);
-                        }
+                        Leaf cur    = active[0];
+                        Leaf newLeaf = createLeaf(cur.editor().getText(),
+                                                  cur.editor().getCurrentFilePath());
+                        root[0]  = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
+                        active[0] = newLeaf;
+                        rebuildLayout(frame, root[0], active[0]);
+                        refreshCallbacks(frame, root, active);
                         return true;
                     }
 
-                    editors.get(activePaneIdx[0]).processKey(
-                        e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+                    // Ctrl+E: アクティブペインを上下に分割
+                    if (ctrl && e.getKeyCode() == KeyEvent.VK_E) {
+                        Leaf cur     = active[0];
+                        Leaf newLeaf = createLeaf(cur.editor().getText(),
+                                                  cur.editor().getCurrentFilePath());
+                        root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
+                        active[0] = newLeaf;
+                        rebuildLayout(frame, root[0], active[0]);
+                        refreshCallbacks(frame, root, active);
+                        return true;
+                    }
 
-                    // アクティブペインが変わった可能性があるのでボーダーを同期
-                    updateBorders(canvases, activePaneIdx[0]);
+                    active[0].editor().processKey(
+                        e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+                    updateBorders(allLeaves(root[0]), active[0]);
                     return true;
                 });
+
+            // マウスクリックでアクティブペインを切り替える
+            frame.getContentPane().addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override
+                public void mousePressed(java.awt.event.MouseEvent ev) {
+                    Component clicked = frame.getContentPane().findComponentAt(ev.getPoint());
+                    for (Leaf l : allLeaves(root[0])) {
+                        if (l.canvas() == clicked) {
+                            active[0] = l;
+                            updateBorders(allLeaves(root[0]), active[0]);
+                            break;
+                        }
+                    }
+                }
+            });
 
             frame.setVisible(true);
         });
