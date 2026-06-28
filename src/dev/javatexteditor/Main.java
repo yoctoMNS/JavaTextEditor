@@ -215,6 +215,22 @@ public class Main {
             JFrame frame, PaneNode[] root, Leaf[] active) {
         for (Leaf leaf : allLeaves(root[0])) {
             setupSplitCallbacks(frame, root, active, leaf);
+            leaf.editor().setMovePanePrevCallback(() -> {
+                List<Leaf> leaves = allLeaves(root[0]);
+                if (leaves.size() <= 1) return;
+                int idx = leaves.indexOf(active[0]);
+                active[0] = leaves.get((idx - 1 + leaves.size()) % leaves.size());
+                updateBorders(leaves, active[0]);
+                active[0].canvas().requestFocusInWindow();
+            });
+            leaf.editor().setMovePaneNextCallback(() -> {
+                List<Leaf> leaves = allLeaves(root[0]);
+                if (leaves.size() <= 1) return;
+                int idx = leaves.indexOf(active[0]);
+                active[0] = leaves.get((idx + 1) % leaves.size());
+                updateBorders(leaves, active[0]);
+                active[0].canvas().requestFocusInWindow();
+            });
             leaf.editor().setExitCallback(() -> {
                 List<Leaf> leaves = allLeaves(root[0]);
                 if (leaves.size() <= 1) {

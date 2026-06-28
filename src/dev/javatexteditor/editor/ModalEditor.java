@@ -56,6 +56,8 @@ public class ModalEditor {
     private Runnable closeBlockedCallback = null; // 最後の1ペインで :q を拒否するとき呼ぶ
     private Runnable splitHorizontalCallback = null; // sv: 左右分割
     private Runnable splitVerticalCallback   = null; // ss: 上下分割
+    private Runnable movePanePrevCallback    = null; // sh/sk: 前のペインへ
+    private Runnable movePaneNextCallback    = null; // sl/sj: 次のペインへ
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
     private final JdkJavadocReader javadocReader = new JdkJavadocReader();
@@ -102,6 +104,14 @@ public class ModalEditor {
 
     public void setSplitVerticalCallback(Runnable callback) {
         this.splitVerticalCallback = callback;
+    }
+
+    public void setMovePanePrevCallback(Runnable callback) {
+        this.movePanePrevCallback = callback;
+    }
+
+    public void setMovePaneNextCallback(Runnable callback) {
+        this.movePaneNextCallback = callback;
     }
 
     /**
@@ -188,6 +198,18 @@ public class ModalEditor {
                 if (splitVerticalCallback != null) splitVerticalCallback.run();
                 return;
             }
+            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_H, 'h') || matches(keyCode, keyChar, KeyEvent.VK_K, 'k'))) {
+                if (movePanePrevCallback != null) movePanePrevCallback.run();
+                return;
+            }
+            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_L, 'l') || matches(keyCode, keyChar, KeyEvent.VK_J, 'j'))) {
+                if (movePaneNextCallback != null) movePaneNextCallback.run();
+                return;
+            }
+            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return; }
+            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return; }
+            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return; }
+            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return; }
             // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
 
@@ -250,8 +272,11 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingNormalChar = 'y';
             case "delete.pending" -> pendingNormalChar = 'd';
-            case "goto.pending"  -> { pendingNormalChar = 'g'; statusMessage = "g-"; }
-            case "split.pending" -> { pendingNormalChar = 's'; statusMessage = "s-"; }
+            case "goto.pending"   -> { pendingNormalChar = 'g'; statusMessage = "g-"; }
+            case "split.pending"  -> { pendingNormalChar = 's'; statusMessage = "s-"; }
+            case "leader.pending" -> { pendingNormalChar = ' '; statusMessage = "SPC-"; }
+            case "line.swap.down" -> swapLineDown();
+            case "line.swap.up"   -> swapLineUp();
             case "word.forward"  -> moveWordForward();
             case "word.backward" -> moveWordBackward();
             case "word.end"      -> moveWordEnd();
@@ -284,9 +309,27 @@ public class ModalEditor {
                     }
                     case "delete.before" -> handleBackspace();
                     case "insert.newline" -> insertNewlineWithIndent();
-                    case "insert.tab" -> {
-                        buffer.insert(offsetOfCursor(), "    ");
-                        cursorCol += 4;
+                    case "insert.tab" -> insertTab();
+                    case "save.from.insert" -> {
+                        mode = Mode.NORMAL;
+                        clampCursorForNormal();
+                        if (onReturnToNormal != null) onReturnToNormal.run();
+                        saveToFile(currentFilePath);
+                    }
+                    case "delete.next" -> {
+                        String[] _lines = getLines();
+                        int _lineLen = cursorRow < _lines.length ? _lines[cursorRow].length() : 0;
+                        if (cursorCol < _lineLen) {
+                            buffer.delete(offsetOfCursor(), 1);
+                        }
+                    }
+                    case "delete.to.eol" -> {
+                        String[] _lines2 = getLines();
+                        String _line = cursorRow < _lines2.length ? _lines2[cursorRow] : "";
+                        int _toDelete = _line.length() - cursorCol;
+                        if (_toDelete > 0) {
+                            buffer.delete(offsetOfCursor(), _toDelete);
+                        }
                     }
                     case "cursor.right"  -> moveCursor(0, 1);
                     case "cursor.left"   -> moveCursor(0, -1);
@@ -309,6 +352,47 @@ public class ModalEditor {
                 cursorCol++;
             }
         }
+    }
+
+    private static final java.util.Set<Character> CLOSING_PAIRS =
+        java.util.Set.of(')', ']', '}', '"', '\'', '>');
+
+    private void insertTab() {
+        String[] lines = getLines();
+        String line = cursorRow < lines.length ? lines[cursorRow] : "";
+        if (cursorCol < line.length() && CLOSING_PAIRS.contains(line.charAt(cursorCol))) {
+            cursorCol++;
+        } else {
+            buffer.insert(offsetOfCursor(), "    ");
+            cursorCol += 4;
+        }
+    }
+
+    private void swapLineDown() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length - 1) return;
+        int r = cursorRow;
+        String lineA = lines[r];
+        String lineB = lines[r + 1];
+        // Replace lines r and r+1 atomically
+        int startA = offsetAt(r, 0);
+        int lenAB = lineA.length() + 1 + lineB.length();
+        buffer.delete(startA, lenAB);
+        buffer.insert(startA, lineB + "\n" + lineA);
+        cursorRow++;
+    }
+
+    private void swapLineUp() {
+        String[] lines = getLines();
+        if (cursorRow == 0) return;
+        int r = cursorRow;
+        String lineA = lines[r - 1];
+        String lineB = lines[r];
+        int startA = offsetAt(r - 1, 0);
+        int lenAB = lineA.length() + 1 + lineB.length();
+        buffer.delete(startA, lenAB);
+        buffer.insert(startA, lineB + "\n" + lineA);
+        cursorRow--;
     }
 
     private void insertCloseBrace() {

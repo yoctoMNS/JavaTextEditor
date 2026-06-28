@@ -76,6 +76,18 @@ public class ModalEditorTest {
         testAutoIndentAfterOpenBrace();
         testCloseBraceDedent();
         testCloseBraceNoChange();
+        testSwapLineDown();
+        testSwapLineUp();
+        testSwapLineDownLastLine();
+        testLeaderSpaceH();
+        testLeaderSpaceL();
+        testLeaderSpaceK();
+        testLeaderSpaceJ();
+        testSaveFromInsert();
+        testDeleteNext();
+        testDeleteToEol();
+        testTabSkipsClosingPair();
+        testTabInsertSpaces();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -1165,6 +1177,119 @@ public class ModalEditorTest {
         pressKey(ed, '$'); pressKey(ed, 'a'); // 行末INSERT col=3
         ed.processKey(0, '}', 0);
         check("} がそのまま挿入される", ed.getText().equals("foo}"));
+        check("col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testSwapLineDown() {
+        System.out.println("--- Alt+J: 行を下と入れ替え ---");
+        ModalEditor ed = new ModalEditor("aaa\nbbb\nccc", null, null);
+        ed.processKey(KeyEvent.VK_J, 'j', KeyEvent.ALT_DOWN_MASK);
+        String[] lines = ed.getText().split("\n", -1);
+        check("行0がbbb", lines[0].equals("bbb"));
+        check("行1がaaa", lines[1].equals("aaa"));
+        check("行2がccc", lines[2].equals("ccc"));
+        check("cursorRow=1", ed.getCursorRow() == 1);
+    }
+
+    static void testSwapLineUp() {
+        System.out.println("--- Alt+K: 行を上と入れ替え ---");
+        ModalEditor ed = new ModalEditor("aaa\nbbb\nccc", null, null);
+        pressKey(ed, 'j'); // row=1
+        ed.processKey(KeyEvent.VK_K, 'k', KeyEvent.ALT_DOWN_MASK);
+        String[] lines = ed.getText().split("\n", -1);
+        check("行0がbbb", lines[0].equals("bbb"));
+        check("行1がaaa", lines[1].equals("aaa"));
+        check("cursorRow=0", ed.getCursorRow() == 0);
+    }
+
+    static void testSwapLineDownLastLine() {
+        System.out.println("--- Alt+J: 最終行では何もしない ---");
+        ModalEditor ed = new ModalEditor("aaa\nbbb", null, null);
+        pressKey(ed, 'j'); // row=1
+        String before = ed.getText();
+        ed.processKey(KeyEvent.VK_J, 'j', KeyEvent.ALT_DOWN_MASK);
+        check("テキスト変化なし", ed.getText().equals(before));
+    }
+
+    static void testLeaderSpaceH() {
+        System.out.println("--- Space+h: 最初の非空白へ ---");
+        ModalEditor ed = new ModalEditor("   hello", null, null);
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0); // leader
+        pressKey(ed, 'h');
+        check("col=3", ed.getCursorCol() == 3);
+    }
+
+    static void testLeaderSpaceL() {
+        System.out.println("--- Space+l: 行末へ ---");
+        ModalEditor ed = new ModalEditor("hello", null, null);
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        pressKey(ed, 'l');
+        check("col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testLeaderSpaceK() {
+        System.out.println("--- Space+k: ファイル先頭へ ---");
+        ModalEditor ed = new ModalEditor("aaa\nbbb\nccc", null, null);
+        pressKey(ed, 'j'); pressKey(ed, 'j'); // row=2
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        pressKey(ed, 'k');
+        check("row=0", ed.getCursorRow() == 0);
+    }
+
+    static void testLeaderSpaceJ() {
+        System.out.println("--- Space+j: ファイル末尾へ ---");
+        ModalEditor ed = new ModalEditor("aaa\nbbb\nccc", null, null);
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        pressKey(ed, 'j');
+        check("row=2", ed.getCursorRow() == 2);
+    }
+
+    static void testSaveFromInsert() {
+        System.out.println("--- Ctrl+]: INSERTからNORMALへ + 保存 ---");
+        ModalEditor ed = new ModalEditor("hello", null, null);
+        pressKey(ed, 'i'); // INSERT
+        check("INSERTモード", ed.isInsertMode());
+        ed.processKey(KeyEvent.VK_CLOSE_BRACKET, ']', KeyEvent.CTRL_DOWN_MASK);
+        check("NORMALモードに戻る", ed.isNormalMode());
+        // ファイルパスなしのため保存は失敗するが、モード遷移は確認できる
+    }
+
+    static void testDeleteNext() {
+        System.out.println("--- Ctrl+D: カーソル位置の文字を削除 ---");
+        ModalEditor ed = new ModalEditor("hello", null, null);
+        pressKey(ed, 'i'); // INSERT at col=0
+        ed.processKey(KeyEvent.VK_D, 'd', KeyEvent.CTRL_DOWN_MASK);
+        check("'h'が削除される", ed.getText().equals("ello"));
+        check("col=0", ed.getCursorCol() == 0);
+    }
+
+    static void testDeleteToEol() {
+        System.out.println("--- Ctrl+K: 行末まで削除 ---");
+        ModalEditor ed = new ModalEditor("hello world", null, null);
+        pressKey(ed, 'i'); // INSERT at col=0
+        // Move to col=5
+        for (int i = 0; i < 5; i++) ed.processKey(KeyEvent.VK_F, 'f', KeyEvent.CTRL_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_K, 'k', KeyEvent.CTRL_DOWN_MASK);
+        check("' world'が削除される", ed.getText().equals("hello"));
+        check("col=5", ed.getCursorCol() == 5);
+    }
+
+    static void testTabSkipsClosingPair() {
+        System.out.println("--- Tab: 閉じカッコをスキップ ---");
+        ModalEditor ed = new ModalEditor("()", null, null);
+        pressKey(ed, 'i'); // INSERT at col=0
+        ed.processKey(KeyEvent.VK_F, 'f', KeyEvent.CTRL_DOWN_MASK); // col=1 (over ')')
+        ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+        check("カーソルが ')' を越える", ed.getCursorCol() == 2);
+        check("テキスト変化なし", ed.getText().equals("()"));
+    }
+
+    static void testTabInsertSpaces() {
+        System.out.println("--- Tab: 通常位置では4スペース挿入 ---");
+        ModalEditor ed = new ModalEditor("hello", null, null);
+        pressKey(ed, 'i');
+        ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+        check("4スペース挿入", ed.getText().equals("    hello"));
         check("col=4", ed.getCursorCol() == 4);
     }
 

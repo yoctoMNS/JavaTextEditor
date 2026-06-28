@@ -82,6 +82,7 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('a', "enter.insert.after"), "enter.insert.after");
         bind(Mode.NORMAL, KeyBinding.ofChar('o', "enter.insert.newline"), "enter.insert.newline");
         bind(Mode.NORMAL, KeyBinding.ofChar(':', "enter.command"), "enter.command");
+        bind(Mode.NORMAL, KeyBinding.ofChar(';', "enter.command"), "enter.command"); // ; → : (like Vim)
         bind(Mode.NORMAL, KeyBinding.ofChar('u', "undo"), "undo");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK, "redo"), "redo");
         bind(Mode.NORMAL, KeyBinding.ofChar('v', "enter.visual"), "enter.visual");
@@ -106,6 +107,11 @@ public class KeymapRegistry {
         // s: ofChar と ofCode 両方登録（KEY_PRESSED で keyChar が未定義になる環境に対応）
         bind(Mode.NORMAL, KeyBinding.ofChar('s', "split.pending"), "split.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_S, 0, "split.pending"), "split.pending");
+        // Space をリーダーキーとして使う（Space+h/l/j/k）
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_SPACE, 0, "leader.pending"), "leader.pending");
+        // 行の入れ替え（Alt+J / Alt+K）
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_J, KeyEvent.ALT_DOWN_MASK, "line.swap.down"), "line.swap.down");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.ALT_DOWN_MASK, "line.swap.up"),   "line.swap.up");
 
         // INSERT モード
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
@@ -116,6 +122,12 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_BACK_SPACE, 0, "delete.before"), "delete.before");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ENTER, 0, "insert.newline"), "insert.newline");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_TAB, 0, "insert.tab"), "insert.tab");
+        // INSERT → NORMAL + 保存（Ctrl+] / Ctrl+[）
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_CLOSE_BRACKET, KeyEvent.CTRL_DOWN_MASK, "save.from.insert"), "save.from.insert");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_OPEN_BRACKET,  KeyEvent.CTRL_DOWN_MASK, "save.from.insert"), "save.from.insert");
+        // 文字削除（Ctrl+D → 次を削除, Ctrl+K → 行末まで削除）
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "delete.next"),   "delete.next");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.CTRL_DOWN_MASK, "delete.to.eol"), "delete.to.eol");
         // Emacs 単語移動（Alt+F / Alt+B）
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.ALT_DOWN_MASK, "word.forward"),  "word.forward");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.ALT_DOWN_MASK, "word.backward"), "word.backward");
