@@ -7,6 +7,8 @@ import dev.vimacs.analysis.JdkJavadocReader;
 import dev.vimacs.analysis.JdkTypeInfo;
 import dev.vimacs.buffer.PieceTable;
 import dev.vimacs.buffer.UndoablePieceTable;
+import dev.vimacs.refactor.RenameRefactorer;
+import dev.vimacs.refactor.RenameResult;
 import dev.vimacs.search.ProjectSearcher;
 import dev.vimacs.search.SearchResult;
 import dev.vimacs.ui.EditorCanvas;
@@ -61,6 +63,7 @@ public class ModalEditor {
     // project-wide-search: grep 結果バッファ
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
+    private final RenameRefactorer renameRefactorer = new RenameRefactorer();
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -308,6 +311,9 @@ public class ModalEditor {
         } else if (cmd.startsWith("grep ")) {
             String pattern = cmd.substring(5).trim();
             executeGrep(pattern);
+        } else if (cmd.startsWith("rename ")) {
+            String args = cmd.substring(7).trim();
+            executeRename(args);
         } else if (cmd.equals("q")) {
             exitCallback.run();
         } else if (cmd.equals("wq")) {
@@ -379,6 +385,51 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "grep: " + results.size() + " match(es) — Enter to jump";
+    }
+
+    /**
+     * :rename <oldName> <newName> — プロジェクト全体で識別子を一括リネームする。
+     * 結果は *rename* 疑似バッファに表示する。
+     */
+    private void executeRename(String args) {
+        String[] parts = args.split("\\s+", 2);
+        if (parts.length < 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            statusMessage = "E: usage: rename <oldName> <newName>";
+            return;
+        }
+        String oldName = parts[0];
+        String newName = parts[1];
+
+        Path baseDir = Path.of(System.getProperty("user.dir"));
+        List<RenameResult> results;
+        try {
+            results = renameRefactorer.rename(baseDir, oldName, newName);
+        } catch (IllegalArgumentException e) {
+            statusMessage = "E: " + e.getMessage();
+            return;
+        }
+
+        if (results.isEmpty()) {
+            statusMessage = "rename: no occurrences of '" + oldName + "' found";
+            return;
+        }
+
+        String displayText = RenameRefactorer.buildDisplayText(oldName, newName, results);
+        buffer = new UndoablePieceTable(displayText);
+        currentFilePath = null;
+        grepResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+
+        int totalReplacements = results.stream().mapToInt(RenameResult::replacementCount).sum();
+        long errorCount = results.stream().filter(r -> !r.success()).count();
+        if (errorCount > 0) {
+            statusMessage = "rename: " + totalReplacements + " replacement(s) in "
+                + results.size() + " file(s), " + errorCount + " error(s)";
+        } else {
+            statusMessage = "rename: " + totalReplacements + " replacement(s) in "
+                + results.size() + " file(s)";
+        }
     }
 
     /**
