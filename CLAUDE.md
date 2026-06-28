@@ -89,7 +89,7 @@ project-root/
 | ⑩ | `jdk-api-navigation` | JDKクラス/メソッド/フィールドの参照・ナビゲーション | ✅ 完了（18/18テスト・K キー・jrt:/ 索引・リフレクション表示） |
 | ⑪ | `javadoc-viewer` | ローカルJavadoc(HTML)のエディタ内表示 | ✅ 完了（15/15テスト・graceful degradation・`K`キーでサマリ表示） |
 | ⑫ | `openjdk-source-tracing` | JNI/HotSpotレベルのソーストレース | 未着手 |
-| ⑬ | `project-wide-search` | 作業ディレクトリ配下のgrep的検索 | 未着手 |
+| ⑬ | `project-wide-search` | 作業ディレクトリ配下のgrep的検索 | ✅ 完了（19/19テスト・`:grep`コマンド・Enter でジャンプ） |
 | ⑭ | `multi-file-refactoring` | シンボル単位の複数ファイルリファクタリング | 未着手 |
 | ⑯ | `auto-import-handler` | 未定義シンボルの import 自動挿入 | ✅ 完了（26/26テスト・INSERT→NORMAL フック・候補1件自動挿入・複数候補選択UI） |
 
