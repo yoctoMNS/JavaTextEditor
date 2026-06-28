@@ -27,6 +27,9 @@ public class EditorCanvas extends JPanel {
     private int selCursorRow = -1;
     private int selCursorCol = -1;
 
+    // スプラッシュ画面フラグ（true のとき通常テキストの代わりにスプラッシュを描画）
+    private boolean showSplash = false;
+
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
     // 行番号 → 最も優先度の高い診断種別（ERROR > WARNING）
@@ -59,6 +62,14 @@ public class EditorCanvas extends JPanel {
         this.visualLineMode = false;
         repaint();
     }
+
+    /** スプラッシュ画面の表示/非表示を切り替える。 */
+    public void setShowSplash(boolean show) {
+        this.showSplash = show;
+        repaint();
+    }
+
+    public boolean isShowSplash() { return showSplash; }
 
     /**
      * コンパイル診断リストをセットして再描画する。
@@ -155,6 +166,13 @@ public class EditorCanvas extends JPanel {
         // 1. 背景を塗る
         g2.setColor(theme.background);
         g2.fillRect(0, 0, getWidth(), getHeight());
+
+        // スプラッシュ表示中は通常テキストを描画せずスプラッシュを描いてステータス行だけ出す
+        if (showSplash) {
+            drawSplashScreen(g2, charWidth, lineHeight);
+            drawStatusLine(g2, lineHeight);
+            return;
+        }
 
         // 1.5 選択ハイライト（VISUALモード時）
         if (visualMode && selAnchorRow >= 0) {
@@ -354,6 +372,92 @@ public class EditorCanvas extends JPanel {
                 if (drawStart < drawEnd) {
                     g2.fillRect(drawStart, yTop, drawEnd - drawStart, lineHeight);
                 }
+            }
+        }
+    }
+
+    /**
+     * Vim 風のスプラッシュ画面を描画する。
+     * テキストエリア中央に概要テキストを表示し、ステータス行直上まで使う。
+     */
+    private void drawSplashScreen(Graphics2D g2, int charWidth, int lineHeight) {
+        FontMetrics fm = g2.getFontMetrics();
+        int statusH = lineHeight;
+        int areaH   = getHeight() - statusH;  // ステータス行を除いた描画高さ
+        int areaW   = getWidth();
+
+        String[] lines = {
+            "V I M A C S",
+            "",
+            "Vim のモーダル編集 × Emacs の拡張性",
+            "Java SE 製の軽量テキストエディタ",
+            "",
+            "version 1.0.0  |  Java " + System.getProperty("java.version"),
+            "",
+            "─────────────────────────────────────────",
+            "",
+            "  i        INSERTモードへ（文字入力）",
+            "  Esc      NORMALモードへ戻る",
+            "  :e <path>  ファイルを開く",
+            "  :w <path>  ファイルを保存",
+            "  :q         終了",
+            "  K        カーソル位置の JDK API を表示",
+            "  Ctrl+W   左右ペイン切り替え",
+            "",
+            "─────────────────────────────────────────",
+            "",
+            "何かキーを押すと編集を開始します",
+        };
+
+        // タイトル行（index 0）は大きなフォントで描く
+        Font titleFont  = FONT.deriveFont(Font.BOLD, FONT.getSize() + 8f);
+        Font normalFont = FONT;
+
+        // 全行の合計高さを計算して垂直中央揃え
+        int totalH = lines.length * lineHeight + 8; // タイトルのフォントサイズ差分
+        int startY = Math.max(lineHeight, (areaH - totalH) / 2) + lineHeight;
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            int y = startY + i * lineHeight;
+            if (y > areaH) break;
+
+            if (i == 0) {
+                // タイトル：センタリング・アクセントカラー・太字
+                g2.setFont(titleFont);
+                g2.setColor(theme.accent);
+                int w = g2.getFontMetrics().stringWidth(line);
+                g2.drawString(line, (areaW - w) / 2, y);
+                g2.setFont(normalFont);
+            } else if (line.startsWith("─")) {
+                // 区切り線：dim カラー（前景を少し暗く）
+                g2.setColor(theme.foreground.darker());
+                int w = fm.stringWidth(line);
+                g2.drawString(line, (areaW - w) / 2, y);
+            } else if (line.startsWith("  ") && !line.isBlank()) {
+                // キーバインド行：キー部分をアクセントカラーで、説明部分を前景色で
+                int tabIdx = line.indexOf("  ", 2);
+                if (tabIdx > 0) {
+                    String key  = line.substring(0, tabIdx).stripTrailing();
+                    String desc = line.substring(tabIdx);
+                    int keyW = fm.stringWidth(key);
+                    int xKey = (areaW / 2) - 140;
+                    g2.setColor(theme.accent);
+                    g2.drawString(key, xKey, y);
+                    g2.setColor(theme.foreground);
+                    g2.drawString(desc, xKey + keyW, y);
+                } else {
+                    g2.setColor(theme.foreground);
+                    g2.drawString(line, (areaW - fm.stringWidth(line)) / 2, y);
+                }
+            } else if (!line.isBlank()) {
+                // サブタイトル・説明文：センタリング・前景色
+                boolean isHint = line.contains("キーを押すと");
+                g2.setColor(isHint ? theme.accent : theme.foreground);
+                if (isHint) g2.setFont(FONT.deriveFont(Font.ITALIC));
+                int w = fm.stringWidth(line);
+                g2.drawString(line, (areaW - w) / 2, y);
+                if (isHint) g2.setFont(normalFont);
             }
         }
     }
