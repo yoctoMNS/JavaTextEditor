@@ -109,6 +109,10 @@ public class ModalEditor {
     public String getCurrentFilePath() { return currentFilePath; }
 
     public void processKey(int keyCode, char keyChar, int modifiers) {
+        // 最初のキー操作でスプラッシュ画面を消去する
+        if (canvas != null && canvas.isShowSplash()) {
+            canvas.setShowSplash(false);
+        }
         if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE) && keyCode == KeyEvent.VK_ESCAPE) {
             mode = Mode.NORMAL;
             pendingNormalChar = 0;

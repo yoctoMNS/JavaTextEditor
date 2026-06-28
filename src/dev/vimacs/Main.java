@@ -77,23 +77,12 @@ public class Main {
                 return;
             }
         } else {
-            StringBuilder demoText = new StringBuilder();
-            demoText.append("=== Vimacs Editor Demo ===\n");
-            demoText.append("j/k: 上下移動  h/l: 左右移動  i: INSERTへ  Esc: NORMALへ\n");
-            demoText.append(": でコマンドモードへ。:w <path> で保存、:e <path> でファイルを開く\n");
-            demoText.append("Ctrl+W: 左右ペイン切り替え（アクティブ=青枠）\n");
-            demoText.append("日本語テスト行: ひらがな・カタカナ・漢字が混在しても動作する\n");
-            demoText.append("---\n");
-            for (int i = 6; i <= 110; i++) {
-                demoText.append("Line ").append(i).append(": ")
-                    .append("The quick brown fox jumps over the lazy dog. (行番号=").append(i).append(")\n");
-            }
-            demoText.append("=== End of Demo ===\n");
-            initialText = demoText.toString();
+            initialText = "";
         }
 
         final String text = initialText;
         final String path = initialPath;
+        final boolean splash = (initialPath == null);
         SwingUtilities.invokeLater(() -> {
             JFrame frame = new JFrame("Vimacs Editor");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -102,6 +91,7 @@ public class Main {
             // --- 左ペイン ---
             EditorCanvas leftCanvas = new EditorCanvas();
             leftCanvas.setTheme(Theme.DARK_MODE);
+            if (splash) leftCanvas.setShowSplash(true);
             ModalEditor leftEditor = new ModalEditor(text, path, leftCanvas);
             setupCompileAnalysis(leftEditor, leftCanvas);
             leftEditor.setJdkClassIndex(JDK_INDEX);
@@ -110,6 +100,7 @@ public class Main {
             // --- 右ペイン ---
             EditorCanvas rightCanvas = new EditorCanvas();
             rightCanvas.setTheme(Theme.DARK_MODE);
+            if (splash) rightCanvas.setShowSplash(true);
             ModalEditor rightEditor = new ModalEditor(text, path, rightCanvas);
             setupCompileAnalysis(rightEditor, rightCanvas);
             rightEditor.setJdkClassIndex(JDK_INDEX);
