@@ -5,6 +5,7 @@ import dev.vimacs.analysis.CompileDiagnostic;
 import dev.vimacs.analysis.JdkClassIndex;
 import dev.vimacs.analysis.JdkJavadocReader;
 import dev.vimacs.analysis.JdkTypeInfo;
+import dev.vimacs.analysis.OpenjdkSourceTracer;
 import dev.vimacs.buffer.PieceTable;
 import dev.vimacs.buffer.UndoablePieceTable;
 import dev.vimacs.refactor.RenameRefactorer;
@@ -55,6 +56,7 @@ public class ModalEditor {
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
     private final JdkJavadocReader javadocReader = new JdkJavadocReader();
+    private final OpenjdkSourceTracer sourceTracer = new OpenjdkSourceTracer();
     // auto-import: 複数候補が見つかった場合に選択待ちとなる状態
     private AutoImportHandler autoImportHandler = null;
     // 選択待ち候補: 単純名 → FQN 候補リストのペアを順番通りに保持
@@ -956,7 +958,9 @@ public class ModalEditor {
         statusMessage = sb.toString();
     }
 
-    /** NORMALモードの K キー: カーソル位置の識別子を JDK クラスとして検索し、ステータスバーに表示。 */
+    /** NORMALモードの K キー: カーソル位置の識別子を JDK クラスとして検索し、ステータスバーに表示。
+     *  カーソルがメソッド呼び出し（Class.method形式）の上にある場合は native メソッドのトレースも試みる。
+     */
     private void lookupJdkDoc() {
         if (jdkIndex == null || !jdkIndex.isReady()) {
             setStatusMessage("JDK index building...");
@@ -967,6 +971,30 @@ public class ModalEditor {
             setStatusMessage("No identifier at cursor");
             return;
         }
+
+        // カーソルが "ClassName.methodName" の methodName 上にある場合: native トレースを試みる
+        String[] classAndMethod = classAndMethodAtCursor();
+        if (classAndMethod != null) {
+            String className = classAndMethod[0];
+            String methodName = classAndMethod[1];
+            List<String> classCandidates = jdkIndex.lookup(className);
+            if (!classCandidates.isEmpty()) {
+                String fqn = classCandidates.stream()
+                    .filter(f -> f.startsWith("java.lang.")).findFirst()
+                    .orElseGet(() -> classCandidates.stream()
+                        .filter(f -> f.startsWith("java.")).findFirst()
+                        .orElse(classCandidates.get(0)));
+                Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
+                if (cls.isPresent()) {
+                    OpenjdkSourceTracer.TracingResult result = sourceTracer.trace(cls.get(), methodName);
+                    if (result.isNative()) {
+                        setStatusMessage(result.toStatusLine());
+                        return;
+                    }
+                }
+            }
+        }
+
         List<String> candidates = jdkIndex.lookup(word);
         if (candidates.isEmpty()) {
             setStatusMessage("Not found in JDK: " + word);
@@ -1011,6 +1039,37 @@ public class ModalEditor {
             return simpleName + ": " + summary.get() + suffix;
         }
         return JdkTypeInfo.from(cls).toStatusLine() + suffix;
+    }
+
+    /**
+     * カーソルが "ClassName.methodName" の methodName 上にある場合、
+     * [className, methodName] の配列を返す。そうでなければ null。
+     */
+    private String[] classAndMethodAtCursor() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return null;
+        String line = lines[cursorRow];
+        if (cursorCol >= line.length()) return null;
+        char ch = line.charAt(cursorCol);
+        if (!Character.isJavaIdentifierPart(ch)) return null;
+        // メソッド名の開始位置を探す
+        int start = cursorCol;
+        while (start > 0 && Character.isJavaIdentifierPart(line.charAt(start - 1))) start--;
+        // 直前が '.' であることを確認
+        if (start == 0 || line.charAt(start - 1) != '.') return null;
+        // '.' の前にクラス名があることを確認
+        int dotPos = start - 1;
+        if (dotPos == 0 || !Character.isJavaIdentifierPart(line.charAt(dotPos - 1))) return null;
+        int classEnd = dotPos;
+        int classStart = classEnd - 1;
+        while (classStart > 0 && Character.isJavaIdentifierPart(line.charAt(classStart - 1))) classStart--;
+        // メソッド名
+        int end = cursorCol;
+        while (end < line.length() && Character.isJavaIdentifierPart(line.charAt(end))) end++;
+        String className = line.substring(classStart, classEnd);
+        String methodName = line.substring(start, end);
+        if (className.isEmpty() || methodName.isEmpty()) return null;
+        return new String[]{className, methodName};
     }
 
     /** カーソル位置の Java 識別子（単語）を返す。識別子がなければ空文字列。 */
