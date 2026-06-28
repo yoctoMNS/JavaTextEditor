@@ -176,14 +176,15 @@ public class ModalEditor {
         if (pendingNormalChar != 0) {
             char prev = pendingNormalChar;
             pendingNormalChar = 0;
-            if (prev == 'y' && keyChar == 'y') { yankCurrentLine(); return; }
-            if (prev == 'd' && keyChar == 'd') { deleteCurrentLine(); return; }
-            if (prev == 'g' && keyChar == 'g') { moveFileStart(); return; }
-            if (prev == 's' && keyChar == 'v') {
+            statusMessage = "";
+            if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
+            if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
+            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
+            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
                 return;
             }
-            if (prev == 's' && keyChar == 's') {
+            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_S, 's')) {
                 if (splitVerticalCallback != null) splitVerticalCallback.run();
                 return;
             }
@@ -249,8 +250,8 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingNormalChar = 'y';
             case "delete.pending" -> pendingNormalChar = 'd';
-            case "goto.pending"  -> pendingNormalChar = 'g';
-            case "split.pending" -> pendingNormalChar = 's';
+            case "goto.pending"  -> { pendingNormalChar = 'g'; statusMessage = "g-"; }
+            case "split.pending" -> { pendingNormalChar = 's'; statusMessage = "s-"; }
             case "word.forward"  -> moveWordForward();
             case "word.backward" -> moveWordBackward();
             case "word.end"      -> moveWordEnd();
@@ -403,6 +404,10 @@ public class ModalEditor {
         } else if (cmd.startsWith("rename ")) {
             String args = cmd.substring(7).trim();
             executeRename(args);
+        } else if (cmd.equals("sp") || cmd.equals("split")) {
+            if (splitVerticalCallback != null) splitVerticalCallback.run();
+        } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
+            if (splitHorizontalCallback != null) splitHorizontalCallback.run();
         } else if (cmd.equals("q")) {
             if (closeBlockedCallback != null) {
                 closeBlockedCallback.run();
@@ -636,6 +641,12 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
     // カーソル移動
     // -------------------------------------------------------------------------
+
+    /** keyCode または keyChar のどちらかが期待値と一致すれば true。 */
+    private static boolean matches(int keyCode, char keyChar, int expectedCode, char expectedChar) {
+        if (keyCode != KeyEvent.VK_UNDEFINED && keyCode == expectedCode) return true;
+        return keyChar != KeyEvent.CHAR_UNDEFINED && keyChar == expectedChar;
+    }
 
     private void moveCursor(int dRow, int dCol) {
         String[] lines = getLines();
