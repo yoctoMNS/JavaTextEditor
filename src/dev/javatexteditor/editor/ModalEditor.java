@@ -53,6 +53,7 @@ public class ModalEditor {
     private String currentFilePath = null;
     private String statusMessage = "";
     private Runnable exitCallback = () -> System.exit(0);
+    private Runnable closeBlockedCallback = null; // 最後の1ペインで :q を拒否するとき呼ぶ
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
     private final JdkJavadocReader javadocReader = new JdkJavadocReader();
@@ -87,6 +88,10 @@ public class ModalEditor {
 
     public void setExitCallback(Runnable callback) {
         this.exitCallback = callback;
+    }
+
+    public void setCloseBlockedCallback(Runnable callback) {
+        this.closeBlockedCallback = callback;
     }
 
     /**
@@ -380,9 +385,15 @@ public class ModalEditor {
             String args = cmd.substring(7).trim();
             executeRename(args);
         } else if (cmd.equals("q")) {
-            exitCallback.run();
+            if (closeBlockedCallback != null) {
+                closeBlockedCallback.run();
+            } else {
+                exitCallback.run();
+            }
         } else if (cmd.equals("wq")) {
-            if (saveToFile(currentFilePath)) {
+            if (closeBlockedCallback != null) {
+                closeBlockedCallback.run();
+            } else if (saveToFile(currentFilePath)) {
                 exitCallback.run();
             }
         } else {

@@ -22,37 +22,27 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
+import javax.swing.JPanel;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
 
 public class Main {
 
-    /** アクティブなペインを示すボーダー色 */
     private static final Color ACTIVE_BORDER_COLOR = new Color(0x88, 0x88, 0xFF);
-
-    /** ウィンドウの初期サイズ */
     private static final int WINDOW_WIDTH  = 1200;
     private static final int WINDOW_HEIGHT = 750;
 
-    /** CompileAnalyzer はスレッドセーフなので全ペインで共有する */
     private static final CompileAnalyzer COMPILE_ANALYZER = new CompileAnalyzer();
-
-    /** JDK クラスインデックス（起動時にバックグラウンドで構築） */
     private static final JdkClassIndex JDK_INDEX = JdkClassIndex.build();
-
-    /** auto-import で使う SourceAnalyzer / ImportSuggester / AutoImportHandler */
     private static final SourceAnalyzer SOURCE_ANALYZER = new SourceAnalyzer();
     private static final ImportSuggester IMPORT_SUGGESTER = new ImportSuggester(JDK_INDEX);
     private static final AutoImportHandler AUTO_IMPORT_HANDLER =
         new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
 
-    /**
-     * マウスカーソルがあるディスプレイの GraphicsConfiguration を返す。
-     * 取得できない場合はプライマリモニターの設定を返す。
-     */
     private static GraphicsConfiguration detectMouseScreen() {
         try {
             Point mouse = MouseInfo.getPointerInfo().getLocation();
@@ -66,9 +56,6 @@ public class Main {
                 .getDefaultScreenDevice().getDefaultConfiguration();
     }
 
-    /**
-     * フレームを指定した GraphicsConfiguration のモニター中央に配置する。
-     */
     private static void centerOnScreen(JFrame frame, GraphicsConfiguration gc) {
         Rectangle bounds = gc.getBounds();
         int x = bounds.x + (bounds.width  - frame.getWidth())  / 2;
@@ -76,10 +63,6 @@ public class Main {
         frame.setLocation(x, y);
     }
 
-    /**
-     * editor と canvas を接続し、INSERT→NORMAL 復帰時・保存時に
-     * バックグラウンドでコンパイル解析を実行してガター表示を更新する。
-     */
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
         Runnable trigger = () -> {
             String filePath = editor.getCurrentFilePath();
@@ -102,6 +85,121 @@ public class Main {
         editor.setOnSave(trigger);
     }
 
+    /** ペインのリストから JSplitPane ツリーを再帰的に構築する。 */
+    private static java.awt.Component buildLayout(List<EditorCanvas> canvases, int from, int to) {
+        if (to - from == 1) return canvases.get(from);
+        int mid = (from + to) / 2;
+        JSplitPane sp = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+            buildLayout(canvases, from, mid),
+            buildLayout(canvases, mid, to));
+        sp.setResizeWeight(0.5);
+        sp.setDividerSize(4);
+        sp.setBorder(null);
+        return sp;
+    }
+
+    /** フレームのコンテンツペインを現在のペインリストで再構築する。 */
+    private static void rebuildLayout(JFrame frame, List<EditorCanvas> canvases, int activeIdx) {
+        frame.getContentPane().removeAll();
+        java.awt.Component layout = buildLayout(canvases, 0, canvases.size());
+        frame.getContentPane().add(layout);
+        frame.revalidate();
+        frame.repaint();
+        // 分割位置を均等に設定（次の EDT サイクルで確定させる）
+        SwingUtilities.invokeLater(() -> setDividerLocations(layout, frame.getWidth(), canvases.size()));
+        updateBorders(canvases, activeIdx);
+    }
+
+    /** JSplitPane ツリーを幅均等になるよう再帰的に分割位置を設定する。 */
+    private static void setDividerLocations(java.awt.Component comp, int totalWidth, int paneCount) {
+        if (!(comp instanceof JSplitPane sp)) return;
+        // 左側に占めるペイン数を推定
+        int leftPanes = paneCount / 2;
+        int divLoc = (int)((double) totalWidth * leftPanes / paneCount);
+        sp.setDividerLocation(divLoc);
+        setDividerLocations(sp.getLeftComponent(),  divLoc, leftPanes);
+        setDividerLocations(sp.getRightComponent(), totalWidth - divLoc - sp.getDividerSize(), paneCount - leftPanes);
+    }
+
+    private static void updateBorders(List<EditorCanvas> canvases, int activeIdx) {
+        for (int i = 0; i < canvases.size(); i++) {
+            canvases.get(i).setBorder(i == activeIdx
+                ? BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2)
+                : BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+        }
+    }
+
+    /** 新しいペインを作成してリストへ追加し、各コールバックを設定する。 */
+    private static void addPane(
+            JFrame frame,
+            List<EditorCanvas> canvases,
+            List<ModalEditor> editors,
+            int[] activePaneIdx,
+            String text, String path) {
+
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setTheme(Theme.DARK_MODE);
+        ModalEditor editor = new ModalEditor(text, path, canvas);
+        setupCompileAnalysis(editor, canvas);
+        editor.setJdkClassIndex(JDK_INDEX);
+        editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
+
+        // アクティブの右隣に挿入
+        int insertAt = activePaneIdx[0] + 1;
+        canvases.add(insertAt, canvas);
+        editors.add(insertAt, editor);
+
+        // 新しいペインをアクティブにする
+        activePaneIdx[0] = insertAt;
+
+        setupPaneCallbacks(frame, canvases, editors, activePaneIdx, editor);
+        rebuildLayout(frame, canvases, activePaneIdx[0]);
+    }
+
+    /**
+     * エディタの :q / exitCallback / closeBlockedCallback を設定する。
+     * ペインリストの状態に依存するため、ペイン追加・削除のたびに全ペインへ再設定する。
+     */
+    private static void setupPaneCallbacks(
+            JFrame frame,
+            List<EditorCanvas> canvases,
+            List<ModalEditor> editors,
+            int[] activePaneIdx,
+            ModalEditor editor) {
+
+        editor.setExitCallback(() -> {
+            if (canvases.size() == 1) {
+                // 最後の1ペイン → アプリ終了
+                System.exit(0);
+            }
+            closeActivePane(frame, canvases, editors, activePaneIdx);
+        });
+
+        editor.setCloseBlockedCallback(null); // 1ペイン以上なら常に閉じられる
+
+        // 最後の1ペインになったとき用に全ペインのコールバックを同期させる
+        // （実際の制御は setExitCallback 内の canvases.size() チェックで行う）
+    }
+
+    /** アクティブペインを閉じてレイアウトを再構築する。 */
+    private static void closeActivePane(
+            JFrame frame,
+            List<EditorCanvas> canvases,
+            List<ModalEditor> editors,
+            int[] activePaneIdx) {
+
+        if (canvases.size() <= 1) return; // 1ペイン以下は閉じない
+
+        int idx = activePaneIdx[0];
+        canvases.remove(idx);
+        editors.remove(idx);
+
+        // 閉じた後のアクティブインデックスを決定
+        activePaneIdx[0] = Math.min(idx, canvases.size() - 1);
+
+        rebuildLayout(frame, canvases, activePaneIdx[0]);
+    }
+
     public static void main(String[] args) {
         String initialPath = (args.length > 0) ? args[0] : null;
         String initialText;
@@ -116,9 +214,7 @@ public class Main {
             initialText = "";
         }
 
-        // マウス位置の検出は AWT スレッド外でも安全
         final GraphicsConfiguration targetScreen = detectMouseScreen();
-
         final String text = initialText;
         final String path = initialPath;
         final boolean splash = (initialPath == null);
@@ -129,69 +225,49 @@ public class Main {
             frame.setSize(WINDOW_WIDTH, WINDOW_HEIGHT);
             centerOnScreen(frame, targetScreen);
 
-            // --- 単一ペイン（起動時は1画面表示）---
-            EditorCanvas mainCanvas = new EditorCanvas();
-            mainCanvas.setTheme(Theme.DARK_MODE);
-            if (splash) mainCanvas.setShowSplash(true);
-            ModalEditor mainEditor = new ModalEditor(text, path, mainCanvas);
-            setupCompileAnalysis(mainEditor, mainCanvas);
-            mainEditor.setJdkClassIndex(JDK_INDEX);
-            mainEditor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
-
-            // --- 右ペイン（Ctrl+W で分割時に使用）---
-            EditorCanvas splitCanvas = new EditorCanvas();
-            splitCanvas.setTheme(Theme.DARK_MODE);
-            ModalEditor splitEditor = new ModalEditor(text, path, splitCanvas);
-            setupCompileAnalysis(splitEditor, splitCanvas);
-            splitEditor.setJdkClassIndex(JDK_INDEX);
-            splitEditor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
-
-            // アクティブペイン管理
+            // ペイン管理リスト
+            List<EditorCanvas> canvases = new ArrayList<>();
+            List<ModalEditor> editors   = new ArrayList<>();
             int[] activePaneIdx = {0};
-            EditorCanvas[] canvases = {mainCanvas, splitCanvas};
-            ModalEditor[] editors   = {mainEditor, splitEditor};
-            boolean[] splitMode = {false};
 
-            // 初期ボーダー（単一ペインでもアクティブ色を付ける）
-            mainCanvas.setBorder(BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2));
-            splitCanvas.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+            // 初期ペインを作成
+            EditorCanvas firstCanvas = new EditorCanvas();
+            firstCanvas.setTheme(Theme.DARK_MODE);
+            if (splash) firstCanvas.setShowSplash(true);
+            ModalEditor firstEditor = new ModalEditor(text, path, firstCanvas);
+            setupCompileAnalysis(firstEditor, firstCanvas);
+            firstEditor.setJdkClassIndex(JDK_INDEX);
+            firstEditor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
 
-            // 単一ペインで起動
-            frame.add(mainCanvas);
+            canvases.add(firstCanvas);
+            editors.add(firstEditor);
+            setupPaneCallbacks(frame, canvases, editors, activePaneIdx, firstEditor);
+            updateBorders(canvases, 0);
+            frame.add(firstCanvas);
 
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
                     if (e.getID() != KeyEvent.KEY_PRESSED) return false;
                     boolean ctrl = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) != 0;
 
-                    // Ctrl+W: 単一⇔分割を切り替える
                     if (ctrl && e.getKeyCode() == KeyEvent.VK_W) {
-                        if (!splitMode[0]) {
-                            // 単一 → 分割
-                            splitMode[0] = true;
-                            frame.remove(mainCanvas);
-                            JSplitPane splitPane = new JSplitPane(
-                                JSplitPane.HORIZONTAL_SPLIT, mainCanvas, splitCanvas);
-                            splitPane.setResizeWeight(0.5);
-                            splitPane.setDividerSize(4);
-                            splitPane.setBorder(null);
-                            frame.add(splitPane);
-                            frame.revalidate();
-                            SwingUtilities.invokeLater(() ->
-                                splitPane.setDividerLocation(frame.getWidth() / 2));
-                        } else {
-                            // 分割中はアクティブペインを切り替える
-                            activePaneIdx[0] = 1 - activePaneIdx[0];
-                            canvases[activePaneIdx[0]].setBorder(
-                                BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2));
-                            canvases[1 - activePaneIdx[0]].setBorder(
-                                BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+                        // アクティブペインを右に分割（新ペインを追加）
+                        int idx = activePaneIdx[0];
+                        String t = editors.get(idx).getText();
+                        String p = editors.get(idx).getCurrentFilePath();
+                        addPane(frame, canvases, editors, activePaneIdx, t, p);
+                        // 追加後は全ペインのコールバックを再設定
+                        for (ModalEditor ed : editors) {
+                            setupPaneCallbacks(frame, canvases, editors, activePaneIdx, ed);
                         }
                         return true;
                     }
 
-                    editors[activePaneIdx[0]].processKey(
+                    editors.get(activePaneIdx[0]).processKey(
                         e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+
+                    // アクティブペインが変わった可能性があるのでボーダーを同期
+                    updateBorders(canvases, activePaneIdx[0]);
                     return true;
                 });
 
