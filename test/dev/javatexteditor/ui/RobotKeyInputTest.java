@@ -90,6 +90,10 @@ public class RobotKeyInputTest {
         testInsertDeleteToEol();          // Ctrl+K 行末まで削除
         testInsertTabSkipClosingPair();   // Tab で閉じカッコをスキップ
         testSaveFromInsert();             // Ctrl+] INSERT→NORMAL
+        testOrganizeImportsSpcIo();       // SPC+i+o で未使用 import 削除
+        testOrganizeImportsCtrlShiftO();  // Ctrl+Shift+O で未使用 import 削除（Eclipse互換）
+        testOrganizeImportsCommandOi();   // :oi コマンドで未使用 import 削除
+        testRemoveImportCommand();        // :remove-import <fqn> で特定 import 削除
 
         teardown();
 
@@ -861,6 +865,120 @@ public class RobotKeyInputTest {
         robot.keyRelease(KeyEvent.VK_CONTROL);
         Thread.sleep(SETTLE_MS);
         check("Ctrl+]: NORMALモードへ", true, editor.isNormalMode());
+    }
+
+    static void pressCtrlShift(int keyCode) throws Exception {
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_SHIFT);
+        robot.keyPress(keyCode);
+        robot.keyRelease(keyCode);
+        robot.keyRelease(KeyEvent.VK_SHIFT);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+        Thread.sleep(KEY_DELAY_MS);
+    }
+
+    /**
+     * SPC+i+o でオーガナイズ: 未使用 import が削除され、使用中 import は残る。
+     */
+    static void testOrganizeImportsSpcIo() throws Exception {
+        System.out.println("\n--- SPC+i+o: 未使用 import 削除 ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        String src = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X { List<String> x; }";
+        resetEditorTo(src);
+        editor.setAutoImportHandler(new AutoImportHandler(new ImportSuggester(idx), new SourceAnalyzer()));
+
+        pressChar(' ');
+        pressChar('i');
+        pressChar('o');
+        Thread.sleep(SETTLE_MS);
+
+        String text = editor.getText();
+        check("SPC+i+o: List import 残存", true, text.contains("import java.util.List;"));
+        check("SPC+i+o: Map import 削除済", false, text.contains("import java.util.Map;"));
+        check("SPC+i+o: NORMALモード維持", true, editor.isNormalMode());
+        String msg = editor.getStatusMessage();
+        check("SPC+i+o: statusMessage に '削除' が含まれる", true, msg.contains("削除"));
+    }
+
+    /**
+     * Ctrl+Shift+O (Eclipse 互換) でオーガナイズ: NORMAL/INSERT モードで未使用 import が削除される。
+     */
+    static void testOrganizeImportsCtrlShiftO() throws Exception {
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+
+        System.out.println("\n--- Ctrl+Shift+O (NORMAL): Eclipse互換 import 整理 ---");
+        String src = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X { List<String> x; }";
+        resetEditorTo(src);
+        editor.setAutoImportHandler(new AutoImportHandler(new ImportSuggester(idx), new SourceAnalyzer()));
+
+        pressCtrlShift(KeyEvent.VK_O);
+        Thread.sleep(SETTLE_MS);
+
+        String text = editor.getText();
+        check("Ctrl+Shift+O(NORMAL): List import 残存", true, text.contains("import java.util.List;"));
+        check("Ctrl+Shift+O(NORMAL): Map import 削除済", false, text.contains("import java.util.Map;"));
+        check("Ctrl+Shift+O(NORMAL): NORMALモード維持", true, editor.isNormalMode());
+
+        // INSERT モードでも動作する
+        System.out.println("\n--- Ctrl+Shift+O (INSERT): Eclipse互換 import 整理 ---");
+        String src2 = "package bar;\nimport java.util.List;\nimport java.util.Map;\nclass Y { List<String> y; }";
+        resetEditorTo(src2);
+        editor.setAutoImportHandler(new AutoImportHandler(new ImportSuggester(idx), new SourceAnalyzer()));
+        pressChar('i'); // INSERT モードへ
+        Thread.sleep(SETTLE_MS);
+        pressCtrlShift(KeyEvent.VK_O);
+        Thread.sleep(SETTLE_MS);
+        String text2 = editor.getText();
+        check("Ctrl+Shift+O(INSERT): List import 残存", true, text2.contains("import java.util.List;"));
+        check("Ctrl+Shift+O(INSERT): Map import 削除済", false, text2.contains("import java.util.Map;"));
+    }
+
+    /**
+     * :oi コマンドで未使用 import を削除する。
+     */
+    static void testOrganizeImportsCommandOi() throws Exception {
+        System.out.println("\n--- :oi コマンド: 未使用 import 削除 ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        String src = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X { Map<String,Integer> m; }";
+        resetEditorTo(src);
+        editor.setAutoImportHandler(new AutoImportHandler(new ImportSuggester(idx), new SourceAnalyzer()));
+
+        pressShiftKey(KeyEvent.VK_SEMICOLON); // ':'
+        for (char c : "oi".toCharArray()) pressChar(c);
+        pressEnter();
+        Thread.sleep(SETTLE_MS);
+
+        String text = editor.getText();
+        check(":oi: Map import 残存", true, text.contains("import java.util.Map;"));
+        check(":oi: List import 削除済", false, text.contains("import java.util.List;"));
+        check(":oi: NORMALモードへ戻る", true, editor.isNormalMode());
+    }
+
+    /**
+     * :remove-import <fqn> で特定 import 行を削除する。
+     */
+    static void testRemoveImportCommand() throws Exception {
+        System.out.println("\n--- :remove-import: 特定 import 削除 ---");
+        JdkClassIndex idx = JdkClassIndex.buildSync();
+        String src = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X {}";
+        resetEditorTo(src);
+        editor.setAutoImportHandler(new AutoImportHandler(new ImportSuggester(idx), new SourceAnalyzer()));
+
+        pressShiftKey(KeyEvent.VK_SEMICOLON); // ':'
+        // "remove-import java.util.List" を1文字ずつ入力（'-' は VK_MINUS で個別処理）
+        for (char c : "remove".toCharArray()) pressChar(c);
+        robot.keyPress(KeyEvent.VK_MINUS); robot.keyRelease(KeyEvent.VK_MINUS); Thread.sleep(KEY_DELAY_MS);
+        for (char c : "import java.util.".toCharArray()) pressChar(c);
+        for (char c : "List".toCharArray()) pressChar(c);
+        pressEnter();
+        Thread.sleep(SETTLE_MS);
+
+        String text = editor.getText();
+        check(":remove-import: List import 削除済", false, text.contains("import java.util.List;"));
+        check(":remove-import: Map import 残存", true, text.contains("import java.util.Map;"));
+        String msg = editor.getStatusMessage();
+        check(":remove-import: statusMessage に fqn が含まれる",
+              true, msg.contains("java.util.List"));
     }
 
     static void check(String name, Object expected, Object actual) {
