@@ -94,6 +94,8 @@ public class RobotKeyInputTest {
         testOrganizeImportsCtrlShiftO();  // Ctrl+Shift+O で未使用 import 削除（Eclipse互換）
         testOrganizeImportsCommandOi();   // :oi コマンドで未使用 import 削除
         testRemoveImportCommand();        // :remove-import <fqn> で特定 import 削除
+        testDiagJumpNextRobot();          // [g で次のエラー行へジャンプ
+        testDiagJumpPrevRobot();          // [d で前のエラー行へジャンプ
 
         teardown();
 
@@ -867,6 +869,16 @@ public class RobotKeyInputTest {
         check("Ctrl+]: NORMALモードへ", true, editor.isNormalMode());
     }
 
+    static void pressBracketThenKey(char key) throws Exception {
+        robot.keyPress(KeyEvent.VK_OPEN_BRACKET);
+        robot.keyRelease(KeyEvent.VK_OPEN_BRACKET);
+        Thread.sleep(KEY_DELAY_MS);
+        int vk = (key == 'g') ? KeyEvent.VK_G : KeyEvent.VK_D;
+        robot.keyPress(vk);
+        robot.keyRelease(vk);
+        Thread.sleep(KEY_DELAY_MS);
+    }
+
     static void pressCtrlShift(int keyCode) throws Exception {
         robot.keyPress(KeyEvent.VK_CONTROL);
         robot.keyPress(KeyEvent.VK_SHIFT);
@@ -979,6 +991,57 @@ public class RobotKeyInputTest {
         String msg = editor.getStatusMessage();
         check(":remove-import: statusMessage に fqn が含まれる",
               true, msg.contains("java.util.List"));
+    }
+
+    /**
+     * [g でカーソルが次のエラー行に移動することを確認する。
+     */
+    static void testDiagJumpNextRobot() throws Exception {
+        System.out.println("\n--- [g: 次の診断行へジャンプ ---");
+        resetEditorTo("line0\nline1\nline2\nline3\nline4");
+        // 行1・行3 にエラー診断を設定
+        editor.setDiagnostics(java.util.List.of(
+            new CompileDiagnostic(1, 0, "error", DiagnosticKind.ERROR),
+            new CompileDiagnostic(3, 0, "error", DiagnosticKind.ERROR)
+        ));
+        Thread.sleep(SETTLE_MS);
+        // row=0 から [g → row=1
+        pressBracketThenKey('g');
+        Thread.sleep(SETTLE_MS);
+        check("[g: row=1 へジャンプ", 1, editor.getCursorRow());
+        // row=1 から [g → row=3
+        pressBracketThenKey('g');
+        Thread.sleep(SETTLE_MS);
+        check("[g: row=3 へジャンプ", 3, editor.getCursorRow());
+        // row=3 から [g → 折り返し row=1
+        pressBracketThenKey('g');
+        Thread.sleep(SETTLE_MS);
+        check("[g wrap: row=1 へ折り返し", 1, editor.getCursorRow());
+    }
+
+    /**
+     * [d でカーソルが前のエラー行に移動することを確認する。
+     */
+    static void testDiagJumpPrevRobot() throws Exception {
+        System.out.println("\n--- [d: 前の診断行へジャンプ ---");
+        resetEditorTo("line0\nline1\nline2\nline3\nline4");
+        editor.setDiagnostics(java.util.List.of(
+            new CompileDiagnostic(1, 0, "error", DiagnosticKind.ERROR),
+            new CompileDiagnostic(3, 0, "error", DiagnosticKind.ERROR)
+        ));
+        // G で row=4 へ
+        pressChar('G');
+        Thread.sleep(SETTLE_MS);
+        pressBracketThenKey('d');
+        Thread.sleep(SETTLE_MS);
+        check("[d: row=3 へジャンプ", 3, editor.getCursorRow());
+        pressBracketThenKey('d');
+        Thread.sleep(SETTLE_MS);
+        check("[d: row=1 へジャンプ", 1, editor.getCursorRow());
+        // row=1 から [d → 折り返し row=3
+        pressBracketThenKey('d');
+        Thread.sleep(SETTLE_MS);
+        check("[d wrap: row=3 へ折り返し", 3, editor.getCursorRow());
     }
 
     static void check(String name, Object expected, Object actual) {

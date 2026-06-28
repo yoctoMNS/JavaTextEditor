@@ -71,6 +71,8 @@ public class ModalEditor {
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
+    // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
+    private List<CompileDiagnostic> localDiagnostics = List.of();
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -207,6 +209,12 @@ public class ModalEditor {
                 if (movePaneNextCallback != null) movePaneNextCallback.run();
                 return;
             }
+            // [g / [d: 診断ジャンプシーケンス
+            if (seq.equals("[")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { jumpToNextDiagnostic(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { jumpToPrevDiagnostic(); return; }
+                // マッチしない場合は通常処理へ
+            }
             // SPC+g+? シーケンス（SPC+g の2打鍵の後）
             if (seq.equals(" g")) {
                 if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
@@ -297,6 +305,7 @@ public class ModalEditor {
             case "yank.pending" -> pendingSequence = "y";
             case "delete.pending" -> pendingSequence = "d";
             case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
+            case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
             case "split.pending"  -> { pendingSequence = "s"; statusMessage = "s-"; }
             case "leader.pending" -> { pendingSequence = " "; statusMessage = "SPC-"; }
             case "line.swap.down" -> swapLineDown();
@@ -1196,6 +1205,15 @@ public class ModalEditor {
     }
 
     /**
+     * canvas なしのテスト環境で診断ジャンプを検証するために診断リストをセットする。
+     * canvas がある場合は canvas 側の診断が優先される。
+     */
+    public void setDiagnostics(List<CompileDiagnostic> diags) {
+        this.localDiagnostics = (diags != null) ? List.copyOf(diags) : List.of();
+        if (canvas != null) canvas.setDiagnostics(this.localDiagnostics);
+    }
+
+    /**
      * コンパイル診断から未解決シンボルを検出し、import の自動挿入または選択を行う。
      * 候補が1件の場合は即座に挿入。複数の場合は選択待ちモードへ。
      * Must be called on the EDT.
@@ -1457,6 +1475,64 @@ public class ModalEditor {
                        + indent + "}\n";
         insertBeforeLastBrace(methods);
         statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() を生成しました";
+        syncCanvas();
+    }
+
+    /**
+     * 現在行より後にある診断の中で最も近い行へジャンプする（[g）。
+     * 診断が空・canvas なし・見つからない場合はステータスメッセージを出す。
+     */
+    private List<CompileDiagnostic> currentDiagnostics() {
+        return canvas != null ? canvas.getDiagnostics() : localDiagnostics;
+    }
+
+    private void jumpToNextDiagnostic() {
+        List<CompileDiagnostic> diags = currentDiagnostics();
+        if (diags.isEmpty()) { statusMessage = "診断なし"; syncCanvas(); return; }
+        int next = -1;
+        for (CompileDiagnostic d : diags) {
+            if (d.lineNumber() > cursorRow) {
+                if (next < 0 || d.lineNumber() < next) next = d.lineNumber();
+            }
+        }
+        if (next < 0) {
+            // 折り返し: 先頭の診断へ
+            next = diags.stream().mapToInt(CompileDiagnostic::lineNumber).min().orElse(-1);
+        }
+        if (next >= 0) {
+            cursorRow = next;
+            cursorCol = 0;
+            statusMessage = "";
+        } else {
+            statusMessage = "診断なし";
+        }
+        syncCanvas();
+    }
+
+    /**
+     * 現在行より前にある診断の中で最も近い行へジャンプする（[d）。
+     * 診断が空・canvas なし・見つからない場合はステータスメッセージを出す。
+     */
+    private void jumpToPrevDiagnostic() {
+        List<CompileDiagnostic> diags = currentDiagnostics();
+        if (diags.isEmpty()) { statusMessage = "診断なし"; syncCanvas(); return; }
+        int prev = -1;
+        for (CompileDiagnostic d : diags) {
+            if (d.lineNumber() < cursorRow) {
+                if (prev < 0 || d.lineNumber() > prev) prev = d.lineNumber();
+            }
+        }
+        if (prev < 0) {
+            // 折り返し: 末尾の診断へ
+            prev = diags.stream().mapToInt(CompileDiagnostic::lineNumber).max().orElse(-1);
+        }
+        if (prev >= 0) {
+            cursorRow = prev;
+            cursorCol = 0;
+            statusMessage = "";
+        } else {
+            statusMessage = "診断なし";
+        }
         syncCanvas();
     }
 

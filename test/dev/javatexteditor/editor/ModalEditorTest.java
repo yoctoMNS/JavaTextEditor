@@ -1,9 +1,12 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.analysis.CompileDiagnostic;
+import dev.javatexteditor.analysis.DiagnosticKind;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * ModalEditor のテストハーネス（mainメソッド形式・JUnit不使用）。
@@ -88,6 +91,13 @@ public class ModalEditorTest {
         testDeleteToEol();
         testTabSkipsClosingPair();
         testTabInsertSpaces();
+
+        // 診断ジャンプ
+        testDiagJumpNext();
+        testDiagJumpPrev();
+        testDiagJumpNextWrap();
+        testDiagJumpPrevWrap();
+        testDiagJumpEmpty();
 
         // Getter/Setter 自動生成
         testParseFieldInt();
@@ -1456,6 +1466,77 @@ public class ModalEditorTest {
     }
 
     // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // 診断ジャンプ
+    // -------------------------------------------------------------------------
+
+    static CompileDiagnostic diag(int line) {
+        return new CompileDiagnostic(line, 0, "error", DiagnosticKind.ERROR);
+    }
+
+    static void testDiagJumpNext() {
+        System.out.println("--- [g: 次の診断へジャンプ ---");
+        ModalEditor ed = new ModalEditor("a\nb\nc\nd\ne");
+        // 行0・行2・行4 に診断
+        ed.setDiagnostics(List.of(diag(0), diag(2), diag(4)));
+        // カーソルは row=0: 次は row=2
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("[g: row=2 へジャンプ", ed.getCursorRow() == 2);
+        check("[g: col=0", ed.getCursorCol() == 0);
+        // もう一度: row=2 → row=4
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("[g: row=4 へジャンプ", ed.getCursorRow() == 4);
+    }
+
+    static void testDiagJumpPrev() {
+        System.out.println("--- [d: 前の診断へジャンプ ---");
+        ModalEditor ed = new ModalEditor("a\nb\nc\nd\ne");
+        ed.setDiagnostics(List.of(diag(0), diag(2), diag(4)));
+        // カーソルを row=4 に移動
+        pressKey(ed, 'G');
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_D, 'd', 0);
+        check("[d: row=2 へジャンプ", ed.getCursorRow() == 2);
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_D, 'd', 0);
+        check("[d: row=0 へジャンプ", ed.getCursorRow() == 0);
+    }
+
+    static void testDiagJumpNextWrap() {
+        System.out.println("--- [g wrap: 末尾から先頭へ折り返し ---");
+        ModalEditor ed = new ModalEditor("a\nb\nc\nd\ne");
+        ed.setDiagnostics(List.of(diag(1), diag(3)));
+        // G で row=4 へ
+        pressKey(ed, 'G');
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        // 4より後に診断なし → 先頭の診断 row=1 へ折り返し
+        check("[g wrap: row=1 へ折り返し", ed.getCursorRow() == 1);
+    }
+
+    static void testDiagJumpPrevWrap() {
+        System.out.println("--- [d wrap: 先頭から末尾へ折り返し ---");
+        ModalEditor ed = new ModalEditor("a\nb\nc\nd\ne");
+        ed.setDiagnostics(List.of(diag(1), diag(3)));
+        // row=0 で [d: 前に診断なし → 末尾の診断 row=3 へ折り返し
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_D, 'd', 0);
+        check("[d wrap: row=3 へ折り返し", ed.getCursorRow() == 3);
+    }
+
+    static void testDiagJumpEmpty() {
+        System.out.println("--- [g/[d: 診断なし ---");
+        ModalEditor ed = new ModalEditor("hello");
+        ed.setDiagnostics(List.of());
+        ed.processKey(KeyEvent.VK_OPEN_BRACKET, '[', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("[g no diag: row=0 のまま", ed.getCursorRow() == 0);
+        check("[g no diag: statusMessage に '診断' が含まれる",
+              ed.getStatusMessage().contains("診断"));
+    }
+
     // ユーティリティ
     // -------------------------------------------------------------------------
 
