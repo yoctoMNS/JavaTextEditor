@@ -310,6 +310,7 @@ public class ModalEditor {
             case "file.start"          -> moveFileStart();
             case "file.end"            -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
+            case "organize.imports" -> organizeImports();
         }
     }
 
@@ -366,6 +367,7 @@ public class ModalEditor {
                     case "line.end"      -> moveLineEnd();
                     case "file.start"    -> moveFileStart();
                     case "file.end"      -> moveFileEnd();
+                    case "organize.imports" -> organizeImports();
                 }
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
