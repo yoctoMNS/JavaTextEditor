@@ -7,6 +7,8 @@ import dev.vimacs.analysis.JdkJavadocReader;
 import dev.vimacs.analysis.JdkTypeInfo;
 import dev.vimacs.buffer.PieceTable;
 import dev.vimacs.buffer.UndoablePieceTable;
+import dev.vimacs.search.ProjectSearcher;
+import dev.vimacs.search.SearchResult;
 import dev.vimacs.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
@@ -16,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * NORMAL / INSERT / COMMAND / VISUAL / VISUAL_LINE の5モードを管理し、
@@ -55,6 +58,9 @@ public class ModalEditor {
     // 選択待ち候補: 単純名 → FQN 候補リストのペアを順番通りに保持
     private final List<Map.Entry<String, List<String>>> pendingImports = new ArrayList<>();
     private int pendingImportIdx = 0; // 現在選択中の単純名インデックス
+    // project-wide-search: grep 結果バッファ
+    private final ProjectSearcher projectSearcher = new ProjectSearcher();
+    private List<SearchResult> grepResults = null; // null = 通常バッファ
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -133,6 +139,12 @@ public class ModalEditor {
                 advanceImportPrompt();
             }
             syncCanvas();
+            return;
+        }
+
+        // grep 結果バッファ: Enter でその行の結果ファイルへジャンプ
+        if (grepResults != null && keyCode == KeyEvent.VK_ENTER) {
+            jumpToGrepResult();
             return;
         }
 
@@ -293,6 +305,9 @@ public class ModalEditor {
         } else if (cmd.startsWith("e ")) {
             String path = cmd.substring(2).trim();
             loadFromFile(path);
+        } else if (cmd.startsWith("grep ")) {
+            String pattern = cmd.substring(5).trim();
+            executeGrep(pattern);
         } else if (cmd.equals("q")) {
             exitCallback.run();
         } else if (cmd.equals("wq")) {
@@ -327,7 +342,68 @@ public class ModalEditor {
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
+            grepResults = null;
             statusMessage = "\"" + path + "\" opened";
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+        }
+    }
+
+    private void executeGrep(String pattern) {
+        if (pattern.isEmpty()) {
+            statusMessage = "E: no pattern";
+            return;
+        }
+        Path baseDir = Path.of(System.getProperty("user.dir"));
+        List<SearchResult> results;
+        try {
+            results = projectSearcher.search(baseDir, pattern);
+        } catch (java.util.regex.PatternSyntaxException e) {
+            statusMessage = "E: bad pattern: " + e.getDescription();
+            return;
+        }
+        if (results.isEmpty()) {
+            statusMessage = "grep: no matches for /" + pattern + "/";
+            return;
+        }
+
+        // 結果をバッファに読み込む
+        StringBuilder sb = new StringBuilder();
+        sb.append("*grep* /").append(pattern).append("/ — ").append(results.size()).append(" match(es)\n");
+        for (SearchResult r : results) {
+            sb.append(r.toDisplayLine()).append("\n");
+        }
+        grepResults = results;
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = "grep: " + results.size() + " match(es) — Enter to jump";
+    }
+
+    /**
+     * grep 結果バッファ内でカーソルがある行の結果ファイルを開き、該当行に移動する。
+     * cursorRow==0 はヘッダ行なのでジャンプ対象外。
+     */
+    private void jumpToGrepResult() {
+        if (grepResults == null) return;
+        // 行0はヘッダ、行1以降が結果
+        int resultIdx = cursorRow - 1;
+        if (resultIdx < 0 || resultIdx >= grepResults.size()) {
+            statusMessage = "E: no result at this line";
+            return;
+        }
+        SearchResult r = grepResults.get(resultIdx);
+        Path target = Path.of(System.getProperty("user.dir")).resolve(r.filePath());
+        try {
+            String content = Files.readString(target).replace("\r\n", "\n");
+            buffer = new UndoablePieceTable(content);
+            currentFilePath = target.toString();
+            grepResults = null;
+            // 目的の行へジャンプ（1-indexed → 0-indexed）
+            cursorRow = Math.max(0, r.lineNumber() - 1);
+            cursorCol = 0;
+            statusMessage = "\"" + r.filePath() + "\" line " + r.lineNumber();
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
