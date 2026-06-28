@@ -84,6 +84,12 @@ public class RobotKeyInputTest {
         testAutoImportNoDiagnostics();    // auto-import: エラーなしで何もしない
         testRenameCommand();               // :rename コマンドでバッファが *rename* ヘッダを含む
         testNativeMethodTracing();         // Shift+K on ClassName.method で native トレース
+        testSwapLineDownUp();             // Alt+J / Alt+K 行入れ替え
+        testLeaderSpacePrefix();          // Space+h/l/k/j リーダーシーケンス
+        testInsertDeleteNext();           // Ctrl+D カーソル位置削除
+        testInsertDeleteToEol();          // Ctrl+K 行末まで削除
+        testInsertTabSkipClosingPair();   // Tab で閉じカッコをスキップ
+        testSaveFromInsert();             // Ctrl+] INSERT→NORMAL
 
         teardown();
 
@@ -720,6 +726,141 @@ public class RobotKeyInputTest {
         // 非native なので [native] は含まれない（クラス情報か Not found が表示）
         check("非native: [native] が含まれない", false, msg3.contains("[native]"));
         check("非native: ステータスが空でない", true, !msg3.isEmpty());
+    }
+
+    // =========================================================================
+    // Neovim キーマップ機能テスト (Robot)
+    // =========================================================================
+
+    static void testSwapLineDownUp() throws Exception {
+        System.out.println("\n--- Alt+J / Alt+K: 行入れ替え ---");
+        resetEditorTo("aaa\nbbb\nccc");
+        // Alt+J: aaa と bbb を入れ替え
+        robot.keyPress(KeyEvent.VK_ALT);
+        robot.keyPress(KeyEvent.VK_J);
+        robot.keyRelease(KeyEvent.VK_J);
+        robot.keyRelease(KeyEvent.VK_ALT);
+        Thread.sleep(SETTLE_MS);
+        String[] lines = editor.getText().split("\n", -1);
+        check("Alt+J: 行0がbbb", "bbb", lines[0]);
+        check("Alt+J: 行1がaaa", "aaa", lines[1]);
+        check("Alt+J: cursorRow=1", 1, editor.getCursorRow());
+
+        // Alt+K: 行1(aaa)を上(行0)と入れ替えて元に戻す
+        robot.keyPress(KeyEvent.VK_ALT);
+        robot.keyPress(KeyEvent.VK_K);
+        robot.keyRelease(KeyEvent.VK_K);
+        robot.keyRelease(KeyEvent.VK_ALT);
+        Thread.sleep(SETTLE_MS);
+        lines = editor.getText().split("\n", -1);
+        check("Alt+K: 行0がaaa", "aaa", lines[0]);
+        check("Alt+K: 行1がbbb", "bbb", lines[1]);
+        check("Alt+K: cursorRow=0", 0, editor.getCursorRow());
+    }
+
+    static void testLeaderSpacePrefix() throws Exception {
+        System.out.println("\n--- Space リーダーシーケンス ---");
+        // Space+j: ファイル末尾
+        resetEditorTo("aaa\nbbb\nccc");
+        pressChar(' ');
+        pressChar('j');
+        Thread.sleep(SETTLE_MS);
+        check("Space+j: row=2", 2, editor.getCursorRow());
+
+        // Space+k: ファイル先頭
+        pressChar(' ');
+        pressChar('k');
+        Thread.sleep(SETTLE_MS);
+        check("Space+k: row=0", 0, editor.getCursorRow());
+
+        // Space+l: 行末
+        resetEditorTo("hello");
+        pressChar(' ');
+        pressChar('l');
+        Thread.sleep(SETTLE_MS);
+        check("Space+l: col=4", 4, editor.getCursorCol());
+
+        // Space+h: 最初の非空白
+        resetEditorTo("   hello");
+        pressChar(' ');
+        pressChar('h');
+        Thread.sleep(SETTLE_MS);
+        check("Space+h: col=3", 3, editor.getCursorCol());
+    }
+
+    static void testInsertDeleteNext() throws Exception {
+        System.out.println("\n--- INSERT Ctrl+D: カーソル位置の文字を削除 ---");
+        resetEditorTo("hello");
+        pressChar('i'); // INSERT at col=0
+        Thread.sleep(SETTLE_MS);
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_D);
+        robot.keyRelease(KeyEvent.VK_D);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+        Thread.sleep(SETTLE_MS);
+        check("Ctrl+D: 'h'が削除", "ello", editor.getText());
+        check("Ctrl+D: col=0のまま", 0, editor.getCursorCol());
+    }
+
+    static void testInsertDeleteToEol() throws Exception {
+        System.out.println("\n--- INSERT Ctrl+K: 行末まで削除 ---");
+        resetEditorTo("hello world");
+        pressChar('i'); // INSERT at col=0
+        // Ctrl+F で5回右移動して col=5へ
+        for (int i = 0; i < 5; i++) {
+            robot.keyPress(KeyEvent.VK_CONTROL);
+            robot.keyPress(KeyEvent.VK_F);
+            robot.keyRelease(KeyEvent.VK_F);
+            robot.keyRelease(KeyEvent.VK_CONTROL);
+            Thread.sleep(20);
+        }
+        Thread.sleep(SETTLE_MS);
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_K);
+        robot.keyRelease(KeyEvent.VK_K);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+        Thread.sleep(SETTLE_MS);
+        check("Ctrl+K: ' world'が削除", "hello", editor.getText());
+    }
+
+    static void testInsertTabSkipClosingPair() throws Exception {
+        System.out.println("\n--- INSERT Tab: 閉じカッコをスキップ ---");
+        resetEditorTo("()");
+        pressChar('i'); // INSERT at col=0
+        // Ctrl+F で1回右移動して col=1（')'の上）
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_F);
+        robot.keyRelease(KeyEvent.VK_F);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+        Thread.sleep(SETTLE_MS);
+        // Tab → ')' をスキップ
+        robot.keyPress(KeyEvent.VK_TAB);
+        robot.keyRelease(KeyEvent.VK_TAB);
+        Thread.sleep(SETTLE_MS);
+        check("Tab skip ')': col=2", 2, editor.getCursorCol());
+        check("Tab skip ')': テキスト変化なし", "()", editor.getText());
+
+        // 通常位置での Tab: 4スペース挿入
+        resetEditorTo("hello");
+        pressChar('i'); // INSERT at col=0
+        robot.keyPress(KeyEvent.VK_TAB);
+        robot.keyRelease(KeyEvent.VK_TAB);
+        Thread.sleep(SETTLE_MS);
+        check("Tab insert: 4スペース挿入", "    hello", editor.getText());
+        check("Tab insert: col=4", 4, editor.getCursorCol());
+    }
+
+    static void testSaveFromInsert() throws Exception {
+        System.out.println("\n--- INSERT Ctrl+]: NORMAL へ戻る ---");
+        resetEditorTo("hello");
+        pressChar('i'); // INSERT
+        check("i: INSERTモード", true, editor.isInsertMode());
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_CLOSE_BRACKET);
+        robot.keyRelease(KeyEvent.VK_CLOSE_BRACKET);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+        Thread.sleep(SETTLE_MS);
+        check("Ctrl+]: NORMALモードへ", true, editor.isNormalMode());
     }
 
     static void check(String name, Object expected, Object actual) {
