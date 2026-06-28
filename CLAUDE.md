@@ -2,7 +2,7 @@
 
 ## プロジェクト概要
 
-Vim（モーダル編集）とEmacs（拡張性）の良い所を統合した、Java SE製の軽量テキストエディタ。学習目的と実用目的を両立させる。
+Vimのモーダル編集とEmacsの拡張性の良い所を統合した、Java SE製の軽量テキストエディタ。学習目的と実用目的を両立させる。
 
 ## 技術スタック・制約（厳守）
 
@@ -39,7 +39,7 @@ project-root/
 │       ├── editor-buffer-architecture/
 │       └── gui-rendering-pipeline/
 ├── src/
-│   └── dev/vimacs/
+│   └── dev/javatexteditor/
 │       ├── Main.java
 │       ├── buffer/
 │       │   ├── Piece.java
@@ -48,7 +48,7 @@ project-root/
 │           ├── Theme.java
 │           └── EditorCanvas.java
 ├── test/
-│   └── dev/vimacs/
+│   └── dev/javatexteditor/
 │       ├── buffer/
 │       │   └── PieceTableTest.java
 │       └── ui/
@@ -61,7 +61,7 @@ project-root/
 └── build/                                ← コンパイル出力先（.gitignore対象）
 ```
 
-パッケージ名: `dev.vimacs`（確定済み）
+パッケージ名: `dev.javatexteditor`（確定済み）
 
 ## 決定済みの設計事項
 
