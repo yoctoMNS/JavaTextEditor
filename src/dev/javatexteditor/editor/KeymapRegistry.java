@@ -96,9 +96,10 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
         bind(Mode.NORMAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");
         bind(Mode.NORMAL, KeyBinding.ofChar('e', "word.end"),      "word.end");
-        // 行頭・行末
-        bind(Mode.NORMAL, KeyBinding.ofChar('0', "line.start"), "line.start");
-        bind(Mode.NORMAL, KeyBinding.ofChar('$', "line.end"),   "line.end");
+        // 行頭・行末（0=絶対行頭, ^=最初の非空白, $=行末）
+        bind(Mode.NORMAL, KeyBinding.ofChar('0', "line.start"),           "line.start");
+        bind(Mode.NORMAL, KeyBinding.ofChar('^', "line.start.nonblank"),  "line.start.nonblank");
+        bind(Mode.NORMAL, KeyBinding.ofChar('$', "line.end"),             "line.end");
         // ファイル末尾（先頭は gg シーケンス）
         bind(Mode.NORMAL, KeyBinding.ofChar('G', "file.end"),    "file.end");
         bind(Mode.NORMAL, KeyBinding.ofChar('g', "goto.pending"), "goto.pending");
@@ -137,8 +138,9 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
         bind(Mode.VISUAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");
         bind(Mode.VISUAL, KeyBinding.ofChar('e', "word.end"),      "word.end");
-        bind(Mode.VISUAL, KeyBinding.ofChar('0', "line.start"), "line.start");
-        bind(Mode.VISUAL, KeyBinding.ofChar('$', "line.end"),   "line.end");
+        bind(Mode.VISUAL, KeyBinding.ofChar('0', "line.start"),          "line.start");
+        bind(Mode.VISUAL, KeyBinding.ofChar('^', "line.start.nonblank"), "line.start.nonblank");
+        bind(Mode.VISUAL, KeyBinding.ofChar('$', "line.end"),            "line.end");
         bind(Mode.VISUAL, KeyBinding.ofChar('G', "file.end"),   "file.end");
 
         // VISUAL LINE モード（行単位選択）

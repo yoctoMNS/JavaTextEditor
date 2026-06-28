@@ -230,10 +230,11 @@ public class ModalEditor {
             case "word.forward"  -> moveWordForward();
             case "word.backward" -> moveWordBackward();
             case "word.end"      -> moveWordEnd();
-            case "line.start"    -> moveLineStart();
-            case "line.end"      -> moveLineEnd();
-            case "file.start"    -> moveFileStart();
-            case "file.end"      -> moveFileEnd();
+            case "line.start"          -> moveLineStart();
+            case "line.start.nonblank" -> moveLineStartNonBlank();
+            case "line.end"            -> moveLineEnd();
+            case "file.start"          -> moveFileStart();
+            case "file.end"            -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
         }
     }
@@ -498,12 +499,13 @@ public class ModalEditor {
             case "cursor.right"  -> moveCursor(0, 1);
             case "cursor.down"   -> moveCursor(1, 0);
             case "cursor.up"     -> moveCursor(-1, 0);
-            case "word.forward"  -> moveWordForward();
-            case "word.backward" -> moveWordBackward();
-            case "word.end"      -> moveWordEnd();
-            case "line.start"    -> moveLineStart();
-            case "line.end"      -> moveLineEnd();
-            case "file.end"      -> moveFileEnd();
+            case "word.forward"        -> moveWordForward();
+            case "word.backward"       -> moveWordBackward();
+            case "word.end"            -> moveWordEnd();
+            case "line.start"          -> moveLineStart();
+            case "line.start.nonblank" -> moveLineStartNonBlank();
+            case "line.end"            -> moveLineEnd();
+            case "file.end"            -> moveFileEnd();
             case "yank" -> {
                 yankRegister = getSelectedText();
                 yankType = "char";
@@ -849,6 +851,14 @@ public class ModalEditor {
 
     private void moveLineStart() {
         cursorCol = 0;
+    }
+
+    private void moveLineStartNonBlank() {
+        String[] lines = getLines();
+        String line = cursorRow < lines.length ? lines[cursorRow] : "";
+        int col = 0;
+        while (col < line.length() && (line.charAt(col) == ' ' || line.charAt(col) == '\t')) col++;
+        cursorCol = col;
     }
 
     private void moveLineEnd() {

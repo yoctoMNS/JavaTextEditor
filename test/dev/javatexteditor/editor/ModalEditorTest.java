@@ -69,6 +69,7 @@ public class ModalEditorTest {
         testInsertWordMovement();
         testInsertLineStartEnd();
         testInsertFileStartEnd();
+        testLineStartNonBlank();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -1071,6 +1072,27 @@ public class ModalEditorTest {
         ed.processKey(KeyEvent.VK_HOME, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
         check("Ctrl+Home: row=0", ed.getCursorRow() == 0);
         check("Ctrl+Home: col=0", ed.getCursorCol() == 0);
+    }
+
+    static void testLineStartNonBlank() {
+        System.out.println("--- line.start.nonblank (NORMAL: ^) ---");
+        ModalEditor ed = new ModalEditor("   hello world", null, null);
+        // $で行末へ
+        pressKey(ed, '$');
+        check("^の前: 行末にいる", ed.getCursorCol() == 13);
+        pressKey(ed, '^');
+        check("^: 最初の非空白 (col=3)", ed.getCursorCol() == 3);
+
+        // インデントなし行では col=0
+        ModalEditor ed2 = new ModalEditor("hello", null, null);
+        pressKey(ed2, '$');
+        pressKey(ed2, '^');
+        check("^: インデントなし → col=0", ed2.getCursorCol() == 0);
+
+        // 全空白行では行末（またはcol=0）
+        ModalEditor ed3 = new ModalEditor("   ", null, null);
+        pressKey(ed3, '^');
+        check("^: 全空白行 → col=行末以下", ed3.getCursorCol() <= 3);
     }
 
     // -------------------------------------------------------------------------
