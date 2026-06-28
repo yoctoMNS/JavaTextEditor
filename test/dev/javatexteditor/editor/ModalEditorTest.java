@@ -58,6 +58,18 @@ public class ModalEditorTest {
         testVisualLineEscape();
         testYankTypeDefault();
 
+        // 単語・行・ファイル移動
+        testWordForwardNormal();
+        testWordBackwardNormal();
+        testWordEndNormal();
+        testLineStartNormal();
+        testLineEndNormal();
+        testFileStartEndNormal();
+        testGgSequence();
+        testInsertWordMovement();
+        testInsertLineStartEnd();
+        testInsertFileStartEnd();
+
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
     }
@@ -952,6 +964,113 @@ public class ModalEditorTest {
         pressKey(ed, 'v');
         pressKey(ed, 'y');
         check("再度文字ヤンクで yankType='char'", ed.getYankType().equals("char"));
+    }
+
+    // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // 単語・行・ファイル移動
+    // -------------------------------------------------------------------------
+
+    static void testWordForwardNormal() {
+        System.out.println("--- word.forward (NORMAL: w) ---");
+        // "hello world foo"
+        ModalEditor ed = new ModalEditor("hello world foo", null, null);
+        // 初期: row=0, col=0
+        pressKey(ed, 'w');
+        check("w: hello→world (col=6)", ed.getCursorCol() == 6);
+        pressKey(ed, 'w');
+        check("w: world→foo (col=12)", ed.getCursorCol() == 12);
+        pressKey(ed, 'w');
+        check("w: foo→末尾で止まる", ed.getCursorCol() == 12 || ed.getCursorCol() == 15);
+    }
+
+    static void testWordBackwardNormal() {
+        System.out.println("--- word.backward (NORMAL: b) ---");
+        ModalEditor ed = new ModalEditor("hello world foo", null, null);
+        // col=12 に移動してから
+        pressKey(ed, 'w'); pressKey(ed, 'w'); // col=12
+        pressKey(ed, 'b');
+        check("b: foo→world先頭 (col=6)", ed.getCursorCol() == 6);
+        pressKey(ed, 'b');
+        check("b: world→hello先頭 (col=0)", ed.getCursorCol() == 0);
+    }
+
+    static void testWordEndNormal() {
+        System.out.println("--- word.end (NORMAL: e) ---");
+        ModalEditor ed = new ModalEditor("hello world", null, null);
+        pressKey(ed, 'e');
+        check("e: hello末尾 (col=4)", ed.getCursorCol() == 4);
+        pressKey(ed, 'e');
+        check("e: world末尾 (col=10)", ed.getCursorCol() == 10);
+    }
+
+    static void testLineStartNormal() {
+        System.out.println("--- line.start (NORMAL: 0) ---");
+        ModalEditor ed = new ModalEditor("hello\nworld", null, null);
+        pressKey(ed, 'w'); // col=6は次行、とにかく右へ
+        // まず右に動かす
+        pressKey(ed, 'l'); pressKey(ed, 'l');
+        int col = ed.getCursorCol();
+        pressKey(ed, '0');
+        check("0: 行頭へ (col=0)", ed.getCursorCol() == 0);
+    }
+
+    static void testLineEndNormal() {
+        System.out.println("--- line.end (NORMAL: $) ---");
+        ModalEditor ed = new ModalEditor("hello\nworld", null, null);
+        pressKey(ed, '$');
+        check("$: hello末尾 (col=4)", ed.getCursorCol() == 4);
+    }
+
+    static void testFileStartEndNormal() {
+        System.out.println("--- file.end (NORMAL: G) / file.start (NORMAL: gg) ---");
+        ModalEditor ed = new ModalEditor("line1\nline2\nline3", null, null);
+        pressKey(ed, 'G');
+        check("G: 最終行 (row=2)", ed.getCursorRow() == 2);
+        check("G: 最終行の有効列", ed.getCursorCol() >= 0);
+    }
+
+    static void testGgSequence() {
+        System.out.println("--- gg: ファイル先頭へ ---");
+        ModalEditor ed = new ModalEditor("line1\nline2\nline3", null, null);
+        pressKey(ed, 'G'); // row=2
+        pressKey(ed, 'g');
+        pressKey(ed, 'g');
+        check("gg: row=0", ed.getCursorRow() == 0);
+        check("gg: col=0", ed.getCursorCol() == 0);
+    }
+
+    static void testInsertWordMovement() {
+        System.out.println("--- INSERT: Alt+F/Alt+B ---");
+        ModalEditor ed = new ModalEditor("hello world", null, null);
+        pressKey(ed, 'i'); // INSERT
+        ed.processKey(KeyEvent.VK_F, KeyEvent.CHAR_UNDEFINED, KeyEvent.ALT_DOWN_MASK);
+        check("Alt+F: hello次 (col=5 or 6)", ed.getCursorCol() >= 5);
+        ed.processKey(KeyEvent.VK_B, KeyEvent.CHAR_UNDEFINED, KeyEvent.ALT_DOWN_MASK);
+        check("Alt+B: 戻る (col <= 6)", ed.getCursorCol() <= 6);
+    }
+
+    static void testInsertLineStartEnd() {
+        System.out.println("--- INSERT: Ctrl+A / Ctrl+E ---");
+        ModalEditor ed = new ModalEditor("hello world", null, null);
+        pressKey(ed, 'i'); // INSERT
+        ed.processKey(KeyEvent.VK_F, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK); // 右
+        ed.processKey(KeyEvent.VK_F, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_A, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK); // Ctrl+A
+        check("Ctrl+A: col=0", ed.getCursorCol() == 0);
+        ed.processKey(KeyEvent.VK_E, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK); // Ctrl+E
+        check("Ctrl+E: 行末 (col=11)", ed.getCursorCol() == 11);
+    }
+
+    static void testInsertFileStartEnd() {
+        System.out.println("--- INSERT: Ctrl+Home / Ctrl+End ---");
+        ModalEditor ed = new ModalEditor("line1\nline2\nline3", null, null);
+        pressKey(ed, 'i'); // INSERT
+        ed.processKey(KeyEvent.VK_END, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+        check("Ctrl+End: 最終行 (row=2)", ed.getCursorRow() == 2);
+        ed.processKey(KeyEvent.VK_HOME, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+        check("Ctrl+Home: row=0", ed.getCursorRow() == 0);
+        check("Ctrl+Home: col=0", ed.getCursorCol() == 0);
     }
 
     // -------------------------------------------------------------------------

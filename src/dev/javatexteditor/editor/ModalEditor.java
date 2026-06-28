@@ -163,6 +163,7 @@ public class ModalEditor {
             pendingNormalChar = 0;
             if (prev == 'y' && keyChar == 'y') { yankCurrentLine(); return; }
             if (prev == 'd' && keyChar == 'd') { deleteCurrentLine(); return; }
+            if (prev == 'g' && keyChar == 'g') { moveFileStart(); return; }
             // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
 
@@ -225,6 +226,14 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingNormalChar = 'y';
             case "delete.pending" -> pendingNormalChar = 'd';
+            case "goto.pending" -> pendingNormalChar = 'g';
+            case "word.forward"  -> moveWordForward();
+            case "word.backward" -> moveWordBackward();
+            case "word.end"      -> moveWordEnd();
+            case "line.start"    -> moveLineStart();
+            case "line.end"      -> moveLineEnd();
+            case "file.start"    -> moveFileStart();
+            case "file.end"      -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
         }
     }
@@ -253,10 +262,17 @@ public class ModalEditor {
                         cursorRow++;
                         cursorCol = 0;
                     }
-                    case "cursor.right" -> moveCursor(0, 1);
-                    case "cursor.left"  -> moveCursor(0, -1);
-                    case "cursor.down"  -> moveCursor(1, 0);
-                    case "cursor.up"    -> moveCursor(-1, 0);
+                    case "cursor.right"  -> moveCursor(0, 1);
+                    case "cursor.left"   -> moveCursor(0, -1);
+                    case "cursor.down"   -> moveCursor(1, 0);
+                    case "cursor.up"     -> moveCursor(-1, 0);
+                    case "word.forward"  -> moveWordForward();
+                    case "word.backward" -> moveWordBackward();
+                    case "word.end"      -> moveWordEnd();
+                    case "line.start"    -> moveLineStart();
+                    case "line.end"      -> moveLineEnd();
+                    case "file.start"    -> moveFileStart();
+                    case "file.end"      -> moveFileEnd();
                 }
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
@@ -478,10 +494,16 @@ public class ModalEditor {
         if (custom != null) { custom.run(); return; }
 
         switch (action) {
-            case "cursor.left"  -> moveCursor(0, -1);
-            case "cursor.right" -> moveCursor(0, 1);
-            case "cursor.down"  -> moveCursor(1, 0);
-            case "cursor.up"    -> moveCursor(-1, 0);
+            case "cursor.left"   -> moveCursor(0, -1);
+            case "cursor.right"  -> moveCursor(0, 1);
+            case "cursor.down"   -> moveCursor(1, 0);
+            case "cursor.up"     -> moveCursor(-1, 0);
+            case "word.forward"  -> moveWordForward();
+            case "word.backward" -> moveWordBackward();
+            case "word.end"      -> moveWordEnd();
+            case "line.start"    -> moveLineStart();
+            case "line.end"      -> moveLineEnd();
+            case "file.end"      -> moveFileEnd();
             case "yank" -> {
                 yankRegister = getSelectedText();
                 yankType = "char";
@@ -516,6 +538,7 @@ public class ModalEditor {
             case "cursor.right" -> moveCursor(0, 1);
             case "cursor.down"  -> moveCursor(1, 0);
             case "cursor.up"    -> moveCursor(-1, 0);
+            case "file.end"     -> moveFileEnd();
             case "yank" -> {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
@@ -778,6 +801,74 @@ public class ModalEditor {
         if (lineLen == 0) return;
         buffer.delete(offsetOfCursor(), 1);
         clampCursorForNormal();
+    }
+
+    // -------------------------------------------------------------------------
+    // 単語・行・ファイル単位の移動
+    // -------------------------------------------------------------------------
+
+    private static boolean isWordChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
+    }
+
+    private void moveWordForward() {
+        String text = buffer.getText();
+        int len = text.length();
+        int offset = offsetOfCursor();
+        // 現在位置の単語文字をスキップ
+        while (offset < len && isWordChar(text.charAt(offset))) offset++;
+        // 空白・記号をスキップして次の単語先頭へ
+        while (offset < len && !isWordChar(text.charAt(offset)) && text.charAt(offset) != '\n') offset++;
+        moveCursorToOffset(offset);
+    }
+
+    private void moveWordBackward() {
+        String text = buffer.getText();
+        int offset = offsetOfCursor();
+        if (offset == 0) return;
+        offset--;
+        // 空白・記号を後退スキップ
+        while (offset > 0 && !isWordChar(text.charAt(offset))) offset--;
+        // 単語文字を後退スキップして単語先頭へ
+        while (offset > 0 && isWordChar(text.charAt(offset - 1))) offset--;
+        moveCursorToOffset(offset);
+    }
+
+    private void moveWordEnd() {
+        String text = buffer.getText();
+        int len = text.length();
+        int offset = offsetOfCursor();
+        if (offset >= len - 1) return;
+        offset++;
+        // 空白・記号をスキップ
+        while (offset < len && !isWordChar(text.charAt(offset))) offset++;
+        // 単語末尾へ
+        while (offset < len - 1 && isWordChar(text.charAt(offset + 1))) offset++;
+        moveCursorToOffset(offset);
+    }
+
+    private void moveLineStart() {
+        cursorCol = 0;
+    }
+
+    private void moveLineEnd() {
+        String[] lines = getLines();
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        boolean isInsert = (mode == Mode.INSERT);
+        cursorCol = isInsert ? lineLen : Math.max(0, lineLen - 1);
+    }
+
+    private void moveFileStart() {
+        cursorRow = 0;
+        cursorCol = 0;
+    }
+
+    private void moveFileEnd() {
+        String[] lines = getLines();
+        cursorRow = Math.max(0, lines.length - 1);
+        int lineLen = lines[cursorRow].length();
+        boolean isInsert = (mode == Mode.INSERT);
+        cursorCol = isInsert ? lineLen : Math.max(0, lineLen - 1);
     }
 
     private void moveCursorToOffset(int offset) {

@@ -92,6 +92,16 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('y', "yank.pending"), "yank.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('d', "delete.pending"), "delete.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.SHIFT_DOWN_MASK, "jdk.doc"), "jdk.doc");
+        // 単語移動
+        bind(Mode.NORMAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
+        bind(Mode.NORMAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");
+        bind(Mode.NORMAL, KeyBinding.ofChar('e', "word.end"),      "word.end");
+        // 行頭・行末
+        bind(Mode.NORMAL, KeyBinding.ofChar('0', "line.start"), "line.start");
+        bind(Mode.NORMAL, KeyBinding.ofChar('$', "line.end"),   "line.end");
+        // ファイル末尾（先頭は gg シーケンス）
+        bind(Mode.NORMAL, KeyBinding.ofChar('G', "file.end"),    "file.end");
+        bind(Mode.NORMAL, KeyBinding.ofChar('g', "goto.pending"), "goto.pending");
 
         // INSERT モード
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
@@ -101,6 +111,15 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_P, KeyEvent.CTRL_DOWN_MASK, "cursor.up"), "cursor.up");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_BACK_SPACE, 0, "delete.before"), "delete.before");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ENTER, 0, "insert.newline"), "insert.newline");
+        // Emacs 単語移動（Alt+F / Alt+B）
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.ALT_DOWN_MASK, "word.forward"),  "word.forward");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.ALT_DOWN_MASK, "word.backward"), "word.backward");
+        // Emacs 行頭・行末（Ctrl+A / Ctrl+E）
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_A, KeyEvent.CTRL_DOWN_MASK, "line.start"), "line.start");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_E, KeyEvent.CTRL_DOWN_MASK, "line.end"),   "line.end");
+        // Emacs ファイル先頭・末尾（Ctrl+Home / Ctrl+End）
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_HOME, KeyEvent.CTRL_DOWN_MASK, "file.start"), "file.start");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_END,  KeyEvent.CTRL_DOWN_MASK, "file.end"),   "file.end");
 
         // COMMAND モード（:に続く入力）
         // 基本的には文字入力をそのまま溜めるので、特別なキーバインドは ESC だけ
@@ -115,6 +134,12 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('y', "yank"), "yank");
         bind(Mode.VISUAL, KeyBinding.ofChar('d', "delete"), "delete");
         bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
+        bind(Mode.VISUAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
+        bind(Mode.VISUAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");
+        bind(Mode.VISUAL, KeyBinding.ofChar('e', "word.end"),      "word.end");
+        bind(Mode.VISUAL, KeyBinding.ofChar('0', "line.start"), "line.start");
+        bind(Mode.VISUAL, KeyBinding.ofChar('$', "line.end"),   "line.end");
+        bind(Mode.VISUAL, KeyBinding.ofChar('G', "file.end"),   "file.end");
 
         // VISUAL LINE モード（行単位選択）
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -124,5 +149,6 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('y', "yank"), "yank");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('d', "delete"), "delete");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('G', "file.end"), "file.end");
     }
 }
