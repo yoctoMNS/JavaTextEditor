@@ -74,6 +74,8 @@ public class ModalEditorTest {
         testAutoIndentNoIndent();
         testAutoIndentPreserve();
         testAutoIndentAfterOpenBrace();
+        testCloseBraceDedent();
+        testCloseBraceNoChange();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -1140,6 +1142,29 @@ public class ModalEditorTest {
         ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
         String[] lines = ed.getText().split("\n", -1);
         check("{ 後の行が4スペース", lines[1].equals("    "));
+        check("col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testCloseBraceDedent() {
+        System.out.println("--- } 入力: インデント1レベル下げ ---");
+        // "public void foo() {\n    " という状態から } を入力
+        ModalEditor ed = new ModalEditor("public void foo() {\n    ", null, null);
+        // 2行目末（col=4）でINSERT
+        pressKey(ed, 'j');        // row=1
+        pressKey(ed, '$');        // col=3 (NORMAL末尾)
+        pressKey(ed, 'a');        // INSERT, col=4
+        ed.processKey(0, '}', 0);
+        String[] lines = ed.getText().split("\n", -1);
+        check("} で行が '}'", lines[1].equals("}"));
+        check("col=1", ed.getCursorCol() == 1);
+    }
+
+    static void testCloseBraceNoChange() {
+        System.out.println("--- } 入力: 通常行では位置を変えずに挿入 ---");
+        ModalEditor ed = new ModalEditor("foo", null, null);
+        pressKey(ed, '$'); pressKey(ed, 'a'); // 行末INSERT col=3
+        ed.processKey(0, '}', 0);
+        check("} がそのまま挿入される", ed.getText().equals("foo}"));
         check("col=4", ed.getCursorCol() == 4);
     }
 

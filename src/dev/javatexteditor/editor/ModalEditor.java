@@ -277,10 +277,29 @@ public class ModalEditor {
                 }
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            // 通常文字の挿入（キーバインドに登録されていない文字）
-            buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
-            cursorCol++;
+            if (keyChar == '}') {
+                insertCloseBrace();
+            } else {
+                buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
+                cursorCol++;
+            }
         }
+    }
+
+    private void insertCloseBrace() {
+        String[] lines = getLines();
+        String currentLine = cursorRow < lines.length ? lines[cursorRow] : "";
+        // 現在行がインデントのみ（空白だけ）の場合、インデントを1レベル下げてから } を挿入
+        if (!currentLine.isEmpty() && currentLine.chars().allMatch(c -> c == ' ' || c == '\t')) {
+            int removeLen = Math.min(4, cursorCol);
+            if (removeLen > 0) {
+                int lineStart = offsetAt(cursorRow, 0);
+                buffer.delete(lineStart, removeLen);
+                cursorCol -= removeLen;
+            }
+        }
+        buffer.insert(offsetOfCursor(), "}");
+        cursorCol++;
     }
 
     private void insertNewlineWithIndent() {
