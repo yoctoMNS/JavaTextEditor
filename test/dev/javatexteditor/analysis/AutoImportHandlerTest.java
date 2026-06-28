@@ -35,6 +35,9 @@ public class AutoImportHandlerTest {
         testApplyImports(handler);
         testResolveCandidates(handler, index);
         testImportSuggesterSuggestNew(suggester, sourceAnalyzer);
+        testRemoveImport(handler);
+        testFindUnusedImports(handler);
+        testRemoveUnusedImports(handler);
 
         System.out.println("\n=== AutoImportHandlerTest: " + passed + "/" + (passed + failed) + " passed ===");
         if (failed > 0) System.exit(1);
@@ -203,6 +206,80 @@ public class AutoImportHandlerTest {
             assertFalse("alreadyImported false for new",
                 suggester.alreadyImported("java.util.Map", idx));
         }
+    }
+
+    // ----- removeImport -----
+
+    private static void testRemoveImport(AutoImportHandler handler) {
+        // 存在する import を削除
+        String src = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X {}";
+        PieceTable buf = new PieceTable(src);
+        boolean removed = handler.removeImport("java.util.List", buf);
+        assertTrue("removeImport returns true", removed);
+        String result = buf.getText();
+        assertFalse("List import gone", result.contains("import java.util.List;"));
+        assertTrue("Map import remains", result.contains("import java.util.Map;"));
+
+        // 存在しない import を削除しようとすると false
+        PieceTable buf2 = new PieceTable("package foo;\nclass X {}");
+        boolean removed2 = handler.removeImport("java.util.List", buf2);
+        assertFalse("removeImport missing returns false", removed2);
+
+        // 削除後テキストが正しい
+        String src3 = "package foo;\nimport java.util.List;\nclass X { List x; }";
+        PieceTable buf3 = new PieceTable(src3);
+        handler.removeImport("java.util.List", buf3);
+        String result3 = buf3.getText();
+        assertEqual("removeImport result", "package foo;\nclass X { List x; }", result3);
+    }
+
+    // ----- findUnusedImports -----
+
+    private static void testFindUnusedImports(AutoImportHandler handler) {
+        // 使用済みの import は返さない
+        String src1 = "package foo;\nimport java.util.List;\nclass X { List<String> x; }";
+        List<String> unused1 = handler.findUnusedImports(src1);
+        assertFalse("used import not in unused", unused1.contains("java.util.List"));
+
+        // 未使用の import は返す
+        String src2 = "package foo;\nimport java.util.List;\nclass X {}";
+        List<String> unused2 = handler.findUnusedImports(src2);
+        assertTrue("unused import detected", unused2.contains("java.util.List"));
+
+        // ワイルドカード import は除外
+        String src3 = "package foo;\nimport java.util.*;\nclass X {}";
+        List<String> unused3 = handler.findUnusedImports(src3);
+        assertFalse("wildcard import excluded", unused3.contains("java.util"));
+
+        // import なし → 空
+        List<String> unused4 = handler.findUnusedImports("class X {}");
+        assertTrue("no import → empty", unused4.isEmpty());
+
+        // 複数: 一部使用済み
+        String src5 = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X { List<String> x; }";
+        List<String> unused5 = handler.findUnusedImports(src5);
+        assertFalse("List used not in unused5", unused5.contains("java.util.List"));
+        assertTrue("Map unused in unused5", unused5.contains("java.util.Map"));
+    }
+
+    // ----- removeUnusedImports -----
+
+    private static void testRemoveUnusedImports(AutoImportHandler handler) {
+        // 未使用 import をすべて削除
+        String src = "package foo;\nimport java.util.List;\nimport java.util.Map;\nclass X { List<String> x; }";
+        PieceTable buf = new PieceTable(src);
+        List<String> removed = handler.removeUnusedImports(buf);
+        assertTrue("removeUnusedImports count", removed.size() == 1);
+        assertTrue("Map removed", removed.contains("java.util.Map"));
+        String result = buf.getText();
+        assertFalse("Map gone from text", result.contains("import java.util.Map;"));
+        assertTrue("List remains", result.contains("import java.util.List;"));
+
+        // 未使用 import なし → 空
+        String src2 = "package foo;\nimport java.util.List;\nclass X { List<String> x; }";
+        PieceTable buf2 = new PieceTable(src2);
+        List<String> removed2 = handler.removeUnusedImports(buf2);
+        assertTrue("no unused → empty removed", removed2.isEmpty());
     }
 
     // ----- assertion helpers -----

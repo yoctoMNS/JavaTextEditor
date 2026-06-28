@@ -136,7 +136,85 @@ public class AutoImportHandler {
         return result;
     }
 
+    /**
+     * バッファから特定の import 行を削除する。
+     * 対象 import が存在しない場合は何もしない。
+     *
+     * @return 削除したなら true、対象が見つからなかったなら false
+     */
+    public boolean removeImport(String fqn, PieceTable buffer) {
+        String importLine = "import " + fqn + ";";
+        String source = buffer.getText();
+        String[] lines = source.split("\n", -1);
+
+        int offset = 0;
+        for (String line : lines) {
+            if (line.stripLeading().equals(importLine)) {
+                buffer.delete(offset, line.length() + 1); // +1 for '\n'
+                return true;
+            }
+            offset += line.length() + 1;
+        }
+        return false;
+    }
+
+    /**
+     * ソース内で参照されていない import の FQN リストを返す。
+     * ワイルドカード import・static import は常に「使用中」とみなし対象外。
+     * SourceAnalyzer が使えない場合は空リストを返す。
+     */
+    public List<String> findUnusedImports(String source) {
+        SourceIndex idx;
+        try {
+            idx = sourceAnalyzer.analyzeText(source);
+        } catch (AnalysisException e) {
+            return List.of();
+        }
+
+        if (idx.imports().isEmpty()) return List.of();
+
+        // import 行より後のコード部分を対象にする
+        String[] lines = source.split("\n", -1);
+        int lastImportLine = idx.imports().stream()
+                .mapToInt(ImportEntry::lineNumber).max().orElse(-1);
+
+        StringBuilder body = new StringBuilder();
+        for (int i = lastImportLine + 1; i < lines.length; i++) {
+            body.append(lines[i]).append('\n');
+        }
+        String bodyStr = body.toString();
+
+        List<String> unused = new ArrayList<>();
+        for (ImportEntry e : idx.imports()) {
+            if (e.isWildcard() || e.isStatic()) continue;
+            String simple = simpleName(e.fullyQualifiedName());
+            if (!bodyStr.contains(simple)) {
+                unused.add(e.fullyQualifiedName());
+            }
+        }
+        return List.copyOf(unused);
+    }
+
+    /**
+     * バッファから未使用の import をすべて削除する。
+     *
+     * @return 削除された FQN リスト
+     */
+    public List<String> removeUnusedImports(PieceTable buffer) {
+        List<String> unused = findUnusedImports(buffer.getText());
+        List<String> removed = new ArrayList<>();
+        for (String fqn : unused) {
+            if (removeImport(fqn, buffer)) removed.add(fqn);
+        }
+        return List.copyOf(removed);
+    }
+
     // ----- private helpers -----
+
+    private static String simpleName(String fqn) {
+        int dot = fqn.lastIndexOf('.');
+        return dot >= 0 ? fqn.substring(dot + 1) : fqn;
+    }
 
     private List<String> getAlreadyImported(String source) {
         try {

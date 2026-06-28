@@ -213,6 +213,10 @@ public class ModalEditor {
                 if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
                 if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
                 // マッチしない場合は通常処理へ
+            } else if (seq.equals(" i")) {
+                // SPC+i+? シーケンス（import 操作）
+                if (matches(keyCode, keyChar, KeyEvent.VK_O, 'o')) { organizeImports(); return; }
+                // マッチしない場合は通常処理へ
             } else if (prev == ' ') {
                 // SPC キー: 1打鍵目
                 if (matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return; }
@@ -222,6 +226,11 @@ public class ModalEditor {
                 if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) {
                     pendingSequence = " g";
                     statusMessage = "SPC-g-";
+                    return;
+                }
+                if (matches(keyCode, keyChar, KeyEvent.VK_I, 'i')) {
+                    pendingSequence = " i";
+                    statusMessage = "SPC-i-";
                     return;
                 }
             }
@@ -503,6 +512,11 @@ public class ModalEditor {
         } else if (cmd.startsWith("rename ")) {
             String args = cmd.substring(7).trim();
             executeRename(args);
+        } else if (cmd.equals("oi") || cmd.equals("organize-imports")) {
+            organizeImports();
+        } else if (cmd.startsWith("remove-import ")) {
+            String fqn = cmd.substring("remove-import ".length()).trim();
+            executeRemoveImport(fqn);
         } else if (cmd.equals("sp") || cmd.equals("split")) {
             if (splitVerticalCallback != null) splitVerticalCallback.run();
         } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
@@ -1441,6 +1455,40 @@ public class ModalEditor {
                        + indent + "}\n";
         insertBeforeLastBrace(methods);
         statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() を生成しました";
+        syncCanvas();
+    }
+
+    /** 未使用の import をすべて削除する（SPC+i+o / :oi）。 */
+    private void organizeImports() {
+        if (autoImportHandler == null) {
+            statusMessage = "E: AutoImportHandler が設定されていません";
+            syncCanvas();
+            return;
+        }
+        List<String> removed = autoImportHandler.removeUnusedImports(buffer);
+        if (removed.isEmpty()) {
+            statusMessage = "未使用 import なし";
+        } else {
+            statusMessage = removed.size() + " 件の import を削除しました";
+        }
+        syncCanvas();
+    }
+
+    /** 特定 FQN の import を削除する（:remove-import <fqn>）。 */
+    private void executeRemoveImport(String fqn) {
+        if (fqn.isEmpty()) {
+            statusMessage = "E: FQN を指定してください";
+            syncCanvas();
+            return;
+        }
+        if (autoImportHandler == null) {
+            statusMessage = "E: AutoImportHandler が設定されていません";
+            syncCanvas();
+            return;
+        }
+        boolean removed = autoImportHandler.removeImport(fqn, buffer);
+        statusMessage = removed ? "import " + fqn + " を削除しました"
+                                : "E: import " + fqn + " が見つかりません";
         syncCanvas();
     }
 
