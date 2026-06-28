@@ -89,6 +89,18 @@ public class ModalEditorTest {
         testTabSkipsClosingPair();
         testTabInsertSpaces();
 
+        // Getter/Setter 自動生成
+        testParseFieldInt();
+        testParseFieldBoolean();
+        testParseFieldString();
+        testParseFieldGeneric();
+        testParseFieldNoSemicolon();
+        testGenerateGetter();
+        testGenerateGetterBoolean();
+        testGenerateSetter();
+        testGenerateGetterAndSetter();
+        testGenerateGetterMultipleFields();
+
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
     }
@@ -1291,6 +1303,156 @@ public class ModalEditorTest {
         ed.processKey(KeyEvent.VK_TAB, '\t', 0);
         check("4スペース挿入", ed.getText().equals("    hello"));
         check("col=4", ed.getCursorCol() == 4);
+    }
+
+    // -------------------------------------------------------------------------
+    // Getter/Setter 自動生成
+    // -------------------------------------------------------------------------
+
+    /** SPC+g+g で getter が挿入されることを確認する。 */
+    static void testGenerateGetter() {
+        System.out.println("--- Getter自動生成 ---");
+        String src = "public class Foo {\n    private int hp;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        // カーソルを "private int hp;" 行（row=1）へ
+        pressKey(ed, 'j');
+        // SPC g g
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        String text = ed.getText();
+        check("getter: getHp() が含まれる", text.contains("public int getHp()"));
+        check("getter: return hp が含まれる", text.contains("return hp;"));
+        check("getter: フィールド行が残る", text.contains("private int hp;"));
+    }
+
+    static void testGenerateGetterBoolean() {
+        System.out.println("--- boolean Getter自動生成 ---");
+        String src = "public class Foo {\n    private boolean active;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        String text = ed.getText();
+        check("boolean getter: isActive() が含まれる", text.contains("public boolean isActive()"));
+        check("boolean getter: return active が含まれる", text.contains("return active;"));
+    }
+
+    static void testGenerateSetter() {
+        System.out.println("--- Setter自動生成 ---");
+        String src = "public class Foo {\n    private int hp;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_S, 's', 0);
+        String text = ed.getText();
+        check("setter: setHp() が含まれる", text.contains("public void setHp("));
+        check("setter: this.hp = hp が含まれる", text.contains("this.hp = hp;"));
+    }
+
+    static void testGenerateGetterAndSetter() {
+        System.out.println("--- Getter+Setter自動生成 ---");
+        String src = "public class Foo {\n    private String name;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_D, 'd', 0);
+        String text = ed.getText();
+        check("getter+setter: getName() が含まれる", text.contains("public String getName()"));
+        check("getter+setter: setName() が含まれる", text.contains("public void setName("));
+    }
+
+    static void testGenerateGetterMultipleFields() {
+        System.out.println("--- 複数フィールドのGetter生成 ---");
+        String src = "public class Foo {\n    private int hp;\n    private int mp;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        // hp のgetter
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        // mp のgetter（カーソルをmp行へ戻す）
+        // カーソルが生成コードに移動しているので j/k で mp 行へ
+        // 代わりに行番号で直接確認
+        String text = ed.getText();
+        check("複数フィールド: getHp() が含まれる", text.contains("public int getHp()"));
+        // mp 行でもう一度実行
+        ModalEditor ed2 = new ModalEditor(src);
+        pressKey(ed2, 'j');
+        pressKey(ed2, 'j');
+        ed2.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed2.processKey(KeyEvent.VK_G, 'g', 0);
+        ed2.processKey(KeyEvent.VK_G, 'g', 0);
+        String text2 = ed2.getText();
+        check("複数フィールド: getMp() が含まれる", text2.contains("public int getMp()"));
+    }
+
+    static void testParseFieldInt() {
+        System.out.println("--- フィールドパース: int ---");
+        String src = "public class Foo {\n    private int hp;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j'); // hp行
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("int型フィールドをパースできる", ed.getText().contains("int getHp()"));
+    }
+
+    static void testParseFieldBoolean() {
+        System.out.println("--- フィールドパース: boolean ---");
+        String src = "public class Foo {\n    private boolean flag;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("boolean型フィールドをパースできる", ed.getText().contains("boolean isFlag()"));
+    }
+
+    static void testParseFieldString() {
+        System.out.println("--- フィールドパース: String ---");
+        String src = "public class Foo {\n    private String name;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("String型フィールドをパースできる", ed.getText().contains("String getName()"));
+    }
+
+    static void testParseFieldGeneric() {
+        System.out.println("--- フィールドパース: ジェネリクス ---");
+        // List<String> は末尾トークンが "list;" → パース可能
+        String src = "public class Foo {\n    private List<String> items;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j');
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        // ジェネリクス型はスペースで分割すると型名が "List<String>" にはならないが
+        // 最後の2トークンをとる実装なので "List<String>" は取れない（"items" だけ取れる）
+        // この実装では型は tokens[length-2] = "<String>" になってしまう場合があるため
+        // 「パース失敗として getXxx が含まれない」か「含まれるか」のどちらかを確認
+        // → 現実装は tokens を空白分割するため "List<String>" は1トークン扱い → OK
+        String text = ed.getText();
+        // ジェネリクスは空白分割で "List<String>" と "items" になるはず
+        check("ジェネリクス型でも getItems() が含まれる", text.contains("getItems()"));
+    }
+
+    static void testParseFieldNoSemicolon() {
+        System.out.println("--- フィールドパース: セミコロンなし ---");
+        // セミコロンがない行（メソッド定義行など）はパース失敗になることを確認
+        String src = "public class Foo {\n    public void doSomething() {\n    }\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        pressKey(ed, 'j'); // void doSomething() 行
+        String before = ed.getText();
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        ed.processKey(KeyEvent.VK_G, 'g', 0);
+        check("セミコロンなし行でgetter生成しない", ed.getText().equals(before) || ed.getStatusMessage().contains("見つかりません"));
     }
 
     // -------------------------------------------------------------------------

@@ -48,7 +48,7 @@ public class ModalEditor {
     private int anchorCol = 0;
     private String yankRegister = "";
     private String yankType = "char"; // "char" or "line"
-    private char pendingNormalChar = 0; // yy / dd の2打鍵シーケンス管理
+    private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
     private final StringBuilder commandBuffer = new StringBuilder();
     private String currentFilePath = null;
     private String statusMessage = "";
@@ -140,7 +140,7 @@ public class ModalEditor {
         }
         if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE) && keyCode == KeyEvent.VK_ESCAPE) {
             mode = Mode.NORMAL;
-            pendingNormalChar = 0;
+            pendingSequence = "";
             syncCanvas();
             return;
         }
@@ -183,10 +183,11 @@ public class ModalEditor {
         }
 
         // 2打鍵シーケンス（yy / dd）の処理
-        if (pendingNormalChar != 0) {
-            char prev = pendingNormalChar;
-            pendingNormalChar = 0;
+        if (!pendingSequence.isEmpty()) {
+            String seq = pendingSequence;
+            pendingSequence = "";
             statusMessage = "";
+            char prev = seq.charAt(0);
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
@@ -206,10 +207,24 @@ public class ModalEditor {
                 if (movePaneNextCallback != null) movePaneNextCallback.run();
                 return;
             }
-            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return; }
-            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return; }
-            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return; }
-            if (prev == ' ' && matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return; }
+            // SPC+g+? シーケンス（SPC+g の2打鍵の後）
+            if (seq.equals(" g")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
+                // マッチしない場合は通常処理へ
+            } else if (prev == ' ') {
+                // SPC キー: 1打鍵目
+                if (matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) {
+                    pendingSequence = " g";
+                    statusMessage = "SPC-g-";
+                    return;
+                }
+            }
             // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
 
@@ -270,11 +285,11 @@ public class ModalEditor {
             case "delete.char" -> deleteCharAtCursor();
             case "paste.after" -> pasteAfter();
             case "paste.before" -> pasteBefore();
-            case "yank.pending" -> pendingNormalChar = 'y';
-            case "delete.pending" -> pendingNormalChar = 'd';
-            case "goto.pending"   -> { pendingNormalChar = 'g'; statusMessage = "g-"; }
-            case "split.pending"  -> { pendingNormalChar = 's'; statusMessage = "s-"; }
-            case "leader.pending" -> { pendingNormalChar = ' '; statusMessage = "SPC-"; }
+            case "yank.pending" -> pendingSequence = "y";
+            case "delete.pending" -> pendingSequence = "d";
+            case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
+            case "split.pending"  -> { pendingSequence = "s"; statusMessage = "s-"; }
+            case "leader.pending" -> { pendingSequence = " "; statusMessage = "SPC-"; }
             case "line.swap.down" -> swapLineDown();
             case "line.swap.up"   -> swapLineUp();
             case "word.forward"  -> moveWordForward();
@@ -1342,6 +1357,123 @@ public class ModalEditor {
         String methodName = line.substring(start, end);
         if (className.isEmpty() || methodName.isEmpty()) return null;
         return new String[]{className, methodName};
+    }
+
+    // ---- Getter / Setter 自動生成 ----
+
+    /**
+     * カーソル行のフィールド宣言を解析する。
+     * 例: "    private int hp;" -> ["int", "hp"]
+     * 解析失敗時は null を返す。
+     */
+    private String[] parseFieldAtCursor() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return null;
+        String line = lines[cursorRow].trim();
+        // 末尾のセミコロンを除去
+        if (!line.endsWith(";")) return null;
+        line = line.substring(0, line.length() - 1).trim();
+        // アクセス修飾子・static・final 等のトークンを除去
+        String[] tokens = line.split("\\s+");
+        // 型名とフィールド名は末尾2トークン
+        if (tokens.length < 2) return null;
+        String fieldName = tokens[tokens.length - 1];
+        String typeName  = tokens[tokens.length - 2];
+        // '=' による初期化があれば除去（例: "int x = 0"）
+        int eqIdx = typeName.indexOf('=');
+        if (eqIdx >= 0) return null; // 複雑な初期化式は対象外
+        int fnEq = fieldName.indexOf('=');
+        if (fnEq >= 0) fieldName = fieldName.substring(0, fnEq).trim();
+        // 配列型（int[] や int[][]）はそのまま許容
+        if (!fieldName.matches("[a-zA-Z_$][a-zA-Z0-9_$]*")) return null;
+        return new String[]{typeName, fieldName};
+    }
+
+    private String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    /** カーソル行フィールドの getter を生成してクラス末尾 '}' 直前に挿入する。 */
+    private void generateGetter() {
+        String[] field = parseFieldAtCursor();
+        if (field == null) { statusMessage = "Getter: フィールド宣言が見つかりません"; syncCanvas(); return; }
+        String type = field[0];
+        String name = field[1];
+        String prefix = type.equals("boolean") ? "is" : "get";
+        String indent = detectIndent();
+        String method = "\n" + indent + "public " + type + " " + prefix + capitalize(name) + "() {\n"
+                      + indent + indent + "return " + name + ";\n"
+                      + indent + "}\n";
+        insertBeforeLastBrace(method);
+        statusMessage = prefix + capitalize(name) + "() を生成しました";
+        syncCanvas();
+    }
+
+    /** カーソル行フィールドの setter を生成してクラス末尾 '}' 直前に挿入する。 */
+    private void generateSetter() {
+        String[] field = parseFieldAtCursor();
+        if (field == null) { statusMessage = "Setter: フィールド宣言が見つかりません"; syncCanvas(); return; }
+        String type = field[0];
+        String name = field[1];
+        String indent = detectIndent();
+        String method = "\n" + indent + "public void set" + capitalize(name) + "(" + type + " " + name + ") {\n"
+                      + indent + indent + "this." + name + " = " + name + ";\n"
+                      + indent + "}\n";
+        insertBeforeLastBrace(method);
+        statusMessage = "set" + capitalize(name) + "() を生成しました";
+        syncCanvas();
+    }
+
+    /** getter と setter の両方を生成する。 */
+    private void generateGetterAndSetter() {
+        String[] field = parseFieldAtCursor();
+        if (field == null) { statusMessage = "Getter/Setter: フィールド宣言が見つかりません"; syncCanvas(); return; }
+        String type = field[0];
+        String name = field[1];
+        String prefix = type.equals("boolean") ? "is" : "get";
+        String indent = detectIndent();
+        String methods = "\n" + indent + "public " + type + " " + prefix + capitalize(name) + "() {\n"
+                       + indent + indent + "return " + name + ";\n"
+                       + indent + "}\n"
+                       + "\n" + indent + "public void set" + capitalize(name) + "(" + type + " " + name + ") {\n"
+                       + indent + indent + "this." + name + " = " + name + ";\n"
+                       + indent + "}\n";
+        insertBeforeLastBrace(methods);
+        statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() を生成しました";
+        syncCanvas();
+    }
+
+    /** ファイル末尾の '}' を探し、その直前にテキストを挿入する。 */
+    private void insertBeforeLastBrace(String text) {
+        String content = buffer.getText();
+        int pos = content.lastIndexOf('}');
+        if (pos < 0) {
+            // '}' が見つからなければ末尾に追記
+            buffer.insert(content.length(), text);
+        } else {
+            buffer.insert(pos, text);
+        }
+        // カーソルを挿入直後へ
+        String newContent = buffer.getText();
+        int insertedPos = (pos < 0 ? content.length() : pos) + text.length();
+        // 挿入後の行列を再計算
+        int row = 0, col = 0;
+        for (int i = 0; i < insertedPos && i < newContent.length(); i++) {
+            if (newContent.charAt(i) == '\n') { row++; col = 0; } else { col++; }
+        }
+        cursorRow = row;
+        cursorCol = Math.max(0, col - 1);
+    }
+
+    /** ファイル内の最初のコードインデント（スペースかタブ）を検出する。 */
+    private String detectIndent() {
+        for (String line : getLines()) {
+            if (line.startsWith("\t")) return "\t";
+            if (line.startsWith("    ")) return "    ";
+            if (line.startsWith("  ")) return "  ";
+        }
+        return "    ";
     }
 
     /** カーソル位置の Java 識別子（単語）を返す。識別子がなければ空文字列。 */
