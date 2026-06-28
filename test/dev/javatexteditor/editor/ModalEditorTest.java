@@ -70,6 +70,10 @@ public class ModalEditorTest {
         testInsertLineStartEnd();
         testInsertFileStartEnd();
         testLineStartNonBlank();
+        testTabInsert();
+        testAutoIndentNoIndent();
+        testAutoIndentPreserve();
+        testAutoIndentAfterOpenBrace();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -1093,6 +1097,50 @@ public class ModalEditorTest {
         ModalEditor ed3 = new ModalEditor("   ", null, null);
         pressKey(ed3, '^');
         check("^: 全空白行 → col=行末以下", ed3.getCursorCol() <= 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Tab / 自動インデント
+    // -------------------------------------------------------------------------
+
+    static void testTabInsert() {
+        System.out.println("--- Tab: 4スペース挿入 ---");
+        ModalEditor ed = new ModalEditor("", null, null);
+        pressKey(ed, 'i');
+        ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+        check("Tab: テキストに4スペース", ed.getText().equals("    "));
+        check("Tab: col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testAutoIndentNoIndent() {
+        System.out.println("--- 自動インデント: インデントなし行 ---");
+        ModalEditor ed = new ModalEditor("hello", null, null);
+        pressKey(ed, '$'); pressKey(ed, 'a'); // 行末INSERT
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        String[] lines = ed.getText().split("\n", -1);
+        check("Enter後に2行", lines.length == 2);
+        check("2行目はインデントなし", lines[1].equals(""));
+        check("col=0", ed.getCursorCol() == 0);
+    }
+
+    static void testAutoIndentPreserve() {
+        System.out.println("--- 自動インデント: インデント継承 ---");
+        ModalEditor ed = new ModalEditor("    hello", null, null);
+        pressKey(ed, '$'); pressKey(ed, 'a');
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        String[] lines = ed.getText().split("\n", -1);
+        check("2行目が4スペースインデント", lines[1].startsWith("    "));
+        check("col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testAutoIndentAfterOpenBrace() {
+        System.out.println("--- 自動インデント: { 後に追加インデント ---");
+        ModalEditor ed = new ModalEditor("public void foo() {", null, null);
+        pressKey(ed, '$'); pressKey(ed, 'a');
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        String[] lines = ed.getText().split("\n", -1);
+        check("{ 後の行が4スペース", lines[1].equals("    "));
+        check("col=4", ed.getCursorCol() == 4);
     }
 
     // -------------------------------------------------------------------------

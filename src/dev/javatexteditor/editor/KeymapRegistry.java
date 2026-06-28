@@ -112,6 +112,7 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_P, KeyEvent.CTRL_DOWN_MASK, "cursor.up"), "cursor.up");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_BACK_SPACE, 0, "delete.before"), "delete.before");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ENTER, 0, "insert.newline"), "insert.newline");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_TAB, 0, "insert.tab"), "insert.tab");
         // Emacs 単語移動（Alt+F / Alt+B）
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.ALT_DOWN_MASK, "word.forward"),  "word.forward");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.ALT_DOWN_MASK, "word.backward"), "word.backward");

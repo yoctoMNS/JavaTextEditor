@@ -258,10 +258,10 @@ public class ModalEditor {
                         if (onReturnToNormal != null) onReturnToNormal.run();
                     }
                     case "delete.before" -> handleBackspace();
-                    case "insert.newline" -> {
-                        buffer.insert(offsetOfCursor(), "\n");
-                        cursorRow++;
-                        cursorCol = 0;
+                    case "insert.newline" -> insertNewlineWithIndent();
+                    case "insert.tab" -> {
+                        buffer.insert(offsetOfCursor(), "    ");
+                        cursorCol += 4;
                     }
                     case "cursor.right"  -> moveCursor(0, 1);
                     case "cursor.left"   -> moveCursor(0, -1);
@@ -281,6 +281,29 @@ public class ModalEditor {
             buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
             cursorCol++;
         }
+    }
+
+    private void insertNewlineWithIndent() {
+        String[] lines = getLines();
+        String currentLine = cursorRow < lines.length ? lines[cursorRow] : "";
+
+        // 現在行の先頭インデント（スペース・タブ）を取得
+        int indentLen = 0;
+        while (indentLen < currentLine.length()
+                && (currentLine.charAt(indentLen) == ' ' || currentLine.charAt(indentLen) == '\t')) {
+            indentLen++;
+        }
+        String indent = currentLine.substring(0, indentLen);
+
+        // カーソル直前の非空白文字が '{' なら追加インデント
+        String beforeCursor = currentLine.substring(0, Math.min(cursorCol, currentLine.length())).stripTrailing();
+        if (!beforeCursor.isEmpty() && beforeCursor.charAt(beforeCursor.length() - 1) == '{') {
+            indent += "    ";
+        }
+
+        buffer.insert(offsetOfCursor(), "\n" + indent);
+        cursorRow++;
+        cursorCol = indent.length();
     }
 
     private void handleBackspace() {
