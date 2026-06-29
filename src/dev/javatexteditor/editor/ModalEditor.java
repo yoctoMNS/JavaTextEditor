@@ -10,6 +10,8 @@ import dev.javatexteditor.buffer.PieceTable;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
+import dev.javatexteditor.search.DirEntry;
+import dev.javatexteditor.search.DirectoryLister;
 import dev.javatexteditor.search.FileNameSearcher;
 import dev.javatexteditor.search.ProjectSearcher;
 import dev.javatexteditor.search.SearchResult;
@@ -40,7 +42,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
     private enum FileSearchType { NAME, GREP }
 
     private UndoablePieceTable buffer;
@@ -118,7 +120,14 @@ public class ModalEditor {
     // BufferPicker で `d` を押してバッファを削除するコールバック
     private java.util.function.Consumer<BufferPicker.BufferEntry> onBufferDelete = null;
     // 作業ディレクトリ変更コールバック（Main.java から WorkingDirectoryManager に委譲）
-    private java.util.function.Consumer<Path> changeWdCallback = null;
+    // 成功時は null, 失敗時は日本語エラーメッセージを返す。
+    private java.util.function.Function<Path, String> changeWdCallback = null;
+    // filer モード状態
+    private List<DirEntry> filerEntries = List.of();
+    private List<DirEntry> filerFiltered = List.of();
+    private int filerSelectedIdx = 0;
+    private boolean filerSearchMode = false;
+    private final StringBuilder filerQuery = new StringBuilder();
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
     private String savedBufferText = null;       // 元バッファのテキスト
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
@@ -252,6 +261,7 @@ public class ModalEditor {
             case FILESEARCH    -> processFileSearchKey(keyCode, keyChar);
             case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
             case IMPORT_SELECT -> processImportSelectKey(keyCode, modifiers);
+            case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
         }
         syncCanvas();
     }
@@ -856,7 +866,7 @@ public class ModalEditor {
         } else if (keyCode == KeyEvent.VK_ENTER) {
             executeCommand(commandBuffer.toString());
             commandBuffer.setLength(0);
-            mode = Mode.NORMAL;
+            if (mode == Mode.COMMAND) mode = Mode.NORMAL;
 
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             commandBuffer.append(keyChar);
@@ -1299,17 +1309,7 @@ public class ModalEditor {
         } else if (cmd.equals("pwd")) {
             statusMessage = getProjectRoot().toString();
         } else if (cmd.startsWith("cd ")) {
-            String pathStr = cmd.substring(3).trim();
-            try {
-                Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
-                if (changeWdCallback != null) {
-                    changeWdCallback.accept(target);
-                } else {
-                    statusMessage = "E: working directory handler not set";
-                }
-            } catch (Exception ex) {
-                statusMessage = "E: " + ex.getMessage();
-            }
+            changeDirectory(cmd.substring(3).trim());
         } else if (cmd.equals("sp") || cmd.equals("split")) {
             if (splitVerticalCallback != null) splitVerticalCallback.run();
         } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
@@ -2051,6 +2051,149 @@ public class ModalEditor {
     // GUI同期
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // FILERモード処理（:cd 実行後に表示されるディレクトリ一覧オーバーレイ）
+    // -------------------------------------------------------------------------
+
+    private void enterFiler() {
+        try {
+            filerEntries = DirectoryLister.listDirectoryEntries(getProjectRoot());
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+            filerEntries = List.of();
+        }
+        filerFiltered = filerEntries;
+        filerSelectedIdx = 0;
+        filerSearchMode = false;
+        filerQuery.setLength(0);
+        mode = Mode.FILER;
+    }
+
+    private void changeDirectory(String pathStr) {
+        try {
+            Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
+            if (changeWdCallback == null) {
+                statusMessage = "E: working directory handler not set";
+                return;
+            }
+            String err = changeWdCallback.apply(target);
+            if (err != null) {
+                statusMessage = "E: " + err;
+                return;
+            }
+            enterFiler();
+        } catch (Exception ex) {
+            statusMessage = "E: " + ex.getMessage();
+        }
+    }
+
+    private void processFilerKey(int keyCode, char keyChar, int modifiers) {
+        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+
+        if (filerSearchMode) {
+            if (keyCode == KeyEvent.VK_ESCAPE) {
+                filerSearchMode = false;
+                filerQuery.setLength(0);
+                filerFiltered = filerEntries;
+                filerSelectedIdx = 0;
+                return;
+            }
+            if (keyCode == KeyEvent.VK_ENTER) {
+                openSelectedEntry();
+                return;
+            }
+            if (keyCode == KeyEvent.VK_BACK_SPACE) {
+                if (filerQuery.length() > 0) {
+                    filerQuery.deleteCharAt(filerQuery.length() - 1);
+                    filerFiltered = DirectoryLister.filterEntries(filerEntries, filerQuery.toString());
+                    filerSelectedIdx = 0;
+                }
+                return;
+            }
+            if (ctrlDown && keyCode == KeyEvent.VK_N) { moveSelection(1);  return; }
+            if (ctrlDown && keyCode == KeyEvent.VK_P) { moveSelection(-1); return; }
+            if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ' && !ctrlDown) {
+                filerQuery.append(keyChar);
+                filerFiltered = DirectoryLister.filterEntries(filerEntries, filerQuery.toString());
+                filerSelectedIdx = 0;
+            }
+        } else {
+            if (keyCode == KeyEvent.VK_ESCAPE) {
+                mode = Mode.NORMAL;
+                return;
+            }
+            if (keyCode == KeyEvent.VK_ENTER) {
+                openSelectedEntry();
+                return;
+            }
+            if (ctrlDown && keyCode == KeyEvent.VK_N) { moveSelection(1);  return; }
+            if (ctrlDown && keyCode == KeyEvent.VK_P) { moveSelection(-1); return; }
+            if (keyChar == '/') {
+                filerSearchMode = true;
+                filerQuery.setLength(0);
+            }
+        }
+    }
+
+    private void moveSelection(int delta) {
+        if (filerFiltered.isEmpty()) return;
+        filerSelectedIdx = Math.max(0, Math.min(filerFiltered.size() - 1, filerSelectedIdx + delta));
+    }
+
+    private void openSelectedEntry() {
+        if (filerFiltered.isEmpty()) return;
+        DirEntry entry = filerFiltered.get(filerSelectedIdx);
+        if (entry.kind() == DirEntry.Kind.DIRECTORY) {
+            if (changeWdCallback == null) {
+                statusMessage = "E: working directory handler not set";
+                return;
+            }
+            String err = changeWdCallback.apply(entry.path());
+            if (err != null) {
+                statusMessage = "E: " + err;
+                return;
+            }
+            enterFiler();
+        } else {
+            mode = Mode.NORMAL;
+            loadFromFile(entry.path().toString());
+        }
+    }
+
+    private String buildFilerPreview() {
+        if (filerFiltered.isEmpty()) {
+            return filerSearchMode ? "(no match)" : "(empty)";
+        }
+        DirEntry entry = filerFiltered.get(Math.min(filerSelectedIdx, filerFiltered.size() - 1));
+        try {
+            if (entry.kind() == DirEntry.Kind.DIRECTORY) {
+                List<DirEntry> children = DirectoryLister.listDirectoryEntries(entry.path());
+                if (children.isEmpty()) return "(empty directory)";
+                StringBuilder sb = new StringBuilder();
+                int limit = Math.min(children.size(), 20);
+                for (int i = 0; i < limit; i++) {
+                    DirEntry c = children.get(i);
+                    sb.append(c.kind() == DirEntry.Kind.DIRECTORY ? c.name() + "/" : c.name()).append('\n');
+                }
+                if (children.size() > limit) sb.append("... (").append(children.size() - limit).append(" more)");
+                return sb.toString();
+            } else {
+                StringBuilder sb = new StringBuilder();
+                try (var reader = Files.newBufferedReader(entry.path())) {
+                    String line;
+                    int count = 0;
+                    while (count < 30 && (line = reader.readLine()) != null) {
+                        sb.append(line).append('\n');
+                        count++;
+                    }
+                }
+                return sb.toString();
+            }
+        } catch (IOException e) {
+            return "(error: " + e.getMessage() + ")";
+        }
+    }
+
     private void syncCanvas() {
         if (canvas != null) {
             canvas.setText(buffer.getText());
@@ -2104,6 +2247,18 @@ public class ModalEditor {
                 String title = "Import: " + importSelectSymbol
                     + "  [" + sym + "/" + total + "]";
                 canvas.setTelescopeState(true, title, "", items, importSelectIdx, "");
+            } else if (mode == Mode.FILER) {
+                // filer オーバーレイ: DirEntry → TelescopeItem に変換して既存描画を再利用
+                List<TelescopeItem> items = new ArrayList<>();
+                for (DirEntry e : filerFiltered) {
+                    String display = e.kind() == DirEntry.Kind.DIRECTORY ? e.name() + "/" : e.name();
+                    items.add(new TelescopeItem(display, e.path().toString(), 0, 0));
+                }
+                Path root = getProjectRoot();
+                String dirName = root.getFileName() != null ? root.getFileName().toString() : root.toString();
+                String filerTitle = filerSearchMode ? dirName + " /" : dirName;
+                String filerQ = filerSearchMode ? filerQuery.toString() : "";
+                canvas.setTelescopeState(true, filerTitle, filerQ, items, filerSelectedIdx, buildFilerPreview());
             } else {
                 canvas.setTelescopeState(false, "", "", List.of(), 0, "");
             }
@@ -2126,11 +2281,16 @@ public class ModalEditor {
     public boolean isSearchMode()         { return mode == Mode.SEARCH; }
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
+    public boolean isFilerMode()          { return mode == Mode.FILER; }
+    public int getFilerSelectedIdx()      { return filerSelectedIdx; }
+    public List<DirEntry> getFilerFiltered() { return filerFiltered; }
+    public boolean isFilerSearchMode()    { return filerSearchMode; }
+    public String getFilerQuery()         { return filerQuery.toString(); }
     public String getTelescopeQuery()     { return telescopeQuery.toString(); }
     public List<TelescopeItem> getTelescopeResults() { return telescopeResults; }
     public int getTelescopeSelectedIdx()  { return telescopeSelectedIdx; }
     public void setProjectRoot(Path root)    { this.projectRoot = root; }
-    public void setChangeWorkingDirectoryCallback(java.util.function.Consumer<Path> cb) {
+    public void setChangeWorkingDirectoryCallback(java.util.function.Function<Path, String> cb) {
         this.changeWdCallback = cb;
     }
     private Path getProjectRoot() {
