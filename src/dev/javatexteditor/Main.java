@@ -187,8 +187,9 @@ public class Main {
                         : COMPILE_ANALYZER.analyze(source);
                     SwingUtilities.invokeLater(() -> {
                         canvas.setDiagnostics(diags);
+                        // 未使用削除は handleAutoImport の全候補処理完了後に実行
+                        editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
                         editor.handleAutoImport(diags);
-                        editor.organizeImportsRemoveUnused();
                     });
                 } catch (AnalysisException e) {
                     SwingUtilities.invokeLater(() -> {

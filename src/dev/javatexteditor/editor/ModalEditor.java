@@ -48,6 +48,8 @@ public class ModalEditor {
     private Runnable onSave = null;
     // Ctrl+Shift+O（organize imports）時に呼ばれるコールバック（コンパイル→auto-import）
     private Runnable onOrganizeImports = null;
+    // handleAutoImport で全候補処理完了後に呼ぶコールバック（未使用 import 削除等）
+    private Runnable onImportComplete = null;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -156,6 +158,11 @@ public class ModalEditor {
      */
     public void setOnOrganizeImports(Runnable callback) {
         this.onOrganizeImports = callback;
+    }
+
+    /** handleAutoImport の全候補処理完了後に1回だけ呼ばれるコールバックを設定する。 */
+    public void setOnImportComplete(Runnable callback) {
+        this.onImportComplete = callback;
     }
 
     /** 現在開いているファイルのパスを返す（未設定の場合は null）。 */
@@ -1555,7 +1562,11 @@ public class ModalEditor {
         if (autoImportHandler == null) return;
         Map<String, List<String>> candidates =
             autoImportHandler.resolveCandidates(diags, buffer.getText());
-        if (candidates.isEmpty()) return;
+        if (candidates.isEmpty()) {
+            // 追加すべき import がない: 後処理を即実行
+            if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
+            return;
+        }
 
         List<Map.Entry<String, List<String>>> entries = new ArrayList<>(candidates.entrySet());
 
@@ -1574,6 +1585,9 @@ public class ModalEditor {
             pendingImports.addAll(multi);
             pendingImportIdx = 0;
             showImportPrompt();
+        } else {
+            // 全て自動挿入完了: 後処理を即実行
+            if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
         }
         syncCanvas();
     }
@@ -1590,6 +1604,11 @@ public class ModalEditor {
             pendingImports.clear();
             pendingImportIdx = 0;
             statusMessage = "";
+            // 全候補処理完了: 未使用 import 削除等の後処理を実行
+            if (onImportComplete != null) {
+                onImportComplete.run();
+                onImportComplete = null;
+            }
         } else {
             showImportPrompt();
         }
