@@ -1835,13 +1835,10 @@ public class ModalEditor {
      */
     public void handleAutoImport(List<CompileDiagnostic> diags) {
         if (autoImportHandler == null) return;
-        // DEBUG: ステータスに診断数と候補数を表示
-        List<String> missing = autoImportHandler.findMissingSymbols(diags);
         Map<String, List<String>> candidates =
             autoImportHandler.resolveCandidates(diags, buffer.getText());
         if (candidates.isEmpty()) {
-            statusMessage = "auto-import: 挿入対象なし [diags=" + diags.size()
-                + " missing=" + missing + " candidates=0]";
+            statusMessage = "auto-import: 挿入対象なし";
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
             syncCanvas();
             return;

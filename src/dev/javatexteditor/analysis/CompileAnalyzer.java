@@ -5,6 +5,7 @@ import javax.tools.*;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.*;
+import java.util.Locale;
 import java.util.*;
 
 /**
@@ -96,7 +97,8 @@ public class CompileAnalyzer {
             long rawCol = d.getColumnNumber();
             int column = (rawCol > 0) ? (int) rawCol - 1 : 0;
 
-            result.add(new CompileDiagnostic(lineNumber, column, d.getMessage(null), kind));
+            // Locale.ENGLISH を指定して日本語環境でも正規表現がマッチするようにする
+            result.add(new CompileDiagnostic(lineNumber, column, d.getMessage(Locale.ENGLISH), kind));
         }
         return Collections.unmodifiableList(result);
     }
