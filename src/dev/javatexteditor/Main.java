@@ -23,6 +23,7 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
@@ -314,6 +315,9 @@ public class Main {
     // -------------------------------------------------------------------------
 
     public static void main(String[] args) {
+        // セットアップ未完了なら自動実行（バックグラウンド）
+        runSetupIfNeeded();
+
         String initialPath = (args.length > 0) ? args[0] : null;
         String initialText;
         if (initialPath != null) {
@@ -479,5 +483,89 @@ public class Main {
 
             frame.setVisible(true);
         });
+    }
+
+    /**
+     * lib/src.zip または lib/openjdk-native/ が存在しない場合、
+     * セットアップスクリプトをバックグラウンドスレッドで自動実行する。
+     * エディタの起動は待たずに続行する。
+     */
+    private static void runSetupIfNeeded() {
+        Path libDir = resolveLibDir();
+        boolean hasSrcZip    = Files.exists(libDir.resolve("src.zip"));
+        boolean hasNativeSrc = Files.isDirectory(libDir.resolve("openjdk-native"));
+        if (hasSrcZip && hasNativeSrc) return;
+
+        Thread.ofVirtual().name("setup-auto").start(() -> {
+            String os = System.getProperty("os.name", "").toLowerCase();
+            boolean isWindows = os.contains("win");
+            Path scriptDir = resolveScriptDir();
+            Path script = isWindows
+                ? scriptDir.resolve("setup.bat")
+                : scriptDir.resolve("setup.sh");
+
+            if (!Files.exists(script)) {
+                System.err.println("[setup] Script not found: " + script);
+                return;
+            }
+
+            System.out.println("[setup] Running " + script.getFileName() + " in background...");
+            try {
+                ProcessBuilder pb = isWindows
+                    ? new ProcessBuilder("cmd.exe", "/c", script.toString())
+                    : new ProcessBuilder("bash", script.toString());
+                pb.directory(scriptDir.getParent().toFile());
+                pb.redirectErrorStream(true);
+                Process proc = pb.start();
+                try (var reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(proc.getInputStream()))) {
+                    reader.lines().forEach(line -> System.out.println("[setup] " + line));
+                }
+                int exit = proc.waitFor();
+                if (exit == 0) {
+                    System.out.println("[setup] Done.");
+                } else {
+                    System.err.println("[setup] Exited with code " + exit);
+                }
+            } catch (Exception e) {
+                System.err.println("[setup] Failed: " + e.getMessage());
+            }
+        });
+    }
+
+    private static Path resolveLibDir() {
+        try {
+            var url = Main.class.getProtectionDomain().getCodeSource().getLocation();
+            if (url != null) {
+                Path code = Paths.get(url.toURI());
+                Path dir = Files.isDirectory(code) ? code : code.getParent();
+                for (int i = 0; i < 4; i++) {
+                    if (dir == null) break;
+                    Path candidate = dir.resolve("lib");
+                    if (Files.isDirectory(candidate)) return candidate;
+                    // lib がなくても返す（初回は存在しないのが普通）
+                    if (Files.isDirectory(dir.resolve("scripts"))) return dir.resolve("lib");
+                    dir = dir.getParent();
+                }
+            }
+        } catch (Exception ignored) {}
+        return Path.of("lib");
+    }
+
+    private static Path resolveScriptDir() {
+        try {
+            var url = Main.class.getProtectionDomain().getCodeSource().getLocation();
+            if (url != null) {
+                Path code = Paths.get(url.toURI());
+                Path dir = Files.isDirectory(code) ? code : code.getParent();
+                for (int i = 0; i < 4; i++) {
+                    if (dir == null) break;
+                    Path candidate = dir.resolve("scripts");
+                    if (Files.isDirectory(candidate)) return candidate;
+                    dir = dir.getParent();
+                }
+            }
+        } catch (Exception ignored) {}
+        return Path.of("scripts");
     }
 }

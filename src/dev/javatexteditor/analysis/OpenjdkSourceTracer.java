@@ -39,9 +39,11 @@ public class OpenjdkSourceTracer {
     }
 
     private final Optional<Path> srcZip;
+    private final Optional<Path> nativeSrcDir; // lib/openjdk-native/
 
     public OpenjdkSourceTracer() {
         this.srcZip = findSrcZip();
+        this.nativeSrcDir = findNativeSrcDir();
     }
 
     /** テスト用コンストラクタ: src.zip パスを直接指定。 */
@@ -49,6 +51,7 @@ public class OpenjdkSourceTracer {
         this.srcZip = (srcZipPath != null && Files.exists(srcZipPath))
             ? Optional.of(srcZipPath)
             : Optional.empty();
+        this.nativeSrcDir = findNativeSrcDir();
     }
 
     /** src.zip が利用可能かどうかを返す。 */
@@ -69,9 +72,15 @@ public class OpenjdkSourceTracer {
         }
     }
 
+    /** lib/openjdk-native/ が利用可能かどうかを返す。 */
+    public boolean hasNativeSrcDir() {
+        return nativeSrcDir.isPresent();
+    }
+
     /**
      * 指定クラスの指定メソッドが native かどうか調べ、native なら JNI 情報を返す。
      * native でなければ isNative=false の結果を返す。
+     * lib/openjdk-native/ があればそちらを優先、なければ src.zip にフォールバック。
      */
     public TracingResult trace(Class<?> cls, String methodName) {
         Method nativeMethod = findNativeMethod(cls, methodName);
@@ -79,10 +88,16 @@ public class OpenjdkSourceTracer {
             return new TracingResult(false, "", Optional.empty(), Optional.empty());
         }
         String jniName = computeJniName(cls, methodName);
-        if (srcZip.isEmpty()) {
-            return new TracingResult(true, jniName, Optional.empty(), Optional.empty());
+        // lib/openjdk-native/ を優先検索
+        if (nativeSrcDir.isPresent()) {
+            TracingResult r = searchInNativeSrcDir(jniName, cls, methodName);
+            if (r.sourceFile().isPresent()) return r;
         }
-        return searchInSrcZip(jniName, cls, methodName, nativeMethod);
+        // フォールバック: src.zip 内を検索
+        if (srcZip.isPresent()) {
+            return searchInSrcZip(jniName, cls, methodName, nativeMethod);
+        }
+        return new TracingResult(true, jniName, Optional.empty(), Optional.empty());
     }
 
     /**
@@ -113,6 +128,39 @@ public class OpenjdkSourceTracer {
             return "Java_" + simpleName + "_" + mName;
         }
         return "Java_" + pkg + "_" + simpleName + "_" + mName;
+    }
+
+    /**
+     * lib/openjdk-native/ ディレクトリから JNI 関数名を含む C/C++ ファイルを検索。
+     * ファイルシステムを直接 walk するので src.zip より高速で確実。
+     */
+    private TracingResult searchInNativeSrcDir(String jniName, Class<?> cls, String methodName) {
+        try {
+            List<CandidateMatch> candidates = new ArrayList<>();
+            Files.walk(nativeSrcDir.get())
+                .filter(p -> {
+                    String n = p.getFileName().toString();
+                    return n.endsWith(".c") || n.endsWith(".cpp");
+                })
+                .forEach(p -> {
+                    try {
+                        String content = Files.readString(p, StandardCharsets.UTF_8);
+                        if (content.contains(jniName)) {
+                            String relPath = nativeSrcDir.get().getParent().relativize(p).toString()
+                                .replace('\\', '/');
+                            String snippet = extractSnippet(content, jniName);
+                            candidates.add(new CandidateMatch(relPath, snippet));
+                        }
+                    } catch (IOException ignored) {}
+                });
+            if (!candidates.isEmpty()) {
+                CandidateMatch best = candidates.get(0);
+                return new TracingResult(true, jniName,
+                    Optional.of(best.path()),
+                    best.snippet().isEmpty() ? Optional.empty() : Optional.of(best.snippet()));
+            }
+        } catch (IOException ignored) {}
+        return new TracingResult(true, jniName, Optional.empty(), Optional.empty());
     }
 
     /** src.zip から JNI 関数名を含む C/C++ ソースを検索。 */
@@ -246,6 +294,26 @@ public class OpenjdkSourceTracer {
             if (Files.exists(p)) return Optional.of(p);
         }
 
+        return Optional.empty();
+    }
+
+    /** lib/openjdk-native/ ディレクトリを探す（findBundledSrcZip と同じ探索ロジック）。 */
+    private static Optional<Path> findNativeSrcDir() {
+        try {
+            var url = OpenjdkSourceTracer.class.getProtectionDomain().getCodeSource().getLocation();
+            if (url != null) {
+                Path codeLocation = Paths.get(url.toURI());
+                Path dir = Files.isDirectory(codeLocation) ? codeLocation : codeLocation.getParent();
+                for (int i = 0; i < 4; i++) {
+                    if (dir == null) break;
+                    Path candidate = dir.resolve("lib/openjdk-native");
+                    if (Files.isDirectory(candidate)) return Optional.of(candidate);
+                    dir = dir.getParent();
+                }
+            }
+        } catch (Exception ignored) {}
+        Path fromCwd = Paths.get("lib", "openjdk-native");
+        if (Files.isDirectory(fromCwd)) return Optional.of(fromCwd.toAbsolutePath());
         return Optional.empty();
     }
 
