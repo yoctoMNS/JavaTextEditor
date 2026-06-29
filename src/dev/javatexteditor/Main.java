@@ -311,32 +311,57 @@ public class Main {
 
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
-                    if (e.getID() != KeyEvent.KEY_PRESSED) return false;
+                    if (e.getID() == KeyEvent.KEY_PRESSED) {
+                        // Ctrl+Shift+矢印: ビットマップフォントのセルサイズを全ペイン一括変更
+                        boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
+                        boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
+                        if (ctrl && shift) {
+                            int kc = e.getKeyCode();
+                            if (kc == KeyEvent.VK_RIGHT) {
+                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(+1));
+                                return true;
+                            } else if (kc == KeyEvent.VK_LEFT) {
+                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(-1));
+                                return true;
+                            } else if (kc == KeyEvent.VK_DOWN) {
+                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(+1));
+                                return true;
+                            } else if (kc == KeyEvent.VK_UP) {
+                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(-1));
+                                return true;
+                            }
+                        }
 
-                    // Ctrl+Shift+矢印: ビットマップフォントのセルサイズを全ペイン一括変更
-                    boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
-                    boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
-                    if (ctrl && shift) {
-                        int kc = e.getKeyCode();
-                        if (kc == KeyEvent.VK_RIGHT) {
-                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(+1));
-                            return true;
-                        } else if (kc == KeyEvent.VK_LEFT) {
-                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(-1));
-                            return true;
-                        } else if (kc == KeyEvent.VK_DOWN) {
-                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(+1));
-                            return true;
-                        } else if (kc == KeyEvent.VK_UP) {
-                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(-1));
+                        // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
+                        // IMEがコミットした文字は KEY_TYPED で受け取る。
+                        boolean noCtrlAlt = (e.getModifiersEx() &
+                            (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
+                        char kc2 = e.getKeyChar();
+                        boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
+                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
+                        if (noCtrlAlt && isPrintable &&
+                                (ed.isInsertMode() || ed.isCommandMode())) {
+                            return false;
+                        }
+
+                        ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+                        updateBorders(allLeaves(root[0]), active[0]);
+                        return true;
+                    }
+
+                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する
+                    if (e.getID() == KeyEvent.KEY_TYPED) {
+                        char ch = e.getKeyChar();
+                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
+                        if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
+                                (ed.isInsertMode() || ed.isCommandMode())) {
+                            ed.processKey(0, ch, 0);
+                            updateBorders(allLeaves(root[0]), active[0]);
                             return true;
                         }
                     }
 
-                    active[0].editor().processKey(
-                        e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
-                    updateBorders(allLeaves(root[0]), active[0]);
-                    return true;
+                    return false;
                 });
 
             // マウスクリックでアクティブペインを切り替える
