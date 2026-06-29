@@ -158,8 +158,9 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_CLOSE_BRACKET, KeyEvent.CTRL_DOWN_MASK, "save.from.insert"), "save.from.insert");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_OPEN_BRACKET,  KeyEvent.CTRL_DOWN_MASK, "save.from.insert"), "save.from.insert");
         // 文字削除（Ctrl+D → 次を削除, Ctrl+K → 行末まで削除）
-        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "delete.next"),   "delete.next");
-        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.CTRL_DOWN_MASK, "delete.to.eol"), "delete.to.eol");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "delete.next"),       "delete.next");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.CTRL_DOWN_MASK, "delete.to.eol"),     "delete.to.eol");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_W, KeyEvent.CTRL_DOWN_MASK, "delete.word.before"), "delete.word.before");
         // Emacs 単語移動（Alt+F / Alt+B）
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.ALT_DOWN_MASK, "word.forward"),  "word.forward");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.ALT_DOWN_MASK, "word.backward"), "word.backward");
