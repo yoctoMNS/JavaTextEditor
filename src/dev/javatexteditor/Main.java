@@ -313,6 +313,26 @@ public class Main {
                 .addKeyEventDispatcher(e -> {
                     if (e.getID() != KeyEvent.KEY_PRESSED) return false;
 
+                    // Ctrl+Shift+矢印: ビットマップフォントのセルサイズを全ペイン一括変更
+                    boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
+                    boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
+                    if (ctrl && shift) {
+                        int kc = e.getKeyCode();
+                        if (kc == KeyEvent.VK_RIGHT) {
+                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(+1));
+                            return true;
+                        } else if (kc == KeyEvent.VK_LEFT) {
+                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(-1));
+                            return true;
+                        } else if (kc == KeyEvent.VK_DOWN) {
+                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(+1));
+                            return true;
+                        } else if (kc == KeyEvent.VK_UP) {
+                            allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(-1));
+                            return true;
+                        }
+                    }
+
                     active[0].editor().processKey(
                         e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
                     updateBorders(allLeaves(root[0]), active[0]);
