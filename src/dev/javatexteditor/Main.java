@@ -153,19 +153,21 @@ public class Main {
 
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
         Runnable trigger = () -> {
-            String filePath = editor.getCurrentFilePath();
-            String source   = editor.getText();
+            String source = editor.getText();
+            editor.setStatusMessage("auto-import: 解析中...");
             Thread.ofVirtual().start(() -> {
                 try {
-                    List<CompileDiagnostic> diags = (filePath != null)
-                        ? COMPILE_ANALYZER.analyzeFile(Path.of(filePath))
-                        : COMPILE_ANALYZER.analyze(source);
+                    // バッファ内容を直接解析する（ファイル未保存でも正しく動作させるため）
+                    List<CompileDiagnostic> diags = COMPILE_ANALYZER.analyze(source);
                     SwingUtilities.invokeLater(() -> {
                         canvas.setDiagnostics(diags);
                         editor.handleAutoImport(diags);
                     });
                 } catch (AnalysisException e) {
-                    SwingUtilities.invokeLater(() -> canvas.setDiagnostics(List.of()));
+                    SwingUtilities.invokeLater(() -> {
+                        canvas.setDiagnostics(List.of());
+                        editor.setStatusMessage("auto-import: 解析失敗");
+                    });
                 }
             });
         };

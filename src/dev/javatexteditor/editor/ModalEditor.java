@@ -86,6 +86,8 @@ public class ModalEditor {
     private int importSelectIdx = 0;                      // 選択中インデックス
     // テスト用: handleAutoImportFromCandidates で設定される適用コールバック
     private java.util.function.Consumer<String> pendingImportApply = null;
+    // auto-import 完了時に「N件挿入済み」を表示するための挿入カウンタ
+    private int importAppliedCount = 0;
     // project-wide-search: grep 結果バッファ
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
@@ -1836,18 +1838,21 @@ public class ModalEditor {
         Map<String, List<String>> candidates =
             autoImportHandler.resolveCandidates(diags, buffer.getText());
         if (candidates.isEmpty()) {
-            // 追加すべき import がない: 後処理を即実行
+            statusMessage = "auto-import: 挿入対象なし";
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
+            syncCanvas();
             return;
         }
 
         List<Map.Entry<String, List<String>>> entries = new ArrayList<>(candidates.entrySet());
 
         // 候補が1件のみのシンボルをまず自動挿入
+        importAppliedCount = 0;
         List<Map.Entry<String, List<String>>> multi = new ArrayList<>();
         for (Map.Entry<String, List<String>> e : entries) {
             if (e.getValue().size() == 1) {
                 autoImportHandler.applyImport(e.getValue().get(0), buffer);
+                importAppliedCount++;
             } else {
                 multi.add(e);
             }
@@ -1859,7 +1864,7 @@ public class ModalEditor {
             pendingImportIdx = 0;
             enterImportSelect();
         } else {
-            // 全て自動挿入完了: 後処理を即実行
+            statusMessage = "auto-import: " + importAppliedCount + "件 挿入済み";
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
         }
         syncCanvas();
@@ -1952,6 +1957,7 @@ public class ModalEditor {
             } else if (autoImportHandler != null) {
                 autoImportHandler.applyImport(fqn, buffer);
             }
+            importAppliedCount++;
         }
         mode = Mode.NORMAL;
         if (canvas != null) canvas.setTelescopeState(false, "", "", List.of(), 0, "");
@@ -1965,7 +1971,11 @@ public class ModalEditor {
             pendingImports.clear();
             pendingImportIdx = 0;
             pendingImportApply = null;
-            statusMessage = "";
+            if (importAppliedCount > 0) {
+                statusMessage = "auto-import: " + importAppliedCount + "件 挿入済み";
+            } else {
+                statusMessage = "auto-import: 挿入対象なし";
+            }
             if (onImportComplete != null) {
                 onImportComplete.run();
                 onImportComplete = null;
