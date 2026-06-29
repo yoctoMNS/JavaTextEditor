@@ -97,10 +97,38 @@ public class CompileAnalyzer {
             long rawCol = d.getColumnNumber();
             int column = (rawCol > 0) ? (int) rawCol - 1 : 0;
 
-            // Locale.ENGLISH を指定して日本語環境でも正規表現がマッチするようにする
-            result.add(new CompileDiagnostic(lineNumber, column, d.getMessage(Locale.ENGLISH), kind));
+            result.add(new CompileDiagnostic(lineNumber, column, buildMessage(d), kind));
         }
         return Collections.unmodifiableList(result);
+    }
+
+    /**
+     * ロケール非依存のメッセージを構築する。
+     *
+     * "cannot find symbol" 系エラー（診断コードに "cant.resolve" を含む）は
+     * メッセージテキストに頼らず、ソース上の文字位置から Java 識別子を直接抽出し
+     * 英語固定フォーマット "cannot find symbol\n  symbol: class XXX" に正規化する。
+     * それ以外のエラーは Locale.ENGLISH で取得したメッセージをそのまま使う。
+     */
+    private static String buildMessage(Diagnostic<? extends JavaFileObject> d) {
+        String code = d.getCode();
+        if (code != null && code.contains("cant.resolve") && d.getSource() != null) {
+            try {
+                CharSequence src = d.getSource().getCharContent(true);
+                int pos = (int) d.getStartPosition();
+                if (pos >= 0 && pos < src.length()) {
+                    int start = pos;
+                    int end = pos;
+                    while (start > 0 && Character.isJavaIdentifierPart(src.charAt(start - 1))) start--;
+                    while (end < src.length() && Character.isJavaIdentifierPart(src.charAt(end))) end++;
+                    if (end > start) {
+                        String name = src.subSequence(start, end).toString();
+                        return "cannot find symbol\n  symbol: class " + name;
+                    }
+                }
+            } catch (IOException ignored) {}
+        }
+        return d.getMessage(Locale.ENGLISH);
     }
 
     /** 文字列ソースを JavaFileObject として渡すためのアダプタ */
