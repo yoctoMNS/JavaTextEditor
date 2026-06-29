@@ -104,6 +104,10 @@ public class KeymapRegistry {
         // ファイル末尾（先頭は gg シーケンス）
         bind(Mode.NORMAL, KeyBinding.ofChar('G', "file.end"),    "file.end");
         bind(Mode.NORMAL, KeyBinding.ofChar('g', "goto.pending"),  "goto.pending");
+        // \ をリーダーキーとして使用（\f=ファイル名検索, \g=ファイル内容grep）
+        bind(Mode.NORMAL, KeyBinding.ofChar('\\', "filesearch.pending"),                   "filesearch.pending");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_BACK_SLASH, 0, "filesearch.pending"), "filesearch.pending");
+
         // 文字列検索 (Vim 式: / で入力、n/N で移動、*/# で単語検索)
         bind(Mode.NORMAL, KeyBinding.ofChar('/', "search.enter"),    "search.enter");
         bind(Mode.NORMAL, KeyBinding.ofChar('n', "search.next"),     "search.next");
