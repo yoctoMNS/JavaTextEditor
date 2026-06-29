@@ -4,6 +4,7 @@ import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.DiagnosticKind;
 import javax.swing.JPanel;
 import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -35,14 +36,27 @@ public class EditorCanvas extends JPanel {
     // 行番号 → 最も優先度の高い診断種別（ERROR > WARNING）
     private Map<Integer, DiagnosticKind> diagByLine = Map.of();
 
-    private static final Font FONT = new Font(Font.MONOSPACED, Font.PLAIN, 16);
+    // ビットマップフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
+    private int cellW = BitmapFont10x20.BASE_CELL_W;
+    private int cellH = BitmapFont10x20.BASE_CELL_H;
+
+    // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
+    // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
+    private final Map<Integer, BufferedImage> glyphCacheFg  = new HashMap<>();
+    private final Map<Integer, BufferedImage> glyphCacheBg  = new HashMap<>();
+
+    // 非ASCII文字描画用フォールバック Swing フォント（セルサイズに合わせて動的生成）
+    private Font swingFont = null;
+    private int  swingFontCellH = 0;   // swingFont を生成した時の cellH
+
+    private static final Font SPLASH_FONT = new Font(Font.MONOSPACED, Font.PLAIN, 16);
     private static final Color ERROR_COLOR   = new Color(0xCC, 0x33, 0x33);
     private static final Color WARNING_COLOR = new Color(0xCC, 0x99, 0x00);
 
     public void setText(String text) { this.text = text; repaint(); }
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
     public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
-    public void setTheme(Theme theme) { this.theme = theme; repaint(); }
+    public void setTheme(Theme theme) { this.theme = theme; invalidateGlyphCache(); repaint(); }
     public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
     public int getScrollRow() { return scrollRow; }
     public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); repaint(); }
@@ -61,6 +75,52 @@ public class EditorCanvas extends JPanel {
         this.selAnchorRow = -1;
         this.visualLineMode = false;
         repaint();
+    }
+
+    // -------------------------------------------------------------------------
+    // フォントセルサイズ調整（Ctrl+Shift+矢印）
+    // -------------------------------------------------------------------------
+
+    /** 文字セル幅を delta px 変更する（範囲: 5〜40）。両ペインから呼ばれる。 */
+    public void adjustCellWidth(int delta) {
+        cellW = Math.max(5, Math.min(40, cellW + delta));
+        invalidateGlyphCache();
+        cachedCharWidth = cellW;
+        repaint();
+    }
+
+    /** 文字セル高さを delta px 変更する（範囲: 8〜80）。両ペインから呼ばれる。 */
+    public void adjustCellHeight(int delta) {
+        cellH = Math.max(8, Math.min(80, cellH + delta));
+        invalidateGlyphCache();
+        cachedLineHeight = cellH;
+        repaint();
+    }
+
+    public int getCellW() { return cellW; }
+    public int getCellH() { return cellH; }
+
+    private void invalidateGlyphCache() {
+        glyphCacheFg.clear();
+        glyphCacheBg.clear();
+    }
+
+    private BufferedImage getGlyphFg(int cp) {
+        return glyphCacheFg.computeIfAbsent(cp,
+            k -> BitmapFont10x20.renderGlyph(k, cellW, cellH, theme.foreground.getRGB()));
+    }
+
+    private BufferedImage getGlyphBg(int cp) {
+        return glyphCacheBg.computeIfAbsent(cp,
+            k -> BitmapFont10x20.renderGlyph(k, cellW, cellH, theme.background.getRGB()));
+    }
+
+    private Font getSwingFont() {
+        if (swingFont == null || swingFontCellH != cellH) {
+            swingFont = new Font(Font.MONOSPACED, Font.PLAIN, Math.max(8, (int)(cellH * 0.75)));
+            swingFontCellH = cellH;
+        }
+        return swingFont;
     }
 
     /** スプラッシュ画面の表示/非表示を切り替える。 */
@@ -152,12 +212,15 @@ public class EditorCanvas extends JPanel {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
-        g2.setFont(FONT);
-        FontMetrics fm = g2.getFontMetrics();
-        int charWidth = fm.charWidth('M');
-        int lineHeight = fm.getHeight();
+
+        // ビットマップフォントのセルサイズを使用する
+        int charWidth  = cellW;
+        int lineHeight = cellH;
         cachedLineHeight = lineHeight;
-        cachedCharWidth = charWidth;
+        cachedCharWidth  = charWidth;
+
+        // 非ASCII文字の描画用に Swing フォントをセット（ステータス行・ガター等でも使用）
+        g2.setFont(getSwingFont());
 
         // ガター幅: 診断がある場合のみ "E " / "W " / "  " 2文字分を確保
         int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
@@ -170,6 +233,7 @@ public class EditorCanvas extends JPanel {
         // スプラッシュ表示中は通常テキストを描画せずスプラッシュを描いてステータス行だけ出す
         if (showSplash) {
             drawSplashScreen(g2, charWidth, lineHeight);
+            g2.setFont(getSwingFont()); // splash が内部でフォントを変えるのでリセット
             drawStatusLine(g2, lineHeight);
             return;
         }
@@ -210,17 +274,25 @@ public class EditorCanvas extends JPanel {
 
     /**
      * 全角文字を考慮しながら1行を描画する。
-     * gutterWidth ピクセルをオフセットとして加算し、scrollOffsetX 分左にシフトして描画する。
+     * ASCII(0x20-0x7E): BitmapFont10x20 でピクセルレンダリング。
+     * それ以外: Swing フォント（g2 に設定済み）で描画。
+     * y はベースライン（セル底辺）の Y 座標。
      */
     private void drawLineWithFullWidthSupport(Graphics2D g2, String line, int y,
             int charWidth, int scrollOffsetX, int gutterWidth) {
         int x = gutterWidth - scrollOffsetX;
+        int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
-            int cellWidth = charCellWidth(codePoint);
-            int charPixelWidth = charWidth * cellWidth;
+            int widthMult = charCellWidth(codePoint);
+            int charPixelWidth = charWidth * widthMult;
             if (x + charPixelWidth > 0 && x < getWidth()) {
-                g2.drawString(new String(Character.toChars(codePoint)), x, y);
+                if (BitmapFont10x20.isSupported(codePoint)) {
+                    g2.drawImage(getGlyphFg(codePoint), x, y - cellTopOffset, null);
+                } else {
+                    g2.setColor(theme.foreground);
+                    g2.drawString(new String(Character.toChars(codePoint)), x, y);
+                }
             }
             x += charPixelWidth;
             i += Character.charCount(codePoint);
@@ -248,8 +320,12 @@ public class EditorCanvas extends JPanel {
             g2.setColor(theme.foreground);
             g2.fillRect(x, yTop, blockWidth, lineHeight);
             if (codePoint != -1) {
-                g2.setColor(theme.background);
-                g2.drawString(new String(Character.toChars(codePoint)), x, (screenRow + 1) * lineHeight);
+                if (BitmapFont10x20.isSupported(codePoint)) {
+                    g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
+                } else {
+                    g2.setColor(theme.background);
+                    g2.drawString(new String(Character.toChars(codePoint)), x, (screenRow + 1) * lineHeight);
+                }
             }
         }
     }
@@ -410,8 +486,8 @@ public class EditorCanvas extends JPanel {
         };
 
         // タイトル行（index 0）は大きなフォントで描く
-        Font titleFont  = FONT.deriveFont(Font.BOLD, FONT.getSize() + 8f);
-        Font normalFont = FONT;
+        Font titleFont  = SPLASH_FONT.deriveFont(Font.BOLD, SPLASH_FONT.getSize() + 8f);
+        Font normalFont = SPLASH_FONT;
 
         // 全行の合計高さを計算して垂直中央揃え
         int totalH = lines.length * lineHeight + 8; // タイトルのフォントサイズ差分
@@ -454,7 +530,7 @@ public class EditorCanvas extends JPanel {
                 // サブタイトル・説明文：センタリング・前景色
                 boolean isHint = line.contains("キーを押すと");
                 g2.setColor(isHint ? theme.accent : theme.foreground);
-                if (isHint) g2.setFont(FONT.deriveFont(Font.ITALIC));
+                if (isHint) g2.setFont(SPLASH_FONT.deriveFont(Font.ITALIC));
                 int w = fm.stringWidth(line);
                 g2.drawString(line, (areaW - w) / 2, y);
                 if (isHint) g2.setFont(normalFont);

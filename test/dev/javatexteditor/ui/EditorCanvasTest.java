@@ -327,7 +327,96 @@ public class EditorCanvasTest {
             pass += 1;
         }
 
-        int total = 22;
+        // =====================================================================
+        // ビットマップフォント（BitmapFont10x20）テスト
+        // =====================================================================
+
+        // Test 23: isSupported - ASCII 範囲は true、範囲外は false
+        {
+            boolean ok = BitmapFont10x20.isSupported(' ')
+                && BitmapFont10x20.isSupported('A')
+                && BitmapFont10x20.isSupported('~')
+                && !BitmapFont10x20.isSupported(0x3041)   // ひらがな
+                && !BitmapFont10x20.isSupported(0x4E00);  // 漢字
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "BitmapFont10x20.isSupported 範囲判定");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 24: renderGlyph - 返される画像のサイズがセルサイズと一致する
+        {
+            java.awt.image.BufferedImage img = BitmapFont10x20.renderGlyph('A', 10, 20, 0xFFFFFF);
+            boolean ok = img.getWidth() == 10 && img.getHeight() == 20;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "renderGlyph サイズ (10x20) -> " + img.getWidth() + "x" + img.getHeight());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 25: renderGlyph - 'A' の一部ピクセルが点灯している（コンテンツ検証）
+        {
+            java.awt.image.BufferedImage img = BitmapFont10x20.renderGlyph('A', 10, 20, 0xFF0000);
+            int litCount = 0;
+            for (int row = 0; row < 20; row++)
+                for (int col = 0; col < 10; col++)
+                    if ((img.getRGB(col, row) & 0xFF000000) != 0) litCount++;
+            boolean ok = litCount > 10; // 少なくとも10ピクセルが点灯しているはず
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "'A' グリフの点灯ピクセル数=" + litCount);
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 26: adjustCellWidth - セル幅が変わる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            int before = canvas.getCellW();
+            canvas.adjustCellWidth(+5);
+            int after = canvas.getCellW();
+            boolean ok = after == before + 5;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "adjustCellWidth +5: " + before + " -> " + after);
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 27: adjustCellHeight - セル高さが変わる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            int before = canvas.getCellH();
+            canvas.adjustCellHeight(+10);
+            int after = canvas.getCellH();
+            boolean ok = after == before + 10;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "adjustCellHeight +10: " + before + " -> " + after);
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 28: adjustCellWidth - 最小値 5 でクランプされる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.adjustCellWidth(-1000);
+            boolean ok = canvas.getCellW() == 5;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "adjustCellWidth 最小クランプ == 5, actual=" + canvas.getCellW());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 29: adjustCellHeight - 最大値 80 でクランプされる
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.adjustCellHeight(+1000);
+            boolean ok = canvas.getCellH() == 80;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "adjustCellHeight 最大クランプ == 80, actual=" + canvas.getCellH());
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 30: セルサイズ変更後の renderGlyph が新サイズを反映する
+        {
+            java.awt.image.BufferedImage img = BitmapFont10x20.renderGlyph('B', 20, 40, 0xFFFFFF);
+            boolean ok = img.getWidth() == 20 && img.getHeight() == 40;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "renderGlyph 20x40 サイズ -> " + img.getWidth() + "x" + img.getHeight());
+            pass += ok ? 1 : 0;
+        }
+
+        int total = 30;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
