@@ -37,7 +37,8 @@ project-root/
 ├── .claude/
 │   └── skills/                          ← 設計知識はここに集約する（下記ロードマップ参照）
 │       ├── editor-buffer-architecture/
-│       └── gui-rendering-pipeline/
+│       ├── gui-rendering-pipeline/
+│       └── font-and-statusline-animation/
 ├── src/
 │   └── dev/javatexteditor/
 │       ├── Main.java
@@ -92,6 +93,7 @@ project-root/
 | ⑬ | `project-wide-search` | 作業ディレクトリ配下のgrep的検索 | ✅ 完了（19/19テスト・`:grep`コマンド・Enter でジャンプ） |
 | ⑭ | `multi-file-refactoring` | シンボル単位の複数ファイルリファクタリング | ✅ 完了（25テスト・`:rename`コマンド・語境界マッチ・`*rename*`疑似バッファ） |
 | ⑯ | `auto-import-handler` | 未定義シンボルの import 自動挿入 | ✅ 完了（26/26テスト・INSERT→NORMAL フック・候補1件自動挿入・複数候補選択UI） |
+| ⑰ | `font-and-statusline-animation` | ビットマップフォント埋め込み・ステータスラインの歩行キャラクターアニメーション | ✅ Skill追加（設計知識のみ・実装は⑤完了後） |
 
 ### 依存関係（Skillを作る順序の制約）
 
