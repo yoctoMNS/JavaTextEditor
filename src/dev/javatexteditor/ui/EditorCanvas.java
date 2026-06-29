@@ -6,8 +6,10 @@ import dev.javatexteditor.telescope.TelescopeItem;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 import java.awt.*;
+import java.awt.event.MouseEvent;
 import java.awt.im.InputContext;
 import java.awt.image.BufferedImage;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -54,6 +56,9 @@ public class EditorCanvas extends JPanel {
     private List<TelescopeItem> telescopeResults = List.of();
     private int telescopeSelectedIdx = 0;
     private String telescopePreview = "";
+
+    // 作業ディレクトリ（ステータス行の中央に省略表示、ホバー時ツールチップでフルパス表示）
+    private Path workingDirectory = null;
 
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
@@ -123,6 +128,11 @@ public class EditorCanvas extends JPanel {
     public int getScrollCol() { return scrollCol; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
+    public void setWorkingDirectory(Path wd) {
+        this.workingDirectory = wd;
+        setToolTipText(wd != null ? wd.toString() : null);
+        repaint();
+    }
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
     public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
     public void setSelection(int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
@@ -834,6 +844,14 @@ public class EditorCanvas extends JPanel {
                      :                  "-- NORMAL --";
         g2.drawString(label, 4, y - 4);
 
+        // 中央に作業ディレクトリを省略表示
+        if (workingDirectory != null) {
+            FontMetrics fm = g2.getFontMetrics();
+            String wdStr = abbreviatePath(workingDirectory);
+            int wdWidth = fm.stringWidth(wdStr);
+            g2.drawString(wdStr, (getWidth() - wdWidth) / 2, y - 4);
+        }
+
         // 右端に診断件数を表示
         if (!diagnostics.isEmpty()) {
             long errCount  = diagnostics.stream()
@@ -848,6 +866,24 @@ public class EditorCanvas extends JPanel {
 
         // ウォーキングパーソンアニメーション（左→右へ走り抜ける）
         drawWalkingPerson(g2, y - lineHeight + 1, lineHeight);
+    }
+
+    /** ホームディレクトリを ~ に置換し、長いパスを末尾2要素に省略する。 */
+    private static String abbreviatePath(Path p) {
+        try {
+            Path home = Path.of(System.getProperty("user.home", ""));
+            Path rel  = home.relativize(p);
+            return "~/" + rel.toString().replace('\\', '/');
+        } catch (IllegalArgumentException ignored) {}
+        return p.toString();
+    }
+
+    @Override
+    public String getToolTipText(MouseEvent e) {
+        if (workingDirectory != null && e.getY() >= getHeight() - cachedLineHeight) {
+            return workingDirectory.toString();
+        }
+        return super.getToolTipText(e);
     }
 
     private void drawWalkingPerson(Graphics2D g2, int statusTopY, int lineHeight) {

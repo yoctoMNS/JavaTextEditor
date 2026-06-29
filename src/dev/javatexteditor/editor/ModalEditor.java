@@ -117,6 +117,8 @@ public class ModalEditor {
     private java.util.function.Consumer<BufferPicker.BufferEntry> onFileOpened = null;
     // BufferPicker で `d` を押してバッファを削除するコールバック
     private java.util.function.Consumer<BufferPicker.BufferEntry> onBufferDelete = null;
+    // 作業ディレクトリ変更コールバック（Main.java から WorkingDirectoryManager に委譲）
+    private java.util.function.Consumer<Path> changeWdCallback = null;
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
     private String savedBufferText = null;       // 元バッファのテキスト
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
@@ -926,7 +928,7 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void enterTelescope(String pickerType) {
-        Path baseDir = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+        Path baseDir = getProjectRoot();
         switch (pickerType) {
             case "files"   -> telescopePicker = new FilePicker(baseDir);
             case "grep"    -> telescopePicker = new GrepPicker(baseDir);
@@ -1073,7 +1075,7 @@ public class ModalEditor {
      * 大文字小文字を区別しない正規表現として扱う。
      */
     private void executeFileNameSearch(String pattern) {
-        Path baseDir = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+        Path baseDir = getProjectRoot();
         List<Path> results;
         try {
             results = fileNameSearcher.search(baseDir, pattern);
@@ -1294,6 +1296,20 @@ public class ModalEditor {
         } else if (cmd.startsWith("remove-import ")) {
             String fqn = cmd.substring("remove-import ".length()).trim();
             executeRemoveImport(fqn);
+        } else if (cmd.equals("pwd")) {
+            statusMessage = getProjectRoot().toString();
+        } else if (cmd.startsWith("cd ")) {
+            String pathStr = cmd.substring(3).trim();
+            try {
+                Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
+                if (changeWdCallback != null) {
+                    changeWdCallback.accept(target);
+                } else {
+                    statusMessage = "E: working directory handler not set";
+                }
+            } catch (Exception ex) {
+                statusMessage = "E: " + ex.getMessage();
+            }
         } else if (cmd.equals("sp") || cmd.equals("split")) {
             if (splitVerticalCallback != null) splitVerticalCallback.run();
         } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
@@ -1418,7 +1434,7 @@ public class ModalEditor {
             statusMessage = "E: no pattern";
             return;
         }
-        Path baseDir = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+        Path baseDir = getProjectRoot();
         List<SearchResult> results;
         try {
             results = projectSearcher.search(baseDir, pattern);
@@ -1459,7 +1475,7 @@ public class ModalEditor {
         String oldName = parts[0];
         String newName = parts[1];
 
-        Path baseDir = Path.of(System.getProperty("user.dir"));
+        Path baseDir = getProjectRoot();
         List<RenameResult> results;
         try {
             results = renameRefactorer.rename(baseDir, oldName, newName);
@@ -1504,7 +1520,7 @@ public class ModalEditor {
             return;
         }
         SearchResult r = grepResults.get(resultIdx);
-        Path target = Path.of(System.getProperty("user.dir")).resolve(r.filePath());
+        Path target = getProjectRoot().resolve(r.filePath());
         try {
             String content = Files.readString(target).replace("\r\n", "\n");
             buffer = new UndoablePieceTable(content);
@@ -2114,6 +2130,12 @@ public class ModalEditor {
     public List<TelescopeItem> getTelescopeResults() { return telescopeResults; }
     public int getTelescopeSelectedIdx()  { return telescopeSelectedIdx; }
     public void setProjectRoot(Path root)    { this.projectRoot = root; }
+    public void setChangeWorkingDirectoryCallback(java.util.function.Consumer<Path> cb) {
+        this.changeWdCallback = cb;
+    }
+    private Path getProjectRoot() {
+        return (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+    }
     public boolean isFileSearchMode()     { return mode == Mode.FILESEARCH; }
     public boolean isFileNameSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.NAME; }
     public boolean isFileGrepSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.GREP; }
