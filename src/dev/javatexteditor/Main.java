@@ -27,7 +27,11 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
+import javax.swing.JMenu;
+import javax.swing.JMenuBar;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
@@ -37,6 +41,9 @@ public class Main {
     private static final Color ACTIVE_BORDER_COLOR = new Color(0x88, 0x88, 0xFF);
     private static final int WINDOW_WIDTH  = 1200;
     private static final int WINDOW_HEIGHT = 750;
+
+    // 作業ディレクトリの中央管理（main() で初期化）
+    private static WorkingDirectoryManager WD_MANAGER;
 
     private static final CompileAnalyzer COMPILE_ANALYZER = new CompileAnalyzer();
     private static final JdkClassIndex JDK_INDEX = JdkClassIndex.build();
@@ -276,6 +283,16 @@ public class Main {
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }
+        // 作業ディレクトリを反映
+        if (WD_MANAGER != null) {
+            Path wd = WD_MANAGER.getWorkingDirectory();
+            editor.setProjectRoot(wd);
+            canvas.setWorkingDirectory(wd);
+            editor.setChangeWorkingDirectoryCallback(p -> {
+                String err = WD_MANAGER.setWorkingDirectory(p);
+                if (err != null) editor.setStatusMessage("E: " + err);
+            });
+        }
         return new Leaf(canvas, editor);
     }
 
@@ -364,10 +381,14 @@ public class Main {
             initialText = "";
         }
 
-        // 補完インデックスをバックグラウンドで構築
-        Path projectRoot = (initialPath != null)
+        // 作業ディレクトリマネージャを初期化（引数ファイルの親を hint として渡す）
+        Path initialHint = (initialPath != null)
             ? Path.of(initialPath).toAbsolutePath().getParent()
-            : Paths.get(System.getProperty("user.dir"));
+            : null;
+        WD_MANAGER = new WorkingDirectoryManager(initialHint);
+        Path projectRoot = WD_MANAGER.getWorkingDirectory();
+
+        // 補完インデックスをバックグラウンドで構築
         COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(
             JDK_INDEX, projectRoot, SOURCE_ANALYZER);
 
@@ -377,10 +398,32 @@ public class Main {
         final boolean splash = (initialPath == null);
 
         SwingUtilities.invokeLater(() -> {
-            JFrame frame = new JFrame("Java Text Editor", targetScreen);
+            JFrame frame = new JFrame(buildTitle(WD_MANAGER.getWorkingDirectory()), targetScreen);
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             frame.setSize(WINDOW_WIDTH, WINDOW_HEIGHT);
             centerOnScreen(frame, targetScreen);
+
+            // メニューバー: File > Set Working Directory...
+            JMenuBar menuBar = new JMenuBar();
+            JMenu fileMenu = new JMenu("File");
+            JMenuItem setCwdItem = new JMenuItem("Set Working Directory...");
+            setCwdItem.addActionListener(ae -> {
+                JFileChooser chooser = new JFileChooser(
+                    WD_MANAGER.getWorkingDirectory().toFile());
+                chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+                chooser.setDialogTitle("作業ディレクトリを選択");
+                if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
+                    Path chosen = chooser.getSelectedFile().toPath();
+                    String err = WD_MANAGER.setWorkingDirectory(chosen);
+                    if (err != null) {
+                        JOptionPane.showMessageDialog(frame, err,
+                            "作業ディレクトリの設定エラー", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            });
+            fileMenu.add(setCwdItem);
+            menuBar.add(fileMenu);
+            frame.setJMenuBar(menuBar);
 
             Leaf firstLeaf = createLeaf(text, path);
             if (splash) firstLeaf.canvas().setShowSplash(true);
@@ -392,6 +435,15 @@ public class Main {
 
             PaneNode[] root   = { firstLeaf };
             Leaf[]     active = { firstLeaf };
+
+            // 作業ディレクトリ変更時: 全エディタと JFrame タイトルを更新
+            WD_MANAGER.addChangeListener(wd -> {
+                for (Leaf l : allLeaves(root[0])) {
+                    l.editor().setProjectRoot(wd);
+                    l.canvas().setWorkingDirectory(wd);
+                }
+                frame.setTitle(buildTitle(wd));
+            });
 
             refreshCallbacks(frame, root, active);
             updateBorders(List.of(firstLeaf), firstLeaf);
@@ -528,6 +580,16 @@ public class Main {
 
             frame.setVisible(true);
         });
+    }
+
+    /** JFrame タイトル文字列を構築する（ホームディレクトリは ~ に置換）。 */
+    private static String buildTitle(Path wd) {
+        try {
+            Path home = Path.of(System.getProperty("user.home", ""));
+            Path rel  = home.relativize(wd);
+            return "Java Text Editor — ~/" + rel.toString().replace('\\', '/');
+        } catch (IllegalArgumentException ignored) {}
+        return "Java Text Editor — " + wd;
     }
 
     /**
