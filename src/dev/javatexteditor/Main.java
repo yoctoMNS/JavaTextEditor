@@ -193,6 +193,7 @@ public class Main {
                         : COMPILE_ANALYZER.analyze(source);
                     SwingUtilities.invokeLater(() -> {
                         canvas.setDiagnostics(diags);
+                        editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
                         editor.handleAutoImport(diags);
                     });
                 } catch (AnalysisException e) {

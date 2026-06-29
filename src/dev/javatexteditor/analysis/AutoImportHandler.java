@@ -98,6 +98,7 @@ public class AutoImportHandler {
             alreadyImported.add(fqn); // update for subsequent iterations
             inserted.add(fqn);
         }
+        if (!inserted.isEmpty()) ensureBlankLineAfterImports(buffer);
         return List.copyOf(inserted);
     }
 
@@ -111,6 +112,7 @@ public class AutoImportHandler {
         if (alreadyImported.contains(fqn)) return false;
         int offset = findImportInsertOffset(buffer.getText());
         buffer.insert(offset, "import " + fqn + ";\n");
+        ensureBlankLineAfterImports(buffer);
         return true;
     }
 
@@ -151,6 +153,7 @@ public class AutoImportHandler {
         for (String line : lines) {
             if (line.stripLeading().equals(importLine)) {
                 buffer.delete(offset, line.length() + 1); // +1 for '\n'
+                ensureBlankLineAfterImports(buffer);
                 return true;
             }
             offset += line.length() + 1;
@@ -204,12 +207,51 @@ public class AutoImportHandler {
         List<String> unused = findUnusedImports(buffer.getText());
         List<String> removed = new ArrayList<>();
         for (String fqn : unused) {
-            if (removeImport(fqn, buffer)) removed.add(fqn);
+            String importLine = "import " + fqn + ";";
+            String source = buffer.getText();
+            String[] lines = source.split("\n", -1);
+            int offset = 0;
+            for (String line : lines) {
+                if (line.stripLeading().equals(importLine)) {
+                    buffer.delete(offset, line.length() + 1);
+                    removed.add(fqn);
+                    break;
+                }
+                offset += line.length() + 1;
+            }
         }
+        ensureBlankLineAfterImports(buffer);
         return List.copyOf(removed);
     }
 
     // ----- private helpers -----
+
+    /**
+     * import ブロックの直後に宣言文が続く場合、間に1行の空行を確保する。
+     * すでに空行がある場合は何もしない。import が存在しない場合も何もしない。
+     */
+    private void ensureBlankLineAfterImports(PieceTable buffer) {
+        String source = buffer.getText();
+        String[] lines = source.split("\n", -1);
+
+        int lastImportLine = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].stripLeading().startsWith("import ")) lastImportLine = i;
+        }
+        if (lastImportLine < 0) return;
+
+        int nextLine = lastImportLine + 1;
+        if (nextLine >= lines.length) return;
+
+        if (!lines[nextLine].isBlank()) {
+            // 空行がないので挿入する
+            int offset = 0;
+            for (int i = 0; i <= lastImportLine; i++) {
+                offset += lines[i].length() + 1;
+            }
+            buffer.insert(offset, "\n");
+        }
+    }
 
     private static String simpleName(String fqn) {
         int dot = fqn.lastIndexOf('.');
