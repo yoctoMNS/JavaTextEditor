@@ -80,6 +80,12 @@ public class EditorCanvas extends JPanel {
     }
 
     @Override
+    public void addNotify() {
+        super.addNotify();
+        animTimer.start();
+    }
+
+    @Override
     public void removeNotify() {
         super.removeNotify();
         animTimer.stop();
