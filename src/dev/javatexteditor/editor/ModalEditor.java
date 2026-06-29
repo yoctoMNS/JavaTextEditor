@@ -1271,8 +1271,21 @@ public class ModalEditor {
     }
 
     private void loadFromFile(String path) {
+        Path p = Path.of(path);
+        if (!Files.exists(p)) {
+            buffer = new UndoablePieceTable("");
+            currentFilePath = path;
+            cursorRow = 0;
+            cursorCol = 0;
+            grepResults = null;
+            fileNameResults = null;
+            searchMatches = List.of();
+            currentMatchIdx = -1;
+            statusMessage = "\"" + path + "\" [新規ファイル]";
+            return;
+        }
         try {
-            String content = Files.readString(Path.of(path)).replace("\r\n", "\n");
+            String content = Files.readString(p).replace("\r\n", "\n");
             buffer = new UndoablePieceTable(content);
             currentFilePath = path;
             cursorRow = 0;
