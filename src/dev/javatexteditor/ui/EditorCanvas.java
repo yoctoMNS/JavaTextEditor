@@ -5,8 +5,10 @@ import dev.javatexteditor.analysis.DiagnosticKind;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 import java.awt.*;
+import java.awt.im.InputContext;
 import java.awt.image.BufferedImage;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
 
@@ -55,20 +57,33 @@ public class EditorCanvas extends JPanel {
     private static final Color WARNING_COLOR = new Color(0xCC, 0x99, 0x00);
 
     // -------------------------------------------------------------------------
-    // ステータスラインのウォークキャラクターアニメーション
+    // ステータスラインのウォーキングパーソンアニメーション
     // -------------------------------------------------------------------------
-    /** 2フレーム交互に切り替わる歩行キャラクター */
-    private static final String[] WALK_FRAMES = { "(^‿^)/", "(^‿^)\\" };
-    /** キャラクターの移動速度（ピクセル/秒） */
-    private static final double  WALK_SPEED_PX = 80.0;
-    /** フレーム切替速度（フレーム/秒） */
-    private static final double  WALK_FPS      = 6.0;
-
     private final long  animStartMs = System.currentTimeMillis();
     private final Timer animTimer   = new Timer(40, e -> repaint());
 
     public EditorCanvas() {
         animTimer.start();
+    }
+
+    @Override
+    public void removeNotify() {
+        super.removeNotify();
+        animTimer.stop();
+    }
+
+    /**
+     * IMEを半角英数字入力モードに切り替える。
+     * INSERTモードからNORMALモードに遷移する際に呼ぶことで、
+     * 日本語IMEが有効なままNORMALモードのキーバインドを誤入力するのを防ぐ。
+     */
+    public void switchToHalfWidth() {
+        InputContext ic = getInputContext();
+        if (ic != null) {
+            try {
+                ic.selectInputMethod(Locale.ENGLISH);
+            } catch (Exception ignored) {}
+        }
     }
 
     public void setText(String text) { this.text = text; repaint(); }
@@ -580,19 +595,36 @@ public class EditorCanvas extends JPanel {
             g2.drawString(diagLabel, getWidth() - labelWidth - 4, y - 4);
         }
 
-        // 歩行キャラクターアニメーション（左→右へ走り抜ける）
-        drawWalkingCharacter(g2, y - 4, lineHeight);
+        // ウォーキングパーソンアニメーション（左→右へ走り抜ける）
+        drawWalkingPerson(g2, y - lineHeight + 1, lineHeight);
     }
 
-    private void drawWalkingCharacter(Graphics2D g2, int textY, int lineHeight) {
-        FontMetrics fm = g2.getFontMetrics();
+    private void drawWalkingPerson(Graphics2D g2, int statusTopY, int lineHeight) {
         double elapsed = (System.currentTimeMillis() - animStartMs) / 1000.0;
-        int frame = (int)(elapsed * WALK_FPS) % WALK_FRAMES.length;
-        String sprite = WALK_FRAMES[frame];
-        int spriteW = fm.stringWidth(sprite);
-        int totalW  = getWidth() + spriteW;
-        int x = (int)((elapsed * WALK_SPEED_PX) % totalW) - spriteW;
-        g2.drawString(sprite, x, textY);
+        int scale  = Math.max(1, lineHeight / WalkingPersonSprite.PERSON_H);
+        int frame  = WalkingPersonSprite.calcFrame(elapsed);
+        int x      = WalkingPersonSprite.calcX(elapsed, getWidth(), scale);
+        // スプライトをステータスライン内に縦中央揃えする
+        int spriteH = WalkingPersonSprite.PERSON_H * scale;
+        int y = statusTopY + (lineHeight - spriteH) / 2;
+        // ステータスライン背景色（accent）に対して視認性の高い色を選択する
+        Color spriteColor = contrastColor(theme.accent, theme.foreground, theme.background);
+        WalkingPersonSprite.drawFrame(g2, frame, x, y, scale, spriteColor);
+    }
+
+    /** accent に対してより高いコントラストを持つ方の色を返す。 */
+    private static Color contrastColor(Color accent, Color a, Color b) {
+        return (luminance(a) - luminance(accent)) * (luminance(a) - luminance(accent))
+             > (luminance(b) - luminance(accent)) * (luminance(b) - luminance(accent))
+             ? a : b;
+    }
+
+    private static double luminance(Color c) {
+        // sRGB 相対輝度（BT.709 係数）
+        double r = c.getRed()   / 255.0;
+        double g = c.getGreen() / 255.0;
+        double bl = c.getBlue() / 255.0;
+        return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
     }
 
     private static String buildDiagLabel(long errors, long warnings) {
