@@ -10,6 +10,7 @@ import dev.javatexteditor.buffer.PieceTable;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
+import dev.javatexteditor.search.FileNameSearcher;
 import dev.javatexteditor.search.ProjectSearcher;
 import dev.javatexteditor.search.SearchResult;
 import dev.javatexteditor.ui.EditorCanvas;
@@ -34,7 +35,8 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH }
+    private enum FileSearchType { NAME, GREP }
 
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
@@ -75,6 +77,12 @@ public class ModalEditor {
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
     // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
     private List<CompileDiagnostic> localDiagnostics = List.of();
+    // ファイル名検索 / ファイル内容grep（\f / \g）
+    private Path projectRoot = null; // null のとき user.dir を使用
+    private final FileNameSearcher fileNameSearcher = new FileNameSearcher();
+    private final StringBuilder fileSearchBuffer = new StringBuilder();
+    private FileSearchType fileSearchType = FileSearchType.NAME;
+    private List<String> fileNameResults = null; // null = 通常バッファ
     // テキスト内検索状態
     private final StringBuilder searchBuffer = new StringBuilder();
     private String  lastSearchPattern = "";
@@ -161,6 +169,7 @@ public class ModalEditor {
             case VISUAL      -> processVisualKey(keyCode, keyChar, modifiers);
             case VISUAL_LINE -> processVisualLineKey(keyCode, keyChar, modifiers);
             case SEARCH      -> processSearchKey(keyCode, keyChar);
+            case FILESEARCH  -> processFileSearchKey(keyCode, keyChar);
         }
         syncCanvas();
     }
@@ -193,6 +202,12 @@ public class ModalEditor {
             return;
         }
 
+        // ファイル名検索結果バッファ: Enter でそのファイルを開く
+        if (fileNameResults != null && keyCode == KeyEvent.VK_ENTER) {
+            jumpToFileNameResult();
+            return;
+        }
+
         // 2打鍵シーケンス（yy / dd）の処理
         if (!pendingSequence.isEmpty()) {
             String seq = pendingSequence;
@@ -217,6 +232,12 @@ public class ModalEditor {
             if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_L, 'l') || matches(keyCode, keyChar, KeyEvent.VK_J, 'j'))) {
                 if (movePaneNextCallback != null) movePaneNextCallback.run();
                 return;
+            }
+            // \f: ファイル名検索, \g: ファイル内容grep
+            if (prev == '\\') {
+                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { enterFileSearch(FileSearchType.GREP); return; }
+                // マッチしない場合は通常処理へ
             }
             // [g / [d: 診断ジャンプシーケンス
             if (seq.equals("[")) {
@@ -315,8 +336,9 @@ public class ModalEditor {
             case "delete.pending" -> pendingSequence = "d";
             case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
             case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
-            case "split.pending"  -> { pendingSequence = "s"; statusMessage = "s-"; }
-            case "leader.pending" -> { pendingSequence = " "; statusMessage = "SPC-"; }
+            case "split.pending"       -> { pendingSequence = "s";  statusMessage = "s-"; }
+            case "leader.pending"      -> { pendingSequence = " "; statusMessage = "SPC-"; }
+            case "filesearch.pending"  -> { pendingSequence = "\\"; statusMessage = "\\-"; }
             case "line.swap.down" -> swapLineDown();
             case "line.swap.up"   -> swapLineUp();
             case "word.forward"  -> moveWordForward();
@@ -551,6 +573,103 @@ public class ModalEditor {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // FILESEARCHモード処理（\f = ファイル名検索, \g = ファイル内容grep）
+    // -------------------------------------------------------------------------
+
+    private void enterFileSearch(FileSearchType type) {
+        fileSearchType = type;
+        fileSearchBuffer.setLength(0);
+        mode = Mode.FILESEARCH;
+        statusMessage = "";
+    }
+
+    private void processFileSearchKey(int keyCode, char keyChar) {
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            fileSearchBuffer.setLength(0);
+            mode = Mode.NORMAL;
+        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
+            if (fileSearchBuffer.length() > 0) {
+                fileSearchBuffer.deleteCharAt(fileSearchBuffer.length() - 1);
+            }
+        } else if (keyCode == KeyEvent.VK_ENTER) {
+            String pattern = fileSearchBuffer.toString();
+            mode = Mode.NORMAL;
+            if (!pattern.isEmpty()) {
+                if (fileSearchType == FileSearchType.NAME) {
+                    executeFileNameSearch(pattern);
+                } else {
+                    executeGrep(pattern);
+                }
+            }
+        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            fileSearchBuffer.append(keyChar);
+        }
+    }
+
+    /**
+     * \f: ファイル名パターンで baseDir 配下を検索し、結果を疑似バッファに表示する。
+     * 大文字小文字を区別しない正規表現として扱う。
+     */
+    private void executeFileNameSearch(String pattern) {
+        Path baseDir = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+        List<Path> results;
+        try {
+            results = fileNameSearcher.search(baseDir, pattern);
+        } catch (java.util.regex.PatternSyntaxException e) {
+            statusMessage = "E: bad pattern: " + e.getDescription();
+            return;
+        }
+        if (results.isEmpty()) {
+            fileNameResults = List.of();
+            statusMessage = "file-search: no matches for /" + pattern + "/";
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("*file-search* /").append(pattern).append("/ — ").append(results.size()).append(" match(es)\n");
+        List<String> paths = new ArrayList<>();
+        for (Path p : results) {
+            String rel = p.toString().replace('\\', '/');
+            sb.append(rel).append("\n");
+            paths.add(rel);
+        }
+        fileNameResults = paths;
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = "file-search: " + results.size() + " match(es) — Enter to open";
+    }
+
+    /**
+     * ファイル名検索結果バッファ内でカーソル行のファイルを開く。
+     * cursorRow==0 はヘッダ行なのでジャンプ対象外。
+     */
+    private void jumpToFileNameResult() {
+        if (fileNameResults == null) return;
+        int resultIdx = cursorRow - 1;
+        if (resultIdx < 0 || resultIdx >= fileNameResults.size()) {
+            statusMessage = "E: no result at this line";
+            return;
+        }
+        String relPath = fileNameResults.get(resultIdx);
+        Path base = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+        Path target = base.resolve(relPath);
+        try {
+            String content = Files.readString(target).replace("\r\n", "\n");
+            buffer = new UndoablePieceTable(content);
+            currentFilePath = target.toString();
+            fileNameResults = null;
+            cursorRow = 0;
+            cursorCol = 0;
+            statusMessage = "\"" + relPath + "\" opened";
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+        }
+    }
+
     /**
      * パターン（正規表現）でバッファ全体を検索し、最初のマッチへジャンプする。
      * forward=true なら現在カーソルより後方の最初のマッチへ、false なら前方の最後のマッチへ。
@@ -757,6 +876,7 @@ public class ModalEditor {
             cursorRow = 0;
             cursorCol = 0;
             grepResults = null;
+            fileNameResults = null;
             searchMatches = List.of();
             currentMatchIdx = -1;
             statusMessage = "\"" + path + "\" opened";
@@ -770,7 +890,7 @@ public class ModalEditor {
             statusMessage = "E: no pattern";
             return;
         }
-        Path baseDir = Path.of(System.getProperty("user.dir"));
+        Path baseDir = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
         List<SearchResult> results;
         try {
             results = projectSearcher.search(baseDir, pattern);
@@ -790,6 +910,7 @@ public class ModalEditor {
             sb.append(r.toDisplayLine()).append("\n");
         }
         grepResults = results;
+        fileNameResults = null;
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
         cursorRow = 0;
@@ -1321,6 +1442,9 @@ public class ModalEditor {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
             } else if (mode == Mode.SEARCH) {
                 canvas.setCommandLineText("/" + searchBuffer.toString());
+            } else if (mode == Mode.FILESEARCH) {
+                String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
+                canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
             } else if (!statusMessage.isEmpty()) {
                 canvas.setCommandLineText(statusMessage);
             } else {
@@ -1342,13 +1466,19 @@ public class ModalEditor {
     public boolean isCommandMode()     { return mode == Mode.COMMAND; }
     public boolean isVisualMode()      { return mode == Mode.VISUAL; }
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
-    public boolean isSearchMode()      { return mode == Mode.SEARCH; }
-    public String getStatusMessage()   { return statusMessage; }
-    public String getCommandBuffer()   { return commandBuffer.toString(); }
-    public String getSearchBuffer()    { return searchBuffer.toString(); }
-    public String getLastSearchPattern() { return lastSearchPattern; }
+    public boolean isSearchMode()         { return mode == Mode.SEARCH; }
+    public void setProjectRoot(Path root)    { this.projectRoot = root; }
+    public boolean isFileSearchMode()     { return mode == Mode.FILESEARCH; }
+    public boolean isFileNameSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.NAME; }
+    public boolean isFileGrepSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.GREP; }
+    public String getFileSearchBuffer()   { return fileSearchBuffer.toString(); }
+    public List<String> getFileNameResults() { return fileNameResults; }
+    public String getStatusMessage()      { return statusMessage; }
+    public String getCommandBuffer()      { return commandBuffer.toString(); }
+    public String getSearchBuffer()       { return searchBuffer.toString(); }
+    public String getLastSearchPattern()  { return lastSearchPattern; }
     public List<int[]> getSearchMatches() { return searchMatches; }
-    public int getCurrentMatchIdx()    { return currentMatchIdx; }
+    public int getCurrentMatchIdx()       { return currentMatchIdx; }
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType; }
 
