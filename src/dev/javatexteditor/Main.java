@@ -27,11 +27,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
-import javax.swing.JFileChooser;
 import javax.swing.JFrame;
-import javax.swing.JMenu;
-import javax.swing.JMenuBar;
-import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
@@ -402,28 +398,6 @@ public class Main {
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             frame.setSize(WINDOW_WIDTH, WINDOW_HEIGHT);
             centerOnScreen(frame, targetScreen);
-
-            // メニューバー: File > Set Working Directory...
-            JMenuBar menuBar = new JMenuBar();
-            JMenu fileMenu = new JMenu("File");
-            JMenuItem setCwdItem = new JMenuItem("Set Working Directory...");
-            setCwdItem.addActionListener(ae -> {
-                JFileChooser chooser = new JFileChooser(
-                    WD_MANAGER.getWorkingDirectory().toFile());
-                chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-                chooser.setDialogTitle("作業ディレクトリを選択");
-                if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
-                    Path chosen = chooser.getSelectedFile().toPath();
-                    String err = WD_MANAGER.setWorkingDirectory(chosen);
-                    if (err != null) {
-                        JOptionPane.showMessageDialog(frame, err,
-                            "作業ディレクトリの設定エラー", JOptionPane.ERROR_MESSAGE);
-                    }
-                }
-            });
-            fileMenu.add(setCwdItem);
-            menuBar.add(fileMenu);
-            frame.setJMenuBar(menuBar);
 
             Leaf firstLeaf = createLeaf(text, path);
             if (splash) firstLeaf.canvas().setShowSplash(true);
