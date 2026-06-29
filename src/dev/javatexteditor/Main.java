@@ -366,22 +366,22 @@ public class Main {
                     if (e.getID() == KeyEvent.KEY_PRESSED) {
                         pressedHandled[0] = false;
 
-                        // Ctrl+Shift+矢印: ビットマップフォントのセルサイズを全ペイン一括変更
+                        // Ctrl+Shift+矢印: アクティブペインのビットマップフォントセルサイズを変更
                         boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
                         boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
                         if (ctrl && shift) {
                             int kc = e.getKeyCode();
                             if (kc == KeyEvent.VK_RIGHT) {
-                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(+1));
+                                active[0].canvas().adjustCellWidth(+1);
                                 pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_LEFT) {
-                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(-1));
+                                active[0].canvas().adjustCellWidth(-1);
                                 pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_DOWN) {
-                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(+1));
+                                active[0].canvas().adjustCellHeight(+1);
                                 pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_UP) {
-                                allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(-1));
+                                active[0].canvas().adjustCellHeight(-1);
                                 pressedHandled[0] = true; return true;
                             }
                         }
