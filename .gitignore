@@ -28,3 +28,6 @@ lib/
 
 # Build output
 build/
+
+# Packaged distribution
+dist/
