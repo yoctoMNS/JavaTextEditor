@@ -495,7 +495,7 @@ public class ModalEditor {
                     }
                     case "delete.before" -> {
                         handleBackspace();
-                        if (completionActive) recheckCompletion();
+                        recheckCompletion();
                     }
                     case "insert.newline" -> {
                         dismissCompletion();
@@ -526,7 +526,7 @@ public class ModalEditor {
                     }
                     case "delete.word.before" -> {
                         deleteWordBefore();
-                        if (completionActive) recheckCompletion();
+                        recheckCompletion();
                     }
                     case "cursor.right"  -> { dismissCompletion(); moveCursor(0, 1); }
                     case "cursor.left"   -> { dismissCompletion(); moveCursor(0, -1); }
@@ -549,10 +549,8 @@ public class ModalEditor {
                 buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
                 cursorCol++;
             }
-            // 文字挿入後: 補完を再クエリ
-            if (completionActive) {
-                recheckCompletion();
-            }
+            // 文字挿入後: 常に補完を再クエリ（1文字から自動表示）
+            recheckCompletion();
         }
     }
 
@@ -594,23 +592,28 @@ public class ModalEditor {
         syncCompletionCanvas();
     }
 
-    /** 文字を挿入・削除した後に補完候補を再クエリする。 */
+    /**
+     * 文字を挿入・削除した後に補完候補を再クエリする。
+     * インデックス未完了・候補なし・プレフィックスなしのときはサイレントに閉じる。
+     * completionActive の状態に関わらず常に呼んでよい。
+     */
     private void recheckCompletion() {
-        if (completionIndex == null) return;
+        if (completionIndex == null || !completionIndex.isReady()) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
-            dismissCompletion();
+            if (completionActive) dismissCompletion();
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
             completionIndex.query(prefix, 10);
         if (items.isEmpty()) {
-            dismissCompletion();
+            if (completionActive) dismissCompletion();
             return;
         }
         completionPrefix      = prefix;
         completionItems       = items;
         completionSelectedIdx = 0;
+        completionActive      = true;
         syncCompletionCanvas();
     }
 

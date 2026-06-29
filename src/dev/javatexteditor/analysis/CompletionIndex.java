@@ -6,7 +6,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
@@ -81,18 +80,36 @@ public class CompletionIndex {
     }
 
     /**
-     * prefix で始まる補完候補を最大 maxResults 件返す。
+     * 入力文字列に対してスマートスコアリングを行い、上位 maxResults 件を返す。
+     *
+     * スコアリング優先度（CompletionScorer 参照）:
+     *   1. 完全一致
+     *   2. 大文字小文字区別ありプレフィックス
+     *   3. 大文字小文字区別なしプレフィックス
+     *   4. CamelCase 頭文字一致（例: "AL" → "ArrayList"）
+     *   5. ファジー部分列一致
+     *
      * インデックス未完了の場合は空リストを返す。
      */
-    public List<CompletionItem> query(String prefix, int maxResults) {
-        if (!ready.get() || prefix == null || prefix.isEmpty()) return Collections.emptyList();
-        // subMap の上限キー: prefix の末尾を "￿" に置き換えた文字列
-        String upperBound = prefix + "￿";
-        NavigableMap<String, CompletionItem> sub = index.subMap(prefix, true, upperBound, false);
-        List<CompletionItem> result = new ArrayList<>(Math.min(maxResults, sub.size()));
-        for (CompletionItem item : sub.values()) {
-            result.add(item);
-            if (result.size() >= maxResults) break;
+    public List<CompletionItem> query(String query, int maxResults) {
+        if (!ready.get() || query == null || query.isEmpty()) return Collections.emptyList();
+
+        // 全エントリをスコアリングして収集（14k 件程度なら < 1ms）
+        record Scored(CompletionItem item, int score) {}
+        List<Scored> scored = new ArrayList<>();
+        for (CompletionItem item : index.values()) {
+            int s = CompletionScorer.score(query, item.label());
+            if (s > 0) scored.add(new Scored(item, s));
+        }
+
+        // スコア降順 → 同スコアはアルファベット昇順
+        scored.sort((a, b) -> a.score() != b.score()
+            ? b.score() - a.score()
+            : a.item().label().compareTo(b.item().label()));
+
+        List<CompletionItem> result = new ArrayList<>(Math.min(maxResults, scored.size()));
+        for (int i = 0; i < scored.size() && result.size() < maxResults; i++) {
+            result.add(scored.get(i).item());
         }
         return Collections.unmodifiableList(result);
     }
