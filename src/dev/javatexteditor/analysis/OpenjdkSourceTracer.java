@@ -194,32 +194,65 @@ public class OpenjdkSourceTracer {
         return null;
     }
 
-    /** JDK インストールから src.zip を探す。 */
+    /** プロジェクト同梱 src.zip または JDK インストール内の src.zip を探す。 */
     private static Optional<Path> findSrcZip() {
-        // 1. java.home プロパティから辿る
+        // 1. プロジェクト同梱 lib/src.zip を最優先（scripts/setup.sh で配置）
+        Optional<Path> bundled = findBundledSrcZip();
+        if (bundled.isPresent()) return bundled;
+
+        // 2. java.home プロパティから辿る
         String javaHome = System.getProperty("java.home", "");
         if (!javaHome.isEmpty()) {
+            Path home = Paths.get(javaHome);
             Path[] candidates = {
-                Paths.get(javaHome, "lib", "src.zip"),
-                Paths.get(javaHome, "src.zip"),
-                Paths.get(javaHome).getParent() != null
-                    ? Paths.get(javaHome).getParent().resolve("lib/src.zip")
-                    : Paths.get(javaHome, "lib", "src.zip")
+                home.resolve("lib/src.zip"),
+                home.resolve("src.zip"),
+                home.getParent() != null ? home.getParent().resolve("lib/src.zip") : home.resolve("lib/src.zip"),
+                home.getParent() != null && home.getParent().getParent() != null
+                    ? home.getParent().getParent().resolve("lib/src.zip")
+                    : home.resolve("lib/src.zip"),
             };
+            for (Path p : candidates) {
+                if (Files.exists(p) && !Files.isSymbolicLink(p)) return Optional.of(p);
+            }
+            // シンボリックリンクでも中身があれば使う
             for (Path p : candidates) {
                 if (Files.exists(p)) return Optional.of(p);
             }
         }
-        // 2. 既知のパスを試す
-        String[] knownPaths = {
-            "/usr/lib/jvm/java-21-openjdk-amd64/lib/src.zip",
-            "/usr/lib/jvm/openjdk-21/lib/src.zip",
-            "/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home/lib/src.zip"
-        };
-        for (String p : knownPaths) {
-            Path path = Paths.get(p);
-            if (Files.exists(path)) return Optional.of(path);
+
+        // 3. JAVA_HOME 環境変数
+        String envJavaHome = System.getenv("JAVA_HOME");
+        if (envJavaHome != null && !envJavaHome.isEmpty()) {
+            Path p = Paths.get(envJavaHome, "lib", "src.zip");
+            if (Files.exists(p)) return Optional.of(p);
         }
+
+        return Optional.empty();
+    }
+
+    /**
+     * クラスファイルの場所から遡って lib/src.zip を探す。
+     * 実行形態（クラスパス直接 / jar）に関わらず動作する。
+     */
+    private static Optional<Path> findBundledSrcZip() {
+        try {
+            // クラスファイルの URL から場所を特定
+            var url = OpenjdkSourceTracer.class.getProtectionDomain().getCodeSource().getLocation();
+            if (url == null) return Optional.empty();
+            Path codeLocation = Paths.get(url.toURI());
+            // build/ や .jar が起点 → 親を遡って lib/src.zip を探す
+            Path dir = Files.isDirectory(codeLocation) ? codeLocation : codeLocation.getParent();
+            for (int i = 0; i < 4; i++) {
+                if (dir == null) break;
+                Path candidate = dir.resolve("lib/src.zip");
+                if (Files.exists(candidate)) return Optional.of(candidate);
+                dir = dir.getParent();
+            }
+        } catch (Exception ignored) {}
+        // カレントディレクトリからも試す
+        Path fromCwd = Paths.get("lib", "src.zip");
+        if (Files.exists(fromCwd)) return Optional.of(fromCwd.toAbsolutePath());
         return Optional.empty();
     }
 }

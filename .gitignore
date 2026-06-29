@@ -23,5 +23,8 @@
 hs_err_pid*
 replay_pid*
 
+# Downloaded JDK sources (populated by scripts/setup.sh)
+lib/
+
 # Build output
 build/
