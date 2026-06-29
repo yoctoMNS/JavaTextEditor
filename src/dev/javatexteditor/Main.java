@@ -354,6 +354,11 @@ public class Main {
 
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
+                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
+                    java.awt.Window focused = KeyboardFocusManager
+                        .getCurrentKeyboardFocusManager().getFocusedWindow();
+                    if (focused != frame) return false;
+
                     if (e.getID() == KeyEvent.KEY_PRESSED) {
                         pressedHandled[0] = false;
 
