@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
+import javax.swing.JOptionPane;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
 
@@ -371,6 +372,47 @@ public class Main {
                                 allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(-1));
                                 pressedHandled[0] = true; return true;
                             }
+                        }
+
+                        // F2: カーソル行の診断をモーダルダイアログで表示
+                        if (e.getKeyCode() == KeyEvent.VK_F2) {
+                            dev.javatexteditor.editor.ModalEditor edF2 = active[0].editor();
+                            int row = edF2.getCursorRow();
+                            List<CompileDiagnostic> diags = active[0].canvas().getDiagnostics();
+                            List<CompileDiagnostic> rowDiags = diags.stream()
+                                .filter(d -> d.lineNumber() == row)
+                                .toList();
+                            if (rowDiags.isEmpty()) {
+                                JOptionPane.showMessageDialog(frame,
+                                    "この行にエラー・警告はありません。",
+                                    "診断情報（行 " + (row + 1) + "）",
+                                    JOptionPane.INFORMATION_MESSAGE);
+                            } else {
+                                StringBuilder sb = new StringBuilder();
+                                for (int i = 0; i < rowDiags.size(); i++) {
+                                    CompileDiagnostic d = rowDiags.get(i);
+                                    if (i > 0) sb.append("\n\n");
+                                    String kindLabel = switch (d.kind()) {
+                                        case ERROR   -> "エラー";
+                                        case WARNING -> "警告";
+                                    };
+                                    sb.append("[").append(kindLabel).append("]");
+                                    if (d.column() >= 0) {
+                                        sb.append("  列: ").append(d.column() + 1);
+                                    }
+                                    sb.append("\n").append(d.message());
+                                }
+                                int iconType = rowDiags.stream().anyMatch(
+                                    d -> d.kind() == dev.javatexteditor.analysis.DiagnosticKind.ERROR)
+                                    ? JOptionPane.ERROR_MESSAGE
+                                    : JOptionPane.WARNING_MESSAGE;
+                                JOptionPane.showMessageDialog(frame,
+                                    sb.toString(),
+                                    "診断情報（行 " + (row + 1) + "）",
+                                    iconType);
+                            }
+                            pressedHandled[0] = true;
+                            return true;
                         }
 
                         // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
