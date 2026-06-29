@@ -169,7 +169,11 @@ public class Main {
                 }
             });
         };
-        editor.setOnReturnToNormal(trigger);
+        // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替えてからコンパイル解析を実行する
+        editor.setOnReturnToNormal(() -> {
+            canvas.switchToHalfWidth();
+            trigger.run();
+        });
         editor.setOnSave(trigger);
     }
 
