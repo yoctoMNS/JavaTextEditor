@@ -284,10 +284,7 @@ public class Main {
             Path wd = WD_MANAGER.getWorkingDirectory();
             editor.setProjectRoot(wd);
             canvas.setWorkingDirectory(wd);
-            editor.setChangeWorkingDirectoryCallback(p -> {
-                String err = WD_MANAGER.setWorkingDirectory(p);
-                if (err != null) editor.setStatusMessage("E: " + err);
-            });
+            editor.setChangeWorkingDirectoryCallback(p -> WD_MANAGER.setWorkingDirectory(p));
         }
         return new Leaf(canvas, editor);
     }
