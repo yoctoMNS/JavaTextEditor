@@ -113,6 +113,10 @@ public class ModalEditor {
     private int telescopeSelectedIdx = 0;
     // telescope 起動時にバッファ一覧を供給するコールバック（Main.java から設定）
     private java.util.function.Supplier<List<BufferPicker.BufferEntry>> bufferListSupplier = null;
+    // ファイルを開いたとき（telescope/`:e`）にバッファレジストリへ登録するコールバック
+    private java.util.function.Consumer<BufferPicker.BufferEntry> onFileOpened = null;
+    // BufferPicker で `d` を押してバッファを削除するコールバック
+    private java.util.function.Consumer<BufferPicker.BufferEntry> onBufferDelete = null;
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
     private String savedBufferText = null;       // 元バッファのテキスト
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
@@ -140,6 +144,14 @@ public class ModalEditor {
 
     public void setBufferListSupplier(java.util.function.Supplier<List<BufferPicker.BufferEntry>> supplier) {
         this.bufferListSupplier = supplier;
+    }
+
+    public void setOnFileOpened(java.util.function.Consumer<BufferPicker.BufferEntry> callback) {
+        this.onFileOpened = callback;
+    }
+
+    public void setOnBufferDelete(java.util.function.Consumer<BufferPicker.BufferEntry> callback) {
+        this.onBufferDelete = callback;
     }
 
     public void setExitCallback(Runnable callback) {
@@ -745,6 +757,19 @@ public class ModalEditor {
         if (ctrlDown && keyCode == KeyEvent.VK_P) {
             moveTelescope(-1); return;
         }
+        // BufferPicker 中に 'd': 選択バッファをレジストリから削除
+        if (keyChar == 'd' && !ctrlDown && telescopePicker instanceof BufferPicker) {
+            if (!telescopeResults.isEmpty() && onBufferDelete != null) {
+                TelescopeItem item = telescopeResults.get(telescopeSelectedIdx);
+                onBufferDelete.accept(new BufferPicker.BufferEntry(item.display(), item.filePath()));
+                // リストを再取得して表示を更新
+                List<BufferPicker.BufferEntry> updated = bufferListSupplier != null
+                    ? bufferListSupplier.get() : List.of();
+                telescopePicker = new BufferPicker(updated);
+                refreshTelescope();
+            }
+            return;
+        }
         // 通常文字入力
         if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ' && !ctrlDown) {
             telescopeQuery.append(keyChar);
@@ -779,6 +804,9 @@ public class ModalEditor {
             cursorRow = Math.max(0, item.lineNumber());
             cursorCol = 0;
             statusMessage = "\"" + target.getFileName() + "\" opened";
+            if (onFileOpened != null) {
+                onFileOpened.accept(new BufferPicker.BufferEntry(target.getFileName().toString(), currentFilePath));
+            }
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
@@ -1080,6 +1108,10 @@ public class ModalEditor {
             searchMatches = List.of();
             currentMatchIdx = -1;
             statusMessage = "\"" + path + "\" opened";
+            if (onFileOpened != null) {
+                String name = Path.of(path).getFileName().toString();
+                onFileOpened.accept(new BufferPicker.BufferEntry(name, path));
+            }
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
