@@ -40,7 +40,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT }
     private enum FileSearchType { NAME, GREP }
 
     private UndoablePieceTable buffer;
@@ -80,6 +80,12 @@ public class ModalEditor {
     // 選択待ち候補: 単純名 → FQN 候補リストのペアを順番通りに保持
     private final List<Map.Entry<String, List<String>>> pendingImports = new ArrayList<>();
     private int pendingImportIdx = 0; // 現在選択中の単純名インデックス
+    // IMPORT_SELECT モード: モーダルオーバーレイで FQN を選択させる
+    private List<String> importSelectFqns = List.of();   // 現在表示中の候補 FQN リスト
+    private String importSelectSymbol = "";               // 現在対象のシンボル名
+    private int importSelectIdx = 0;                      // 選択中インデックス
+    // テスト用: handleAutoImportFromCandidates で設定される適用コールバック
+    private java.util.function.Consumer<String> pendingImportApply = null;
     // project-wide-search: grep 結果バッファ
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
@@ -201,9 +207,10 @@ public class ModalEditor {
             case NORMAL      -> processNormalKey(keyCode, keyChar, modifiers);
             case VISUAL      -> processVisualKey(keyCode, keyChar, modifiers);
             case VISUAL_LINE -> processVisualLineKey(keyCode, keyChar, modifiers);
-            case SEARCH      -> processSearchKey(keyCode, keyChar);
-            case FILESEARCH  -> processFileSearchKey(keyCode, keyChar);
-            case TELESCOPE   -> processTelescopeKey(keyCode, keyChar, modifiers);
+            case SEARCH        -> processSearchKey(keyCode, keyChar);
+            case FILESEARCH    -> processFileSearchKey(keyCode, keyChar);
+            case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
+            case IMPORT_SELECT -> processImportSelectKey(keyCode, modifiers);
         }
         syncCanvas();
     }
@@ -213,23 +220,6 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
-        // import 選択待ち状態の処理
-        if (!pendingImports.isEmpty()) {
-            if (keyCode == KeyEvent.VK_ESCAPE) {
-                // Esc: このシンボルをスキップして次へ
-                advanceImportPrompt();
-            } else if (keyChar >= '1' && keyChar <= '9') {
-                int choice = keyChar - '1';
-                List<String> fqns = pendingImports.get(pendingImportIdx).getValue();
-                if (choice < fqns.size()) {
-                    autoImportHandler.applyImport(fqns.get(choice), buffer);
-                }
-                advanceImportPrompt();
-            }
-            syncCanvas();
-            return;
-        }
-
         // grep 結果バッファ: Enter でその行の結果ファイルへジャンプ
         if (grepResults != null && keyCode == KeyEvent.VK_ENTER) {
             jumpToGrepResult();
@@ -1731,7 +1721,18 @@ public class ModalEditor {
                     telescopePicker.preview(telescopeResults.get(telescopeSelectedIdx));
                 canvas.setTelescopeState(true, telescopePicker.title(),
                     telescopeQuery.toString(), telescopeResults, telescopeSelectedIdx, preview);
-            } else if (mode != Mode.TELESCOPE) {
+            } else if (mode == Mode.IMPORT_SELECT) {
+                // import 候補選択モーダル: TelescopeItem リストとして表示する
+                List<TelescopeItem> items = new ArrayList<>();
+                for (String fqn : importSelectFqns) {
+                    items.add(new TelescopeItem(fqn, null, 0, 0));
+                }
+                int sym = pendingImportIdx + 1;
+                int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
+                String title = "Import: " + importSelectSymbol
+                    + "  [" + sym + "/" + total + "]";
+                canvas.setTelescopeState(true, title, "", items, importSelectIdx, "");
+            } else {
                 canvas.setTelescopeState(false, "", "", List.of(), 0, "");
             }
         }
@@ -1752,6 +1753,7 @@ public class ModalEditor {
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
     public boolean isSearchMode()         { return mode == Mode.SEARCH; }
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
+    public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public String getTelescopeQuery()     { return telescopeQuery.toString(); }
     public List<TelescopeItem> getTelescopeResults() { return telescopeResults; }
     public int getTelescopeSelectedIdx()  { return telescopeSelectedIdx; }
@@ -1855,7 +1857,7 @@ public class ModalEditor {
             pendingImports.clear();
             pendingImports.addAll(multi);
             pendingImportIdx = 0;
-            showImportPrompt();
+            enterImportSelect();
         } else {
             // 全て自動挿入完了: 後処理を即実行
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
@@ -1863,43 +1865,114 @@ public class ModalEditor {
         syncCanvas();
     }
 
-    /** 選択待ちの import が存在するかどうか。 */
-    public boolean hasImportPending() {
-        return !pendingImports.isEmpty();
+    /**
+     * テスト用: candidates マップを直接渡して import 選択フローを開始する。
+     * 候補1件 → 即適用（applyImportCallback を呼ぶ）、複数候補 → IMPORT_SELECT モードへ。
+     * @param candidates  シンボル名 → FQN候補リストのマップ
+     * @param applyImportCallback  選択された FQN を受け取って適用するコールバック
+     */
+    public void handleAutoImportFromCandidates(
+            Map<String, List<String>> candidates,
+            java.util.function.Consumer<String> applyImportCallback) {
+        if (candidates.isEmpty()) {
+            if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
+            return;
+        }
+        List<Map.Entry<String, List<String>>> entries = new ArrayList<>(candidates.entrySet());
+        List<Map.Entry<String, List<String>>> multi = new ArrayList<>();
+        for (Map.Entry<String, List<String>> e : entries) {
+            if (e.getValue().size() == 1) {
+                applyImportCallback.accept(e.getValue().get(0));
+            } else {
+                multi.add(e);
+            }
+        }
+        if (!multi.isEmpty()) {
+            // IMPORT_SELECT モード中の適用コールバックをカスタム化するため一時フィールドに保存
+            pendingImportApply = applyImportCallback;
+            pendingImports.clear();
+            pendingImports.addAll(multi);
+            pendingImportIdx = 0;
+            enterImportSelect();
+        } else {
+            if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
+        }
+        syncCanvas();
     }
 
-    /** 現在のシンボルの選択を完了（または skip）して次へ進む。 */
+    /** 選択待ちの import が存在するかどうか（IMPORT_SELECT モード中も含む）。 */
+    public boolean hasImportPending() {
+        return !pendingImports.isEmpty() || mode == Mode.IMPORT_SELECT;
+    }
+
+    // -------------------------------------------------------------------------
+    // IMPORT_SELECT モード処理（複数 import 候補をモーダルオーバーレイで選択）
+    // -------------------------------------------------------------------------
+
+    /** 現在の pendingImports[pendingImportIdx] に対する選択モーダルを開く。 */
+    private void enterImportSelect() {
+        if (pendingImports.isEmpty()) return;
+        Map.Entry<String, List<String>> entry = pendingImports.get(pendingImportIdx);
+        importSelectSymbol = entry.getKey();
+        importSelectFqns   = entry.getValue();
+        importSelectIdx    = 0;
+        mode = Mode.IMPORT_SELECT;
+        statusMessage = "";
+    }
+
+    private void processImportSelectKey(int keyCode, int modifiers) {
+        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            // スキップして次の候補へ
+            exitImportSelect(false);
+            return;
+        }
+        if (keyCode == KeyEvent.VK_ENTER) {
+            // 選択して import 挿入
+            exitImportSelect(true);
+            return;
+        }
+        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
+            if (importSelectIdx < importSelectFqns.size() - 1) importSelectIdx++;
+            return;
+        }
+        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
+            if (importSelectIdx > 0) importSelectIdx--;
+            return;
+        }
+    }
+
+    /** 選択完了（apply=true）またはスキップ（apply=false）して次の候補へ進む。 */
+    private void exitImportSelect(boolean apply) {
+        if (apply && importSelectIdx < importSelectFqns.size()) {
+            String fqn = importSelectFqns.get(importSelectIdx);
+            if (pendingImportApply != null) {
+                pendingImportApply.accept(fqn);
+            } else if (autoImportHandler != null) {
+                autoImportHandler.applyImport(fqn, buffer);
+            }
+        }
+        mode = Mode.NORMAL;
+        if (canvas != null) canvas.setTelescopeState(false, "", "", List.of(), 0, "");
+        advanceImportPrompt();
+    }
+
+    /** 現在のシンボルの選択を完了（または skip）して次の pendingImport へ進む。 */
     private void advanceImportPrompt() {
         pendingImportIdx++;
         if (pendingImportIdx >= pendingImports.size()) {
             pendingImports.clear();
             pendingImportIdx = 0;
+            pendingImportApply = null;
             statusMessage = "";
-            // 全候補処理完了: 未使用 import 削除等の後処理を実行
             if (onImportComplete != null) {
                 onImportComplete.run();
                 onImportComplete = null;
             }
         } else {
-            showImportPrompt();
+            enterImportSelect();
         }
-    }
-
-    /** 現在の選択待ちプロンプトを statusMessage に設定する。 */
-    private void showImportPrompt() {
-        if (pendingImports.isEmpty()) return;
-        Map.Entry<String, List<String>> entry = pendingImports.get(pendingImportIdx);
-        StringBuilder sb = new StringBuilder();
-        sb.append("import ").append(entry.getKey()).append("? ");
-        List<String> fqns = entry.getValue();
-        int limit = Math.min(fqns.size(), 9);
-        for (int i = 0; i < limit; i++) {
-            sb.append("[").append(i + 1).append("] ").append(fqns.get(i));
-            if (i < limit - 1) sb.append("  ");
-        }
-        if (fqns.size() > 9) sb.append("  (+").append(fqns.size() - 9).append(" more)");
-        sb.append("  [Esc]=skip");
-        statusMessage = sb.toString();
     }
 
     /** NORMALモードの K キー: カーソル位置の識別子を JDK クラスとして検索し、ステータスバーに表示。
