@@ -309,9 +309,15 @@ public class Main {
             updateBorders(List.of(firstLeaf), firstLeaf);
             frame.add(firstLeaf.canvas());
 
+            // KEY_PRESSEDで processKey を呼んだキーは KEY_TYPED でも届くため、
+            // 二重処理を防ぐためにフラグで管理する。
+            boolean[] pressedHandled = { false };
+
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
                     if (e.getID() == KeyEvent.KEY_PRESSED) {
+                        pressedHandled[0] = false;
+
                         // Ctrl+Shift+矢印: ビットマップフォントのセルサイズを全ペイン一括変更
                         boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
                         boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
@@ -319,16 +325,16 @@ public class Main {
                             int kc = e.getKeyCode();
                             if (kc == KeyEvent.VK_RIGHT) {
                                 allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(+1));
-                                return true;
+                                pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_LEFT) {
                                 allLeaves(root[0]).forEach(l -> l.canvas().adjustCellWidth(-1));
-                                return true;
+                                pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_DOWN) {
                                 allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(+1));
-                                return true;
+                                pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_UP) {
                                 allLeaves(root[0]).forEach(l -> l.canvas().adjustCellHeight(-1));
-                                return true;
+                                pressedHandled[0] = true; return true;
                             }
                         }
 
@@ -341,16 +347,23 @@ public class Main {
                         dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
                         if (noCtrlAlt && isPrintable &&
                                 (ed.isInsertMode() || ed.isCommandMode())) {
-                            return false;
+                            return false; // IMEに委譲（pressedHandled は false のまま）
                         }
 
                         ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
                         updateBorders(allLeaves(root[0]), active[0]);
+                        pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
                         return true;
                     }
 
-                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する
+                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する。
+                    // KEY_PRESSEDで既に処理したキーは無視する（';'→COMMMANDモードへの遷移後に
+                    // KEY_TYPED の';'がコマンドバッファに追記される問題を防ぐ）。
                     if (e.getID() == KeyEvent.KEY_TYPED) {
+                        if (pressedHandled[0]) {
+                            pressedHandled[0] = false;
+                            return false;
+                        }
                         char ch = e.getKeyChar();
                         dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
                         if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
