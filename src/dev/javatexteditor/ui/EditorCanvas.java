@@ -3,6 +3,7 @@ package dev.javatexteditor.ui;
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.DiagnosticKind;
 import javax.swing.JPanel;
+import javax.swing.Timer;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.util.List;
@@ -49,9 +50,26 @@ public class EditorCanvas extends JPanel {
     private Font swingFont = null;
     private int  swingFontCellH = 0;   // swingFont を生成した時の cellH
 
-    private static final Font SPLASH_FONT = new Font(Font.MONOSPACED, Font.PLAIN, 16);
+    private static final Font  SPLASH_FONT   = new Font(Font.MONOSPACED, Font.PLAIN, 16);
     private static final Color ERROR_COLOR   = new Color(0xCC, 0x33, 0x33);
     private static final Color WARNING_COLOR = new Color(0xCC, 0x99, 0x00);
+
+    // -------------------------------------------------------------------------
+    // ステータスラインのウォークキャラクターアニメーション
+    // -------------------------------------------------------------------------
+    /** 2フレーム交互に切り替わる歩行キャラクター */
+    private static final String[] WALK_FRAMES = { "(^‿^)/", "(^‿^)\\" };
+    /** キャラクターの移動速度（ピクセル/秒） */
+    private static final double  WALK_SPEED_PX = 80.0;
+    /** フレーム切替速度（フレーム/秒） */
+    private static final double  WALK_FPS      = 6.0;
+
+    private final long  animStartMs = System.currentTimeMillis();
+    private final Timer animTimer   = new Timer(40, e -> repaint());
+
+    public EditorCanvas() {
+        animTimer.start();
+    }
 
     public void setText(String text) { this.text = text; repaint(); }
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
@@ -561,6 +579,20 @@ public class EditorCanvas extends JPanel {
             int labelWidth = fm.stringWidth(diagLabel);
             g2.drawString(diagLabel, getWidth() - labelWidth - 4, y - 4);
         }
+
+        // 歩行キャラクターアニメーション（左→右へ走り抜ける）
+        drawWalkingCharacter(g2, y - 4, lineHeight);
+    }
+
+    private void drawWalkingCharacter(Graphics2D g2, int textY, int lineHeight) {
+        FontMetrics fm = g2.getFontMetrics();
+        double elapsed = (System.currentTimeMillis() - animStartMs) / 1000.0;
+        int frame = (int)(elapsed * WALK_FPS) % WALK_FRAMES.length;
+        String sprite = WALK_FRAMES[frame];
+        int spriteW = fm.stringWidth(sprite);
+        int totalW  = getWidth() + spriteW;
+        int x = (int)((elapsed * WALK_SPEED_PX) % totalW) - spriteW;
+        g2.drawString(sprite, x, textY);
     }
 
     private static String buildDiagLabel(long errors, long warnings) {
