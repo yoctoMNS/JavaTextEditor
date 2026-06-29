@@ -7,6 +7,7 @@ import java.io.*;
 import java.net.URI;
 import java.nio.file.*;
 import java.util.*;
+import java.util.Locale;
 
 /**
  * Compiler Tree API を使って Java ソースの AST を解析し、SourceIndex を生成する。
@@ -41,7 +42,7 @@ public class SourceAnalyzer {
 
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
 
-        try (StandardJavaFileManager stdFm = compiler.getStandardFileManager(diagnostics, null, null)) {
+        try (StandardJavaFileManager stdFm = compiler.getStandardFileManager(diagnostics, Locale.ENGLISH, null)) {
             StringJavaFileObject fileObj = new StringJavaFileObject(filePath, sourceCode);
 
             JavaCompiler.CompilationTask task = compiler.getTask(
