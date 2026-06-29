@@ -991,6 +991,8 @@ public class ModalEditor {
             if (saveToFile(path)) {
                 currentFilePath = path;
             }
+        } else if (cmd.equals("e") || cmd.equals("enew")) {
+            newBuffer();
         } else if (cmd.startsWith("e ")) {
             String path = cmd.substring(2).trim();
             loadFromFile(path);
@@ -1040,6 +1042,18 @@ public class ModalEditor {
             statusMessage = "E: " + e.getMessage();
             return false;
         }
+    }
+
+    private void newBuffer() {
+        buffer = new UndoablePieceTable("");
+        currentFilePath = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        statusMessage = "[新規バッファ]";
     }
 
     private void loadFromFile(String path) {
