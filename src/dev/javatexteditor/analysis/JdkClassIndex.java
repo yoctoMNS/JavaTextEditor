@@ -92,6 +92,16 @@ public class JdkClassIndex {
     }
 
     /**
+     * インデックス構築が完了するまでブロックする。
+     * 仮想スレッドから呼ぶことを想定しており、EDT からは呼ばないこと。
+     */
+    public void awaitReady() throws InterruptedException {
+        while (!ready.get()) {
+            Thread.sleep(20);
+        }
+    }
+
+    /**
      * 単純名（例: "List"）から FQN 候補リストを返す。
      * インデックス未完了の場合は空リストを返す。
      */
