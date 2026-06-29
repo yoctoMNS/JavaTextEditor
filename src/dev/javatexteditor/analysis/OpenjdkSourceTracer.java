@@ -51,6 +51,24 @@ public class OpenjdkSourceTracer {
             : Optional.empty();
     }
 
+    /** src.zip が利用可能かどうかを返す。 */
+    public boolean hasSrcZip() {
+        return srcZip.isPresent();
+    }
+
+    /**
+     * src.zip から指定クラスの Java ソースを取り出して返す。
+     * 見つからない場合は Optional.empty()。
+     */
+    public Optional<String> readJavaSource(Class<?> cls) {
+        if (srcZip.isEmpty()) return Optional.empty();
+        try (ZipFile zip = new ZipFile(srcZip.get().toFile())) {
+            return findJavaSource(zip, cls);
+        } catch (IOException e) {
+            return Optional.empty();
+        }
+    }
+
     /**
      * 指定クラスの指定メソッドが native かどうか調べ、native なら JNI 情報を返す。
      * native でなければ isNative=false の結果を返す。

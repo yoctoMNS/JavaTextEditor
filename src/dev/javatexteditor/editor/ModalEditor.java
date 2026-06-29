@@ -113,6 +113,12 @@ public class ModalEditor {
     private int telescopeSelectedIdx = 0;
     // telescope 起動時にバッファ一覧を供給するコールバック（Main.java から設定）
     private java.util.function.Supplier<List<BufferPicker.BufferEntry>> bufferListSupplier = null;
+    // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
+    private String savedBufferText = null;       // 元バッファのテキスト
+    private String savedFilePath = null;         // 元バッファのファイルパス（null可）
+    private int savedCursorRow = 0;
+    private int savedCursorCol = 0;
+    private boolean inJdkSourceBuffer = false;   // true のとき q で元に戻る
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -222,6 +228,12 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+        // jdk-source 疑似バッファ: q で元バッファに戻る
+        if (inJdkSourceBuffer && keyChar == 'q') {
+            closeJdkSourceBuffer();
+            return;
+        }
+
         // grep 結果バッファ: Enter でその行の結果ファイルへジャンプ
         if (grepResults != null && keyCode == KeyEvent.VK_ENTER) {
             jumpToGrepResult();
@@ -1999,8 +2011,9 @@ public class ModalEditor {
         }
     }
 
-    /** NORMALモードの K キー: カーソル位置の識別子を JDK クラスとして検索し、ステータスバーに表示。
-     *  カーソルがメソッド呼び出し（Class.method形式）の上にある場合は native メソッドのトレースも試みる。
+    /** NORMALモードの K キー: カーソル位置の識別子を JDK ソースで開く。
+     *  src.zip がなければステータスバーへのフォールバック表示。
+     *  カーソルが "ClassName.methodName" の上にある場合は native メソッドのトレースも試みる。
      */
     private void lookupJdkDoc() {
         if (jdkIndex == null || !jdkIndex.isReady()) {
@@ -2020,16 +2033,29 @@ public class ModalEditor {
             String methodName = classAndMethod[1];
             List<String> classCandidates = jdkIndex.lookup(className);
             if (!classCandidates.isEmpty()) {
-                String fqn = classCandidates.stream()
-                    .filter(f -> f.startsWith("java.lang.")).findFirst()
-                    .orElseGet(() -> classCandidates.stream()
-                        .filter(f -> f.startsWith("java.")).findFirst()
-                        .orElse(classCandidates.get(0)));
+                String fqn = pickBestFqn(classCandidates);
                 Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
                 if (cls.isPresent()) {
                     OpenjdkSourceTracer.TracingResult result = sourceTracer.trace(cls.get(), methodName);
                     if (result.isNative()) {
-                        setStatusMessage(result.toStatusLine());
+                        if (result.sourceFile().isPresent() && result.snippet().isPresent()) {
+                            // C/C++ ソースを疑似バッファで表示
+                            openJdkSourceBuffer(
+                                "*jdk-source:" + className + "." + methodName + "*",
+                                "[native] " + result.jniMangledName() + "\n"
+                                    + "Source: " + result.sourceFile().get() + "\n\n"
+                                    + result.snippet().get()
+                            );
+                        } else {
+                            setStatusMessage(result.toStatusLine());
+                        }
+                        return;
+                    }
+                    // non-native: ソースにジャンプ（メソッド行を探す）
+                    Optional<String> src = sourceTracer.readJavaSource(cls.get());
+                    if (src.isPresent()) {
+                        openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
+                        jumpToMethod(methodName);
                         return;
                     }
                 }
@@ -2041,30 +2067,80 @@ public class ModalEditor {
             setStatusMessage("Not found in JDK: " + word);
             return;
         }
-        // 候補が1件なら即詳細表示、複数ならリスト表示
-        if (candidates.size() == 1) {
-            String fqn = candidates.get(0);
-            Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
-            if (cls.isPresent()) {
-                setStatusMessage(buildDocLine(fqn, cls.get(), ""));
-            } else {
-                setStatusMessage(fqn + " (cannot load)");
+        String best = pickBestFqn(candidates);
+        Optional<Class<?>> cls = jdkIndex.loadClass(best);
+        String extra = candidates.size() > 1 ? " (+" + (candidates.size() - 1) + " more)" : "";
+
+        // src.zip があればソースを疑似バッファで開く
+        if (cls.isPresent() && sourceTracer.hasSrcZip()) {
+            Optional<String> src = sourceTracer.readJavaSource(cls.get());
+            if (src.isPresent()) {
+                openJdkSourceBuffer("*jdk-source:" + best + "*", src.get());
+                if (!extra.isEmpty()) setStatusMessage("K: opened " + best + extra);
+                return;
             }
+        }
+
+        // フォールバック: ステータスバーに情報表示
+        if (cls.isPresent()) {
+            setStatusMessage(buildDocLine(best, cls.get(), extra));
         } else {
-            // 最初の候補を優先表示（java.lang > java.util > その他）
-            String best = candidates.stream()
-                .filter(f -> f.startsWith("java.lang."))
-                .findFirst()
-                .orElseGet(() -> candidates.stream()
-                    .filter(f -> f.startsWith("java.util."))
-                    .findFirst()
-                    .orElse(candidates.get(0)));
-            Optional<Class<?>> cls = jdkIndex.loadClass(best);
-            String extra = candidates.size() > 1 ? " (+" + (candidates.size() - 1) + " more)" : "";
-            if (cls.isPresent()) {
-                setStatusMessage(buildDocLine(best, cls.get(), extra));
-            } else {
-                setStatusMessage(best + " (cannot load)" + extra);
+            setStatusMessage(best + " (cannot load)" + extra);
+        }
+    }
+
+    /** FQN 候補リストから java.lang > java.util > その他 の優先順で1件選ぶ。 */
+    private String pickBestFqn(List<String> candidates) {
+        return candidates.stream()
+            .filter(f -> f.startsWith("java.lang.")).findFirst()
+            .orElseGet(() -> candidates.stream()
+                .filter(f -> f.startsWith("java.util.")).findFirst()
+                .orElse(candidates.get(0)));
+    }
+
+    /** JDK ソース疑似バッファを開く。元バッファの状態を退避する。 */
+    private void openJdkSourceBuffer(String title, String content) {
+        if (!inJdkSourceBuffer) {
+            savedBufferText = buffer.getText();
+            savedFilePath = currentFilePath;
+            savedCursorRow = cursorRow;
+            savedCursorCol = cursorCol;
+        }
+        buffer = new UndoablePieceTable(content);
+        currentFilePath = title;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        inJdkSourceBuffer = true;
+        setStatusMessage("q: close  [" + title + "]");
+    }
+
+    /** JDK ソース疑似バッファを閉じて元バッファに戻る。 */
+    private void closeJdkSourceBuffer() {
+        if (!inJdkSourceBuffer) return;
+        buffer = new UndoablePieceTable(savedBufferText != null ? savedBufferText : "");
+        currentFilePath = savedFilePath;
+        cursorRow = savedCursorRow;
+        cursorCol = savedCursorCol;
+        inJdkSourceBuffer = false;
+        savedBufferText = null;
+        setStatusMessage("Returned from JDK source");
+    }
+
+    /** 疑似バッファ内でメソッド名の宣言行を探してカーソルを移動する。 */
+    private void jumpToMethod(String methodName) {
+        String text = buffer.getText();
+        String[] lines = text.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.contains(methodName + "(") &&
+                    (line.contains("public") || line.contains("protected")
+                     || line.contains("private") || line.contains("native"))) {
+                cursorRow = i;
+                cursorCol = 0;
+                setStatusMessage("→ " + methodName + " (line " + (i + 1) + ")  q: close");
+                return;
             }
         }
     }
