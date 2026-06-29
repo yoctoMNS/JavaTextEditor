@@ -127,4 +127,14 @@ public class JdkClassIndex {
     public int totalClassCount() {
         return simpleNameToFqns.values().stream().mapToInt(List::size).sum();
     }
+
+    /**
+     * インデックスに登録されている全クラス単純名のセットを返す。
+     * インデックス未完了の場合は空セットを返す。
+     * CompletionIndex が JDK クラス名を取得するために使用する。
+     */
+    public java.util.Set<String> allSimpleNames() {
+        if (!ready.get()) return java.util.Set.of();
+        return java.util.Collections.unmodifiableSet(simpleNameToFqns.keySet());
+    }
 }

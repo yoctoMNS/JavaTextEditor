@@ -44,6 +44,7 @@ public class Main {
     private static final ImportSuggester IMPORT_SUGGESTER = new ImportSuggester(JDK_INDEX);
     private static final AutoImportHandler AUTO_IMPORT_HANDLER =
         new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
+    private static dev.javatexteditor.analysis.CompletionIndex COMPLETION_INDEX = null;
 
     // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
@@ -271,6 +272,9 @@ public class Main {
         editor.setBufferListSupplier(Main::getBufferRegistry);
         editor.setOnFileOpened(Main::registerBuffer);
         editor.setOnBufferDelete(Main::unregisterBuffer);
+        if (COMPLETION_INDEX != null) {
+            editor.setCompletionIndex(COMPLETION_INDEX);
+        }
         return new Leaf(canvas, editor);
     }
 
@@ -345,6 +349,7 @@ public class Main {
         // セットアップ未完了なら自動実行（バックグラウンド）
         runSetupIfNeeded();
 
+        // プロジェクトルートを引数のファイルの親ディレクトリか user.dir から決定
         String initialPath = (args.length > 0) ? args[0] : null;
         String initialText;
         if (initialPath != null) {
@@ -357,6 +362,13 @@ public class Main {
         } else {
             initialText = "";
         }
+
+        // 補完インデックスをバックグラウンドで構築
+        Path projectRoot = (initialPath != null)
+            ? Path.of(initialPath).toAbsolutePath().getParent()
+            : Paths.get(System.getProperty("user.dir"));
+        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(
+            JDK_INDEX, projectRoot, SOURCE_ANALYZER);
 
         final GraphicsConfiguration targetScreen = detectMouseScreen();
         final String text = initialText;
