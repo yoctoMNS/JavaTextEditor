@@ -157,6 +157,8 @@ public class Main {
             editor.setStatusMessage("auto-import: 解析中...");
             Thread.ofVirtual().start(() -> {
                 try {
+                    // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
+                    JDK_INDEX.awaitReady();
                     // バッファ内容を直接解析する（ファイル未保存でも正しく動作させるため）
                     List<CompileDiagnostic> diags = COMPILE_ANALYZER.analyze(source);
                     SwingUtilities.invokeLater(() -> {
@@ -168,6 +170,8 @@ public class Main {
                         canvas.setDiagnostics(List.of());
                         editor.setStatusMessage("auto-import: 解析失敗");
                     });
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 }
             });
         };
@@ -184,9 +188,8 @@ public class Main {
             editor.setStatusMessage("import 整理中...");
             Thread.ofVirtual().start(() -> {
                 try {
-                    List<CompileDiagnostic> diags = (filePath != null)
-                        ? COMPILE_ANALYZER.analyzeFile(Path.of(filePath))
-                        : COMPILE_ANALYZER.analyze(source);
+                    JDK_INDEX.awaitReady();
+                    List<CompileDiagnostic> diags = COMPILE_ANALYZER.analyze(source);
                     SwingUtilities.invokeLater(() -> {
                         canvas.setDiagnostics(diags);
                         // 未使用削除は handleAutoImport の全候補処理完了後に実行
@@ -198,6 +201,8 @@ public class Main {
                         canvas.setDiagnostics(List.of());
                         editor.setStatusMessage("E: コンパイル解析失敗");
                     });
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 }
             });
         });
