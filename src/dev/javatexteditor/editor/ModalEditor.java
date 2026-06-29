@@ -378,6 +378,17 @@ public class ModalEditor {
             case "search.prev" -> jumpToNextMatch(!lastSearchForward);
             case "search.star" -> searchWordAtCursor(true);
             case "search.hash" -> searchWordAtCursor(false);
+            // ページスクロール
+            case "scroll.page.down" -> scrollPage(true,  false);
+            case "scroll.page.up"   -> scrollPage(false, false);
+            case "scroll.half.down" -> scrollPage(true,  true);
+            case "scroll.half.up"   -> scrollPage(false, true);
+            case "scroll.line.down" -> scrollLines(1);
+            case "scroll.line.up"   -> scrollLines(-1);
+            // 画面内ジャンプ
+            case "screen.top"    -> jumpToScreenRow(0);
+            case "screen.middle" -> jumpToScreenRow(1);
+            case "screen.bottom" -> jumpToScreenRow(2);
         }
     }
 
@@ -1031,6 +1042,10 @@ public class ModalEditor {
             case "line.start.nonblank" -> moveLineStartNonBlank();
             case "line.end"            -> moveLineEnd();
             case "file.end"            -> moveFileEnd();
+            case "scroll.page.down" -> scrollPage(true,  false);
+            case "scroll.page.up"   -> scrollPage(false, false);
+            case "scroll.half.down" -> scrollPage(true,  true);
+            case "scroll.half.up"   -> scrollPage(false, true);
             case "yank" -> {
                 yankRegister = getSelectedText();
                 yankType = "char";
@@ -1066,6 +1081,10 @@ public class ModalEditor {
             case "cursor.down"  -> moveCursor(1, 0);
             case "cursor.up"    -> moveCursor(-1, 0);
             case "file.end"     -> moveFileEnd();
+            case "scroll.page.down" -> scrollPage(true,  false);
+            case "scroll.page.up"   -> scrollPage(false, false);
+            case "scroll.half.down" -> scrollPage(true,  true);
+            case "scroll.half.up"   -> scrollPage(false, true);
             case "yank" -> {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
@@ -1410,6 +1429,90 @@ public class ModalEditor {
         int lineLen = lines[cursorRow].length();
         boolean isInsert = (mode == Mode.INSERT);
         cursorCol = isInsert ? lineLen : Math.max(0, lineLen - 1);
+    }
+
+    /**
+     * Ctrl+F/B (full page) または Ctrl+D/U (half page) スクロール。
+     * Vim の挙動: スクロール量だけ scrollRow とカーソル行を同時に移動し、
+     * カーソルが画面外に出た場合は画面端の行に補正する。
+     *
+     * @param down  true=下方向, false=上方向
+     * @param half  true=半ページ, false=1ページ
+     */
+    private void scrollPage(boolean down, boolean half) {
+        int pageSize = getVisibleRows();
+        int amount = half ? Math.max(1, pageSize / 2) : Math.max(1, pageSize);
+        int totalLines = getLines().length;
+
+        if (down) {
+            int newScrollRow = Math.min(canvas != null
+                    ? canvas.getScrollRow() + amount
+                    : cursorRow,
+                Math.max(0, totalLines - 1));
+            cursorRow = Math.min(cursorRow + amount, totalLines - 1);
+            if (canvas != null) canvas.setScrollRow(newScrollRow);
+        } else {
+            int newScrollRow = Math.max(0,
+                canvas != null ? canvas.getScrollRow() - amount : cursorRow - amount);
+            cursorRow = Math.max(0, cursorRow - amount);
+            if (canvas != null) canvas.setScrollRow(newScrollRow);
+        }
+        // カーソル列をその行の範囲内に収める
+        String[] lines = getLines();
+        int lineLen = lines[cursorRow].length();
+        cursorCol = Math.min(cursorCol, Math.max(0, lineLen - 1));
+        syncCanvas();
+    }
+
+    /**
+     * Ctrl+E/Y: 画面を n 行スクロールするが、カーソル行番号は変えない。
+     * カーソルが画面外に押し出された場合は画面端に補正する。
+     *
+     * @param lines 正=下方向（画面が下へ流れる）、負=上方向
+     */
+    private void scrollLines(int lines) {
+        if (canvas == null) return;
+        int newScrollRow = Math.max(0, canvas.getScrollRow() + lines);
+        canvas.setScrollRow(newScrollRow);
+        int visibleRows = getVisibleRows();
+        // カーソルが画面外に出た場合は画面端に補正
+        if (cursorRow < newScrollRow) {
+            cursorRow = newScrollRow;
+        } else if (cursorRow >= newScrollRow + visibleRows) {
+            cursorRow = newScrollRow + visibleRows - 1;
+        }
+        String[] docLines = getLines();
+        cursorRow = Math.max(0, Math.min(cursorRow, docLines.length - 1));
+        int lineLen = docLines[cursorRow].length();
+        cursorCol = Math.min(cursorCol, Math.max(0, lineLen - 1));
+        syncCanvas();
+    }
+
+    /**
+     * H/M/L: 現在の表示範囲内の特定行へカーソルを移動する。
+     *
+     * @param pos 0=先頭行(H), 1=中央行(M), 2=末尾行(L)
+     */
+    private void jumpToScreenRow(int pos) {
+        int scrollRow = canvas != null ? canvas.getScrollRow() : 0;
+        int visibleRows = getVisibleRows();
+        int totalLines = getLines().length;
+        int lastVisible = Math.min(scrollRow + visibleRows - 1, totalLines - 1);
+
+        cursorRow = switch (pos) {
+            case 0 -> scrollRow;
+            case 1 -> (scrollRow + lastVisible) / 2;
+            default -> lastVisible;
+        };
+        String[] docLines = getLines();
+        int lineLen = docLines[cursorRow].length();
+        cursorCol = Math.min(cursorCol, Math.max(0, lineLen - 1));
+        syncCanvas();
+    }
+
+    /** 表示可能行数を返す（canvas がなければ仮の値 40）。 */
+    private int getVisibleRows() {
+        return canvas != null ? canvas.getVisibleRows() : 40;
     }
 
     private void moveCursorToOffset(int offset) {

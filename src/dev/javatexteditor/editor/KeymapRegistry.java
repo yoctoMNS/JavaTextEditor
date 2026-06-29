@@ -115,6 +115,17 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('*', "search.star"),     "search.star");
         bind(Mode.NORMAL, KeyBinding.ofChar('#', "search.hash"),     "search.hash");
 
+        // ページスクロール（Ctrl+F/B=1ページ, Ctrl+D/U=半ページ, Ctrl+E/Y=1行）
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK, "scroll.page.down"),  "scroll.page.down");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),    "scroll.page.up");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"),  "scroll.half.down");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),    "scroll.half.up");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_E, KeyEvent.CTRL_DOWN_MASK, "scroll.line.down"),  "scroll.line.down");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_Y, KeyEvent.CTRL_DOWN_MASK, "scroll.line.up"),    "scroll.line.up");
+        // 画面内ジャンプ（H=先頭行, M=中央行, L=末尾行）
+        bind(Mode.NORMAL, KeyBinding.ofChar('H', "screen.top"),    "screen.top");
+        bind(Mode.NORMAL, KeyBinding.ofChar('M', "screen.middle"), "screen.middle");
+        bind(Mode.NORMAL, KeyBinding.ofChar('L', "screen.bottom"), "screen.bottom");
         // [ をプレフィックスとして使用（[g=次の診断, [d=前の診断）
         bind(Mode.NORMAL, KeyBinding.ofChar('[', "diag.pending"), "diag.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_OPEN_BRACKET, 0, "diag.pending"), "diag.pending");
@@ -179,6 +190,10 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('^', "line.start.nonblank"), "line.start.nonblank");
         bind(Mode.VISUAL, KeyBinding.ofChar('$', "line.end"),            "line.end");
         bind(Mode.VISUAL, KeyBinding.ofChar('G', "file.end"),   "file.end");
+        bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK, "scroll.page.down"), "scroll.page.down");
+        bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),   "scroll.page.up");
+        bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"), "scroll.half.down");
+        bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),   "scroll.half.up");
 
         // VISUAL LINE モード（行単位選択）
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -189,5 +204,9 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('d', "delete"), "delete");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('G', "file.end"), "file.end");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK, "scroll.page.down"), "scroll.page.down");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),   "scroll.page.up");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"), "scroll.half.down");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),   "scroll.half.up");
     }
 }
