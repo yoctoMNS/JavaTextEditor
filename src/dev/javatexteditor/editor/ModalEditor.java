@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 /**
@@ -32,7 +34,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH }
 
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
@@ -73,6 +75,12 @@ public class ModalEditor {
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
     // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
     private List<CompileDiagnostic> localDiagnostics = List.of();
+    // テキスト内検索状態
+    private final StringBuilder searchBuffer = new StringBuilder();
+    private String  lastSearchPattern = "";
+    private boolean lastSearchForward = true;
+    private List<int[]> searchMatches = List.of(); // 各要素: {offset, length}
+    private int currentMatchIdx = -1;
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -152,6 +160,7 @@ public class ModalEditor {
             case NORMAL      -> processNormalKey(keyCode, keyChar, modifiers);
             case VISUAL      -> processVisualKey(keyCode, keyChar, modifiers);
             case VISUAL_LINE -> processVisualLineKey(keyCode, keyChar, modifiers);
+            case SEARCH      -> processSearchKey(keyCode, keyChar);
         }
         syncCanvas();
     }
@@ -320,6 +329,16 @@ public class ModalEditor {
             case "file.end"            -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
             case "organize.imports" -> organizeImports();
+            case "search.enter" -> {
+                searchBuffer.setLength(0);
+                mode = Mode.SEARCH;
+                lastSearchForward = true;
+                statusMessage = "";
+            }
+            case "search.next" -> jumpToNextMatch(lastSearchForward);
+            case "search.prev" -> jumpToNextMatch(!lastSearchForward);
+            case "search.star" -> searchWordAtCursor(true);
+            case "search.hash" -> searchWordAtCursor(false);
         }
     }
 
@@ -506,6 +525,171 @@ public class ModalEditor {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // SEARCHモード処理
+    // -------------------------------------------------------------------------
+
+    private void processSearchKey(int keyCode, char keyChar) {
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            searchBuffer.setLength(0);
+            mode = Mode.NORMAL;
+            clearSearchHighlights();
+        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
+            if (searchBuffer.length() > 0) {
+                searchBuffer.deleteCharAt(searchBuffer.length() - 1);
+            }
+        } else if (keyCode == KeyEvent.VK_ENTER) {
+            String pattern = searchBuffer.toString();
+            mode = Mode.NORMAL;
+            if (!pattern.isEmpty()) {
+                lastSearchPattern = pattern;
+                lastSearchForward = true;
+                executeSearch(pattern, true);
+            }
+        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            searchBuffer.append(keyChar);
+        }
+    }
+
+    /**
+     * パターン（正規表現）でバッファ全体を検索し、最初のマッチへジャンプする。
+     * forward=true なら現在カーソルより後方の最初のマッチへ、false なら前方の最後のマッチへ。
+     */
+    private void executeSearch(String pattern, boolean forward) {
+        Pattern p;
+        try {
+            p = Pattern.compile(pattern);
+        } catch (PatternSyntaxException e) {
+            statusMessage = "E: bad pattern: " + e.getDescription();
+            return;
+        }
+
+        String text = buffer.getText();
+        Matcher m = p.matcher(text);
+        List<int[]> matches = new ArrayList<>();
+        while (m.find()) {
+            int len = m.end() - m.start();
+            matches.add(new int[]{m.start(), len > 0 ? len : 1});
+        }
+
+        if (matches.isEmpty()) {
+            statusMessage = "Pattern not found: " + pattern;
+            searchMatches = List.of();
+            currentMatchIdx = -1;
+            updateSearchHighlights();
+            return;
+        }
+
+        searchMatches = matches;
+        int cursorOffset = offsetOfCursor();
+
+        if (forward) {
+            currentMatchIdx = -1;
+            for (int i = 0; i < matches.size(); i++) {
+                if (matches.get(i)[0] > cursorOffset) {
+                    currentMatchIdx = i;
+                    break;
+                }
+            }
+            if (currentMatchIdx < 0) currentMatchIdx = 0; // wrap around
+        } else {
+            currentMatchIdx = -1;
+            for (int i = matches.size() - 1; i >= 0; i--) {
+                if (matches.get(i)[0] < cursorOffset) {
+                    currentMatchIdx = i;
+                    break;
+                }
+            }
+            if (currentMatchIdx < 0) currentMatchIdx = matches.size() - 1; // wrap around
+        }
+
+        moveCursorToOffset(searchMatches.get(currentMatchIdx)[0]);
+        statusMessage = "/" + pattern + "  [" + (currentMatchIdx + 1) + "/" + matches.size() + "]";
+        updateSearchHighlights();
+    }
+
+    /** n/N: 最後の検索方向（または逆方向）で次マッチへジャンプ。 */
+    private void jumpToNextMatch(boolean forward) {
+        if (!lastSearchPattern.isEmpty() && searchMatches.isEmpty()) {
+            executeSearch(lastSearchPattern, forward);
+            return;
+        }
+        if (searchMatches.isEmpty()) {
+            statusMessage = "E: no previous search pattern";
+            return;
+        }
+        if (forward) {
+            currentMatchIdx = (currentMatchIdx + 1) % searchMatches.size();
+        } else {
+            currentMatchIdx = (currentMatchIdx - 1 + searchMatches.size()) % searchMatches.size();
+        }
+        moveCursorToOffset(searchMatches.get(currentMatchIdx)[0]);
+        statusMessage = "/" + lastSearchPattern + "  [" + (currentMatchIdx + 1) + "/" + searchMatches.size() + "]";
+        updateSearchHighlights();
+    }
+
+    /** * / #: カーソル位置の単語を完全一致で検索（単語境界 \b を使用）。 */
+    private void searchWordAtCursor(boolean forward) {
+        String word = wordAtCursor();
+        if (word.isEmpty()) {
+            statusMessage = "No word at cursor";
+            return;
+        }
+        String pattern = "\\b" + Pattern.quote(word) + "\\b";
+        lastSearchPattern = pattern;
+        lastSearchForward = forward;
+        executeSearch(pattern, forward);
+    }
+
+    /** 検索ハイライトをクリアする。 */
+    private void clearSearchHighlights() {
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        if (canvas != null) canvas.setSearchHighlights(List.of());
+    }
+
+    /**
+     * searchMatches（オフセット単位）をキャンバス向け行単位セグメント {row, startCol, endCol} に変換し渡す。
+     * マルチライン・マッチは行ごとに分割する。
+     */
+    private void updateSearchHighlights() {
+        if (canvas == null) return;
+        if (searchMatches.isEmpty()) {
+            canvas.setSearchHighlights(List.of());
+            return;
+        }
+        String[] lines = getLines();
+        List<int[]> highlights = new ArrayList<>();
+        for (int[] match : searchMatches) {
+            int start = match[0];
+            int end   = start + match[1];
+            int[] startRC = offsetToRowCol(start, lines);
+            int[] endRC   = offsetToRowCol(end,   lines);
+            int r1 = startRC[0], c1 = startRC[1];
+            int r2 = endRC[0],   c2 = endRC[1];
+            if (r1 == r2) {
+                highlights.add(new int[]{r1, c1, c2});
+            } else {
+                highlights.add(new int[]{r1, c1, lines[r1].length()});
+                for (int r = r1 + 1; r < r2; r++) {
+                    highlights.add(new int[]{r, 0, lines[r].length()});
+                }
+                highlights.add(new int[]{r2, 0, c2});
+            }
+        }
+        canvas.setSearchHighlights(highlights);
+    }
+
+    private static int[] offsetToRowCol(int offset, String[] lines) {
+        int pos = 0;
+        for (int i = 0; i < lines.length; i++) {
+            int lineEnd = pos + lines[i].length();
+            if (offset <= lineEnd) return new int[]{i, offset - pos};
+            pos = lineEnd + 1;
+        }
+        return new int[]{lines.length - 1, lines[lines.length - 1].length()};
+    }
+
     private void executeCommand(String cmd) {
         if (cmd.equals("w")) {
             saveToFile(currentFilePath);
@@ -573,6 +757,8 @@ public class ModalEditor {
             cursorRow = 0;
             cursorCol = 0;
             grepResults = null;
+            searchMatches = List.of();
+            currentMatchIdx = -1;
             statusMessage = "\"" + path + "\" opened";
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
@@ -1133,6 +1319,8 @@ public class ModalEditor {
             canvas.ensureCursorColVisible(cursorCol, curLine);
             if (mode == Mode.COMMAND) {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
+            } else if (mode == Mode.SEARCH) {
+                canvas.setCommandLineText("/" + searchBuffer.toString());
             } else if (!statusMessage.isEmpty()) {
                 canvas.setCommandLineText(statusMessage);
             } else {
@@ -1154,8 +1342,13 @@ public class ModalEditor {
     public boolean isCommandMode()     { return mode == Mode.COMMAND; }
     public boolean isVisualMode()      { return mode == Mode.VISUAL; }
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
+    public boolean isSearchMode()      { return mode == Mode.SEARCH; }
     public String getStatusMessage()   { return statusMessage; }
     public String getCommandBuffer()   { return commandBuffer.toString(); }
+    public String getSearchBuffer()    { return searchBuffer.toString(); }
+    public String getLastSearchPattern() { return lastSearchPattern; }
+    public List<int[]> getSearchMatches() { return searchMatches; }
+    public int getCurrentMatchIdx()    { return currentMatchIdx; }
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType; }
 

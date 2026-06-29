@@ -34,6 +34,10 @@ public class EditorCanvas extends JPanel {
     // スプラッシュ画面フラグ（true のとき通常テキストの代わりにスプラッシュを描画）
     private boolean showSplash = false;
 
+    // 検索ハイライト: 各要素 {row, startCol, endCol}（endCol は exclusive）
+    private List<int[]> searchHighlights = List.of();
+    private static final Color SEARCH_HIGHLIGHT_COLOR = new Color(0xFF, 0xE0, 0x00, 0x90);
+
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
     // 行番号 → 最も優先度の高い診断種別（ERROR > WARNING）
@@ -107,6 +111,11 @@ public class EditorCanvas extends JPanel {
     public void clearSelection() {
         this.selAnchorRow = -1;
         this.visualLineMode = false;
+        repaint();
+    }
+
+    public void setSearchHighlights(List<int[]> highlights) {
+        this.searchHighlights = (highlights != null) ? List.copyOf(highlights) : List.of();
         repaint();
     }
 
@@ -275,6 +284,11 @@ public class EditorCanvas extends JPanel {
         if (visualMode && selAnchorRow >= 0) {
             drawSelectionHighlight(g2, text.split("\n", -1),
                 charWidth, lineHeight, scrollOffsetX, gutterWidth);
+        }
+
+        // 1.6 検索ハイライト（/pattern、*、# による検索結果）
+        if (!searchHighlights.isEmpty()) {
+            drawSearchHighlights(g2, text.split("\n", -1), charWidth, lineHeight, scrollOffsetX, gutterWidth);
         }
 
         // 2. 表示行範囲（scrollRow 〜 scrollRow+visibleRows）のみ描画する
@@ -481,6 +495,27 @@ public class EditorCanvas extends JPanel {
                 if (drawStart < drawEnd) {
                     g2.fillRect(drawStart, yTop, drawEnd - drawStart, lineHeight);
                 }
+            }
+        }
+    }
+
+    private void drawSearchHighlights(Graphics2D g2, String[] lines, int charWidth,
+            int lineHeight, int scrollOffsetX, int gutterWidth) {
+        g2.setColor(SEARCH_HIGHLIGHT_COLOR);
+        int visibleRows = computeVisibleRows(lineHeight);
+        for (int[] h : searchHighlights) {
+            int row = h[0], c1 = h[1], c2 = h[2];
+            if (row < scrollRow || row >= scrollRow + visibleRows) continue;
+            int screenRow = row - scrollRow;
+            int yTop = screenRow * lineHeight;
+            String line = (row < lines.length) ? lines[row] : "";
+            int xStart = xForCol(line, c1, charWidth) - scrollOffsetX + gutterWidth;
+            int xEnd   = xForCol(line, c2, charWidth) - scrollOffsetX + gutterWidth;
+            if (xEnd <= xStart) xEnd = xStart + charWidth;
+            int drawStart = Math.max(xStart, gutterWidth);
+            int drawEnd   = Math.min(xEnd, getWidth());
+            if (drawStart < drawEnd) {
+                g2.fillRect(drawStart, yTop, drawEnd - drawStart, lineHeight);
             }
         }
     }

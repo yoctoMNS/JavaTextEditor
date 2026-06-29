@@ -104,6 +104,13 @@ public class KeymapRegistry {
         // ファイル末尾（先頭は gg シーケンス）
         bind(Mode.NORMAL, KeyBinding.ofChar('G', "file.end"),    "file.end");
         bind(Mode.NORMAL, KeyBinding.ofChar('g', "goto.pending"),  "goto.pending");
+        // 文字列検索 (Vim 式: / で入力、n/N で移動、*/# で単語検索)
+        bind(Mode.NORMAL, KeyBinding.ofChar('/', "search.enter"),    "search.enter");
+        bind(Mode.NORMAL, KeyBinding.ofChar('n', "search.next"),     "search.next");
+        bind(Mode.NORMAL, KeyBinding.ofChar('N', "search.prev"),     "search.prev");
+        bind(Mode.NORMAL, KeyBinding.ofChar('*', "search.star"),     "search.star");
+        bind(Mode.NORMAL, KeyBinding.ofChar('#', "search.hash"),     "search.hash");
+
         // [ をプレフィックスとして使用（[g=次の診断, [d=前の診断）
         bind(Mode.NORMAL, KeyBinding.ofChar('[', "diag.pending"), "diag.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_OPEN_BRACKET, 0, "diag.pending"), "diag.pending");
