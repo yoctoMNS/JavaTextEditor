@@ -130,15 +130,21 @@ public class ModalEditor {
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> completionItems = java.util.List.of();
     private int completionSelectedIdx = 0;
     private String completionPrefix = "";
+    // バッファ履歴（Ctrl+U で前へ・Ctrl+P で次へ）
+    private record BufferSnapshot(String text, String filePath, int row, int col) {}
+    private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
+    private int historyIdx = -1; // -1 = 未初期化（最初の pushBuffer で初期化）
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
         this.canvas = null;
+        initHistory();
     }
 
     public ModalEditor(String initialText, EditorCanvas canvas) {
         this.buffer = new UndoablePieceTable(initialText);
         this.canvas = canvas;
+        initHistory();
         syncCanvas();
     }
 
@@ -146,7 +152,13 @@ public class ModalEditor {
         this.buffer = new UndoablePieceTable(initialText);
         this.currentFilePath = filePath;
         this.canvas = canvas;
+        initHistory();
         syncCanvas();
+    }
+
+    private void initHistory() {
+        bufferHistory.add(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
+        historyIdx = 0;
     }
 
     public void setBufferListSupplier(java.util.function.Supplier<List<BufferPicker.BufferEntry>> supplier) {
@@ -247,6 +259,26 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+
+        // Ctrl+U: 前のバッファへ / Ctrl+P: 次のバッファへ
+        if (ctrlDown && keyCode == KeyEvent.VK_U) {
+            if (historyIdx > 0) {
+                restoreBuffer(historyIdx - 1);
+            } else {
+                statusMessage = "これ以上前のバッファはありません";
+            }
+            return;
+        }
+        if (ctrlDown && keyCode == KeyEvent.VK_P) {
+            if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
+                restoreBuffer(historyIdx + 1);
+            } else {
+                statusMessage = "これ以上次のバッファはありません";
+            }
+            return;
+        }
+
         // jdk-source 疑似バッファ: q で元バッファに戻る
         if (inJdkSourceBuffer && keyChar == 'q') {
             closeJdkSourceBuffer();
@@ -1262,6 +1294,7 @@ public class ModalEditor {
     }
 
     private void newBuffer() {
+        pushBuffer();
         buffer = new UndoablePieceTable("");
         currentFilePath = null;
         cursorRow = 0;
@@ -1276,6 +1309,7 @@ public class ModalEditor {
     private void loadFromFile(String path) {
         Path p = Path.of(path);
         if (!Files.exists(p)) {
+            pushBuffer();
             buffer = new UndoablePieceTable("");
             currentFilePath = path;
             cursorRow = 0;
@@ -1288,6 +1322,7 @@ public class ModalEditor {
             return;
         }
         try {
+            pushBuffer();
             String content = Files.readString(p).replace("\r\n", "\n");
             buffer = new UndoablePieceTable(content);
             currentFilePath = path;
@@ -1305,6 +1340,39 @@ public class ModalEditor {
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
+    }
+
+    /** 現在のバッファ状態を履歴に追加し historyIdx を末尾へ進める。 */
+    private void pushBuffer() {
+        BufferSnapshot snap = new BufferSnapshot(
+            buffer.getText(), currentFilePath, cursorRow, cursorCol);
+        // 現在位置より後ろの履歴を切り捨て
+        if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
+            bufferHistory.subList(historyIdx + 1, bufferHistory.size()).clear();
+        }
+        bufferHistory.add(snap);
+        historyIdx = bufferHistory.size() - 1;
+    }
+
+    /** 履歴インデックス idx のバッファを復元する。 */
+    private void restoreBuffer(int idx) {
+        // 現在のバッファ状態を現在の履歴スロットに上書き保存
+        if (historyIdx >= 0 && historyIdx < bufferHistory.size()) {
+            bufferHistory.set(historyIdx, new BufferSnapshot(
+                buffer.getText(), currentFilePath, cursorRow, cursorCol));
+        }
+        historyIdx = idx;
+        BufferSnapshot snap = bufferHistory.get(idx);
+        buffer = new UndoablePieceTable(snap.text());
+        currentFilePath = snap.filePath();
+        cursorRow = snap.row();
+        cursorCol = snap.col();
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[新規バッファ]";
+        statusMessage = label + " (" + (idx + 1) + "/" + bufferHistory.size() + ")";
     }
 
     private void executeGrep(String pattern) {
