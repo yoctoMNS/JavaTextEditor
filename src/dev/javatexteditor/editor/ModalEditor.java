@@ -2027,13 +2027,22 @@ public class ModalEditor {
             return;
         }
 
-        // jdk-source 疑似バッファ内では、バッファタイトルから FQN を取り出してメソッドトレースを試みる
-        // 例: currentFilePath = "*jdk-source:java.lang.reflect.Array*" → FQN = "java.lang.reflect.Array"
+        // jdk-source 疑似バッファ内での K: C シンボル定義 → Java native トレースの順で試みる
         if (inJdkSourceBuffer && currentFilePath != null && currentFilePath.startsWith("*jdk-source:")) {
+
+            // (A) C/C++ シンボル定義ジャンプ（lib/openjdk-native/ を検索）
+            if (sourceTracer.hasNativeSrcDir()) {
+                Optional<OpenjdkSourceTracer.CSymbolLocation> loc = sourceTracer.findCSymbol(word);
+                if (loc.isPresent()) {
+                    openCSymbolBuffer(loc.get());
+                    return;
+                }
+            }
+
+            // (B) Java FQN バッファ内（Array.java 等）での native メソッドトレース
             String fqn = currentFilePath
                 .replaceFirst("^\\*jdk-source:", "")
                 .replaceAll("\\*$", "");
-            // FQN がクラスを指す場合（ドット区切りで末尾が大文字始まり）のみ試みる
             if (fqn.contains(".") && !fqn.contains(" ")) {
                 Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
                 if (cls.isPresent()) {
@@ -2127,6 +2136,22 @@ public class ModalEditor {
             .orElseGet(() -> candidates.stream()
                 .filter(f -> f.startsWith("java.util.")).findFirst()
                 .orElse(candidates.get(0)));
+    }
+
+    /** C シンボルの定義ファイルをフルで疑似バッファに開き、定義行へジャンプする。 */
+    private void openCSymbolBuffer(OpenjdkSourceTracer.CSymbolLocation loc) {
+        String content;
+        try {
+            content = Files.readString(loc.absolutePath(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            setStatusMessage("E: cannot read " + loc.relativePath() + ": " + e.getMessage());
+            return;
+        }
+        openJdkSourceBuffer("*jdk-source:" + loc.relativePath() + "*", content);
+        // 定義行へカーソルを移動
+        cursorRow = loc.lineNumber();
+        cursorCol = 0;
+        setStatusMessage("→ line " + (loc.lineNumber() + 1) + "  [" + loc.relativePath() + "]  q: close");
     }
 
     /** JDK ソース疑似バッファを開く。元バッファの状態を退避する。 */

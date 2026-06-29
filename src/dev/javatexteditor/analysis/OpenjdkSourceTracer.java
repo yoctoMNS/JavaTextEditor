@@ -78,6 +78,90 @@ public class OpenjdkSourceTracer {
     }
 
     /**
+     * C/C++ シンボル（関数名・マクロ名）の定義箇所を native ソースから検索する。
+     * 定義行とは「行頭付近でシンボル名に '(' が続く行」と判定する。
+     * 見つかった場合は CSymbolLocation を返す。見つからなければ empty。
+     */
+    public Optional<CSymbolLocation> findCSymbol(String symbol) {
+        if (nativeSrcDir.isEmpty() || symbol.isBlank()) return Optional.empty();
+        try {
+            return Files.walk(nativeSrcDir.get())
+                .filter(p -> {
+                    String n = p.getFileName().toString();
+                    return n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".h");
+                })
+                .flatMap(p -> {
+                    try {
+                        String content = Files.readString(p, StandardCharsets.UTF_8);
+                        int lineNo = findDefinitionLine(content, symbol);
+                        if (lineNo >= 0) {
+                            String rel = nativeSrcDir.get().getParent()
+                                .relativize(p).toString().replace('\\', '/');
+                            return java.util.stream.Stream.of(
+                                new CSymbolLocation(rel, p, lineNo, extractLines(content, lineNo, 8)));
+                        }
+                    } catch (IOException ignored) {}
+                    return java.util.stream.Stream.empty();
+                })
+                .findFirst();
+        } catch (IOException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** C シンボルの定義場所を表すレコード。 */
+    public record CSymbolLocation(
+        String relativePath,   // openjdk-native/src/... 形式の相対パス
+        Path absolutePath,     // フルファイルを開くための絶対パス
+        int lineNumber,        // 0-indexed 定義行
+        String snippet         // 定義前後数行のスニペット
+    ) {}
+
+    /**
+     * ソーステキストから C 関数定義行を探す（0-indexed 行番号を返す）。
+     * 定義行の条件:
+     *   - symbol + "(" を含む
+     *   - 行頭が空白でない（インデントされた関数呼び出しを除外）
+     *   - "//" や "*" で始まるコメント行でない
+     * 見つからなければ -1。
+     */
+    private static int findDefinitionLine(String content, String symbol) {
+        String[] lines = content.split("\n", -1);
+        String pat = symbol + "(";
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (!line.contains(pat)) continue;
+            String trimmed = line.stripLeading();
+            // コメント行を除外
+            if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
+            // 行頭から始まる定義（returnType や JNIEXPORT など）を優先
+            if (!line.isEmpty() && !Character.isWhitespace(line.charAt(0))) return i;
+        }
+        // 行頭条件を緩めてもう一度探す（マクロや static inline など）
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (!line.contains(pat)) continue;
+            String trimmed = line.stripLeading();
+            if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
+            // = が直前にない（代入や関数ポインタ呼び出しを除外）
+            int idx = line.indexOf(pat);
+            if (idx > 0 && line.charAt(idx - 1) == '=') continue;
+            return i;
+        }
+        return -1;
+    }
+
+    /** content の lineNo 行目を中心に前後 context 行を取り出す。 */
+    private static String extractLines(String content, int lineNo, int context) {
+        String[] lines = content.split("\n", -1);
+        int from = Math.max(0, lineNo);
+        int to   = Math.min(lines.length, lineNo + context);
+        StringBuilder sb = new StringBuilder();
+        for (int i = from; i < to; i++) sb.append(lines[i]).append('\n');
+        return sb.toString().stripTrailing();
+    }
+
+    /**
      * 指定クラスの指定メソッドが native かどうか調べ、native なら JNI 情報を返す。
      * native でなければ isNative=false の結果を返す。
      * lib/openjdk-native/ があればそちらを優先、なければ src.zip にフォールバック。
