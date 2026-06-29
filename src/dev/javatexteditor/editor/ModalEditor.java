@@ -435,6 +435,8 @@ public class ModalEditor {
             case "screen.top"    -> jumpToScreenRow(0);
             case "screen.middle" -> jumpToScreenRow(1);
             case "screen.bottom" -> jumpToScreenRow(2);
+            case "buffer.prev"   -> switchToRelativeBuffer(-1);
+            case "buffer.next"   -> switchToRelativeBuffer(+1);
         }
     }
 
@@ -980,6 +982,42 @@ public class ModalEditor {
             statusMessage = "\"" + target.getFileName() + "\" opened";
             if (onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(target.getFileName().toString(), currentFilePath));
+            }
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+        }
+    }
+
+    /** Ctrl+U / Ctrl+P: バッファレジストリ内で delta 分移動したバッファを開く。 */
+    private void switchToRelativeBuffer(int delta) {
+        if (bufferListSupplier == null) return;
+        List<BufferPicker.BufferEntry> entries = bufferListSupplier.get();
+        if (entries.isEmpty()) return;
+        int currentIdx = -1;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).filePath() != null &&
+                    entries.get(i).filePath().equals(currentFilePath)) {
+                currentIdx = i;
+                break;
+            }
+        }
+        int nextIdx = (currentIdx == -1)
+            ? (delta > 0 ? 0 : entries.size() - 1)
+            : Math.floorMod(currentIdx + delta, entries.size());
+        BufferPicker.BufferEntry target = entries.get(nextIdx);
+        if (target.filePath() == null) return;
+        try {
+            Path p = Path.of(target.filePath());
+            String content = Files.readString(p).replace("\r\n", "\n");
+            buffer = new UndoablePieceTable(content);
+            currentFilePath = p.toString();
+            fileNameResults = null;
+            grepResults = null;
+            cursorRow = 0;
+            cursorCol = 0;
+            statusMessage = "\"" + p.getFileName() + "\" switched";
+            if (onFileOpened != null) {
+                onFileOpened.accept(new BufferPicker.BufferEntry(p.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();

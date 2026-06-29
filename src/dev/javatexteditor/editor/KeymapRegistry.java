@@ -119,7 +119,8 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK, "scroll.page.down"),  "scroll.page.down");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),    "scroll.page.up");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"),  "scroll.half.down");
-        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),    "scroll.half.up");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "buffer.prev"), "buffer.prev");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_P, KeyEvent.CTRL_DOWN_MASK, "buffer.next"), "buffer.next");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_E, KeyEvent.CTRL_DOWN_MASK, "scroll.line.down"),  "scroll.line.down");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_Y, KeyEvent.CTRL_DOWN_MASK, "scroll.line.up"),    "scroll.line.up");
         // 画面内ジャンプ（H=先頭行, M=中央行, L=末尾行）
