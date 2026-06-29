@@ -13,6 +13,11 @@ import dev.javatexteditor.refactor.RenameResult;
 import dev.javatexteditor.search.FileNameSearcher;
 import dev.javatexteditor.search.ProjectSearcher;
 import dev.javatexteditor.search.SearchResult;
+import dev.javatexteditor.telescope.BufferPicker;
+import dev.javatexteditor.telescope.FilePicker;
+import dev.javatexteditor.telescope.GrepPicker;
+import dev.javatexteditor.telescope.TelescopeItem;
+import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
@@ -35,7 +40,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE }
     private enum FileSearchType { NAME, GREP }
 
     private UndoablePieceTable buffer;
@@ -93,6 +98,13 @@ public class ModalEditor {
     private boolean lastSearchForward = true;
     private List<int[]> searchMatches = List.of(); // 各要素: {offset, length}
     private int currentMatchIdx = -1;
+    // telescope モード状態
+    private TelescopePicker telescopePicker = null;
+    private final StringBuilder telescopeQuery = new StringBuilder();
+    private List<TelescopeItem> telescopeResults = List.of();
+    private int telescopeSelectedIdx = 0;
+    // telescope 起動時にバッファ一覧を供給するコールバック（Main.java から設定）
+    private java.util.function.Supplier<List<BufferPicker.BufferEntry>> bufferListSupplier = null;
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -110,6 +122,10 @@ public class ModalEditor {
         this.currentFilePath = filePath;
         this.canvas = canvas;
         syncCanvas();
+    }
+
+    public void setBufferListSupplier(java.util.function.Supplier<List<BufferPicker.BufferEntry>> supplier) {
+        this.bufferListSupplier = supplier;
     }
 
     public void setExitCallback(Runnable callback) {
@@ -187,6 +203,7 @@ public class ModalEditor {
             case VISUAL_LINE -> processVisualLineKey(keyCode, keyChar, modifiers);
             case SEARCH      -> processSearchKey(keyCode, keyChar);
             case FILESEARCH  -> processFileSearchKey(keyCode, keyChar);
+            case TELESCOPE   -> processTelescopeKey(keyCode, keyChar, modifiers);
         }
         syncCanvas();
     }
@@ -288,6 +305,12 @@ public class ModalEditor {
                     statusMessage = "SPC-i-";
                     return;
                 }
+                // SPC+f: telescope file picker
+                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterTelescope("files"); return; }
+                // SPC+/: telescope grep
+                if (keyChar == '/') { enterTelescope("grep"); return; }
+                // SPC+b: telescope buffers
+                if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); return; }
             }
             // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
@@ -633,6 +656,101 @@ public class ModalEditor {
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             fileSearchBuffer.append(keyChar);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // TELESCOPE モード処理（SPC+f / SPC+/ / SPC+b）
+    // -------------------------------------------------------------------------
+
+    private void enterTelescope(String pickerType) {
+        Path baseDir = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+        switch (pickerType) {
+            case "files"   -> telescopePicker = new FilePicker(baseDir);
+            case "grep"    -> telescopePicker = new GrepPicker(baseDir);
+            case "buffers" -> {
+                List<BufferPicker.BufferEntry> entries = (bufferListSupplier != null)
+                    ? bufferListSupplier.get() : List.of();
+                telescopePicker = new BufferPicker(entries);
+            }
+            default -> { return; }
+        }
+        telescopeQuery.setLength(0);
+        telescopeSelectedIdx = 0;
+        telescopeResults = telescopePicker.filter("");
+        mode = Mode.TELESCOPE;
+        statusMessage = "";
+    }
+
+    private void processTelescopeKey(int keyCode, char keyChar, int modifiers) {
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            exitTelescope();
+            return;
+        }
+        if (keyCode == KeyEvent.VK_ENTER) {
+            openTelescopeSelection();
+            return;
+        }
+        if (keyCode == KeyEvent.VK_BACK_SPACE) {
+            if (telescopeQuery.length() > 0) {
+                telescopeQuery.deleteCharAt(telescopeQuery.length() - 1);
+                refreshTelescope();
+            }
+            return;
+        }
+        // Ctrl+N / Ctrl+P でリスト移動
+        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+        if (ctrlDown && keyCode == KeyEvent.VK_N) {
+            moveTelescope(1); return;
+        }
+        if (ctrlDown && keyCode == KeyEvent.VK_P) {
+            moveTelescope(-1); return;
+        }
+        // 通常文字入力
+        if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ' && !ctrlDown) {
+            telescopeQuery.append(keyChar);
+            refreshTelescope();
+        }
+    }
+
+    private void moveTelescope(int delta) {
+        if (telescopeResults.isEmpty()) return;
+        telescopeSelectedIdx = Math.max(0, Math.min(telescopeResults.size() - 1,
+            telescopeSelectedIdx + delta));
+    }
+
+    private void refreshTelescope() {
+        if (telescopePicker == null) return;
+        telescopeResults = telescopePicker.filter(telescopeQuery.toString());
+        telescopeSelectedIdx = 0;
+    }
+
+    private void openTelescopeSelection() {
+        if (telescopePicker == null || telescopeResults.isEmpty()) { exitTelescope(); return; }
+        TelescopeItem item = telescopeResults.get(telescopeSelectedIdx);
+        exitTelescope();
+        if (item.filePath() == null) return;
+        try {
+            Path target = Path.of(item.filePath());
+            String content = Files.readString(target).replace("\r\n", "\n");
+            buffer = new UndoablePieceTable(content);
+            currentFilePath = target.toString();
+            fileNameResults = null;
+            grepResults = null;
+            cursorRow = Math.max(0, item.lineNumber());
+            cursorCol = 0;
+            statusMessage = "\"" + target.getFileName() + "\" opened";
+        } catch (IOException e) {
+            statusMessage = "E: " + e.getMessage();
+        }
+    }
+
+    private void exitTelescope() {
+        mode = Mode.NORMAL;
+        telescopePicker = null;
+        telescopeResults = List.of();
+        telescopeQuery.setLength(0);
+        telescopeSelectedIdx = 0;
+        if (canvas != null) canvas.setTelescopeState(false, "", "", List.of(), 0, "");
     }
 
     /**
@@ -1570,6 +1688,16 @@ public class ModalEditor {
             } else {
                 canvas.setCommandLineText(null);
             }
+
+            // telescope オーバーレイ更新
+            if (mode == Mode.TELESCOPE && telescopePicker != null) {
+                String preview = telescopeResults.isEmpty() ? "" :
+                    telescopePicker.preview(telescopeResults.get(telescopeSelectedIdx));
+                canvas.setTelescopeState(true, telescopePicker.title(),
+                    telescopeQuery.toString(), telescopeResults, telescopeSelectedIdx, preview);
+            } else if (mode != Mode.TELESCOPE) {
+                canvas.setTelescopeState(false, "", "", List.of(), 0, "");
+            }
         }
     }
 
@@ -1587,6 +1715,10 @@ public class ModalEditor {
     public boolean isVisualMode()      { return mode == Mode.VISUAL; }
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
     public boolean isSearchMode()         { return mode == Mode.SEARCH; }
+    public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
+    public String getTelescopeQuery()     { return telescopeQuery.toString(); }
+    public List<TelescopeItem> getTelescopeResults() { return telescopeResults; }
+    public int getTelescopeSelectedIdx()  { return telescopeSelectedIdx; }
     public void setProjectRoot(Path root)    { this.projectRoot = root; }
     public boolean isFileSearchMode()     { return mode == Mode.FILESEARCH; }
     public boolean isFileNameSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.NAME; }

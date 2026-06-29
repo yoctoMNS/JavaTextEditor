@@ -2,6 +2,7 @@ package dev.javatexteditor.ui;
 
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.DiagnosticKind;
+import dev.javatexteditor.telescope.TelescopeItem;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 import java.awt.*;
@@ -37,6 +38,14 @@ public class EditorCanvas extends JPanel {
     // 検索ハイライト: 各要素 {row, startCol, endCol}（endCol は exclusive）
     private List<int[]> searchHighlights = List.of();
     private static final Color SEARCH_HIGHLIGHT_COLOR = new Color(0xFF, 0xE0, 0x00, 0x90);
+
+    // telescope オーバーレイ状態
+    private boolean telescopeActive = false;
+    private String telescopeTitle = "";
+    private String telescopeQuery = "";
+    private List<TelescopeItem> telescopeResults = List.of();
+    private int telescopeSelectedIdx = 0;
+    private String telescopePreview = "";
 
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
@@ -112,6 +121,17 @@ public class EditorCanvas extends JPanel {
     public void clearSelection() {
         this.selAnchorRow = -1;
         this.visualLineMode = false;
+        repaint();
+    }
+
+    public void setTelescopeState(boolean active, String title, String query,
+            List<TelescopeItem> results, int selectedIdx, String preview) {
+        this.telescopeActive    = active;
+        this.telescopeTitle     = title != null ? title : "";
+        this.telescopeQuery     = query != null ? query : "";
+        this.telescopeResults   = results != null ? results : List.of();
+        this.telescopeSelectedIdx = selectedIdx;
+        this.telescopePreview   = preview != null ? preview : "";
         repaint();
     }
 
@@ -318,6 +338,92 @@ public class EditorCanvas extends JPanel {
 
         // 6. ステータス行を描画する（画面最下部）
         drawStatusLine(g2, lineHeight);
+
+        // 7. telescope オーバーレイ（最前面に描画）
+        if (telescopeActive) {
+            drawTelescopeOverlay(g2, lineHeight);
+        }
+    }
+
+    private void drawTelescopeOverlay(Graphics2D g2, int lineHeight) {
+        int W = getWidth();
+        int H = getHeight();
+        int overlayW = (int)(W * 0.85);
+        int overlayH = (int)(H * 0.75);
+        int ox = (W - overlayW) / 2;
+        int oy = (H - overlayH) / 2;
+
+        // 半透明背景
+        g2.setColor(new Color(0, 0, 0, 180));
+        g2.fillRect(0, 0, W, H);
+
+        // オーバーレイ枠
+        g2.setColor(theme.background);
+        g2.fillRect(ox, oy, overlayW, overlayH);
+        g2.setColor(theme.accent);
+        g2.drawRect(ox, oy, overlayW, overlayH);
+
+        Font overlayFont = new Font(Font.MONOSPACED, Font.PLAIN, Math.max(10, lineHeight - 2));
+        g2.setFont(overlayFont);
+        FontMetrics fm = g2.getFontMetrics(overlayFont);
+        int fh = fm.getHeight();
+        int pad = 4;
+
+        // プロンプト行
+        g2.setColor(theme.accent);
+        g2.fillRect(ox, oy, overlayW, fh + pad * 2);
+        g2.setColor(theme.background);
+        String promptText = telescopeTitle + "  > " + telescopeQuery + "_";
+        g2.drawString(promptText, ox + pad, oy + fh + pad);
+
+        int bodyY = oy + fh + pad * 2 + 1;
+        int bodyH = overlayH - (fh + pad * 2 + 1);
+
+        // 仕切り線（Results 40% / Preview 60%）
+        int resultsW = (int)(overlayW * 0.40);
+        int previewX = ox + resultsW;
+        g2.setColor(theme.accent);
+        g2.drawLine(previewX, bodyY, previewX, oy + overlayH);
+
+        // Results ペイン
+        int maxResultRows = bodyH / fh;
+        int visStart = Math.max(0, telescopeSelectedIdx - maxResultRows + 1);
+        if (telescopeSelectedIdx < visStart) visStart = telescopeSelectedIdx;
+
+        g2.setColor(theme.foreground);
+        for (int i = visStart; i < telescopeResults.size() && (i - visStart) < maxResultRows; i++) {
+            TelescopeItem item = telescopeResults.get(i);
+            int ry = bodyY + (i - visStart + 1) * fh;
+            if (i == telescopeSelectedIdx) {
+                g2.setColor(theme.accent);
+                g2.fillRect(ox + 1, ry - fh + 2, resultsW - 2, fh);
+                g2.setColor(theme.background);
+            } else {
+                g2.setColor(theme.foreground);
+            }
+            String label = (i == telescopeSelectedIdx ? "▸ " : "  ") + item.display();
+            String clipped = clipToWidth(label, fm, resultsW - pad * 2);
+            g2.drawString(clipped, ox + pad, ry);
+        }
+
+        // Preview ペイン
+        g2.setColor(theme.foreground);
+        String[] previewLines = telescopePreview.split("\n", -1);
+        int previewW = overlayW - resultsW;
+        int py = bodyY + fh;
+        for (int i = 0; i < previewLines.length && (py - bodyY) < bodyH; i++) {
+            String clipped = clipToWidth(previewLines[i], fm, previewW - pad * 2);
+            g2.drawString(clipped, previewX + pad, py);
+            py += fh;
+        }
+    }
+
+    private static String clipToWidth(String s, FontMetrics fm, int maxWidth) {
+        if (fm.stringWidth(s) <= maxWidth) return s;
+        while (s.length() > 0 && fm.stringWidth(s + "…") > maxWidth) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s + "…";
     }
 
     /**
