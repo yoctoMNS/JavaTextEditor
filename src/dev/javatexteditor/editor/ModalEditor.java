@@ -457,6 +457,7 @@ public class ModalEditor {
                             buffer.delete(offsetOfCursor(), _toDelete);
                         }
                     }
+                    case "delete.word.before" -> deleteWordBefore();
                     case "cursor.right"  -> moveCursor(0, 1);
                     case "cursor.left"   -> moveCursor(0, -1);
                     case "cursor.down"   -> moveCursor(1, 0);
@@ -572,6 +573,41 @@ public class ModalEditor {
             cursorRow--;
             cursorCol = prevLineLen;
         }
+    }
+
+    /**
+     * Ctrl+W: カーソル直前の1単語を削除する（行頭をまたがない）。
+     * Vim の動作に準拠: まず空白をスキップし、次に単語文字（英数字・_）または
+     * 非単語文字（記号等）のまとまりをまとめて削除する。
+     */
+    private void deleteWordBefore() {
+        if (cursorCol == 0) return; // 行頭では何もしない
+        String[] lines = getLines();
+        String line = cursorRow < lines.length ? lines[cursorRow] : "";
+        int pos = cursorCol; // 削除の起点（exclusive）
+
+        // 1. 直前の空白をスキップ
+        while (pos > 0 && Character.isWhitespace(line.charAt(pos - 1))) {
+            pos--;
+        }
+        if (pos == 0) {
+            // 空白だけだった場合: 空白をまとめて削除
+            int count = cursorCol - pos;
+            buffer.delete(offsetOfCursor() - count, count);
+            cursorCol = pos;
+            return;
+        }
+
+        // 2. 直前の文字種（単語文字 or 非単語文字）に応じてまとまりを削除
+        boolean prevIsWord = isWordChar(line.charAt(pos - 1));
+        while (pos > 0 && isWordChar(line.charAt(pos - 1)) == prevIsWord
+                && !Character.isWhitespace(line.charAt(pos - 1))) {
+            pos--;
+        }
+
+        int count = cursorCol - pos;
+        buffer.delete(offsetOfCursor() - count, count);
+        cursorCol = pos;
     }
 
     // -------------------------------------------------------------------------
