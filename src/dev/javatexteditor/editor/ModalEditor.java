@@ -124,6 +124,13 @@ public class ModalEditor {
     private int savedCursorCol = 0;
     private boolean inJdkSourceBuffer = false;   // true のとき q で元に戻る
 
+    // 入力補完状態（INSERT モード内で管理）
+    private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
+    private boolean completionActive = false;
+    private java.util.List<dev.javatexteditor.analysis.CompletionItem> completionItems = java.util.List.of();
+    private int completionSelectedIdx = 0;
+    private String completionPrefix = "";
+
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
         this.canvas = null;
@@ -436,6 +443,42 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
+        // Ctrl+Space → 補完トリガー（completionActive 状態に関わらず再トリガー）
+        if ((modifiers & KeyEvent.CTRL_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SPACE) {
+            triggerCompletion();
+            syncCanvas();
+            return;
+        }
+
+        // 補完ポップアップが開いているときのナビゲーションキー処理
+        if (completionActive) {
+            switch (keyCode) {
+                case KeyEvent.VK_DOWN -> {
+                    completionSelectedIdx = Math.min(completionSelectedIdx + 1,
+                                                     completionItems.size() - 1);
+                    syncCompletionCanvas();
+                    syncCanvas();
+                    return;
+                }
+                case KeyEvent.VK_UP -> {
+                    completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
+                    syncCompletionCanvas();
+                    syncCanvas();
+                    return;
+                }
+                case KeyEvent.VK_TAB, KeyEvent.VK_ENTER -> {
+                    applyCompletion();
+                    syncCanvas();
+                    return;
+                }
+                case KeyEvent.VK_ESCAPE -> {
+                    dismissCompletion();
+                    syncCanvas();
+                    return;
+                }
+            }
+        }
+
         String action = keymap.resolve(KeymapRegistry.Mode.INSERT, keyCode, keyChar, modifiers);
 
         if (action != null) {
@@ -445,14 +488,22 @@ public class ModalEditor {
             } else {
                 switch (action) {
                     case "enter.normal" -> {
+                        dismissCompletion();
                         mode = Mode.NORMAL;
                         clampCursorForNormal();
                         if (onReturnToNormal != null) onReturnToNormal.run();
                     }
-                    case "delete.before" -> handleBackspace();
-                    case "insert.newline" -> insertNewlineWithIndent();
+                    case "delete.before" -> {
+                        handleBackspace();
+                        if (completionActive) recheckCompletion();
+                    }
+                    case "insert.newline" -> {
+                        dismissCompletion();
+                        insertNewlineWithIndent();
+                    }
                     case "insert.tab" -> insertTab();
                     case "save.from.insert" -> {
+                        dismissCompletion();
                         mode = Mode.NORMAL;
                         clampCursorForNormal();
                         if (onReturnToNormal != null) onReturnToNormal.run();
@@ -473,18 +524,21 @@ public class ModalEditor {
                             buffer.delete(offsetOfCursor(), _toDelete);
                         }
                     }
-                    case "delete.word.before" -> deleteWordBefore();
-                    case "cursor.right"  -> moveCursor(0, 1);
-                    case "cursor.left"   -> moveCursor(0, -1);
-                    case "cursor.down"   -> moveCursor(1, 0);
-                    case "cursor.up"     -> moveCursor(-1, 0);
-                    case "word.forward"  -> moveWordForward();
-                    case "word.backward" -> moveWordBackward();
-                    case "word.end"      -> moveWordEnd();
-                    case "line.start"    -> moveLineStart();
-                    case "line.end"      -> moveLineEnd();
-                    case "file.start"    -> moveFileStart();
-                    case "file.end"      -> moveFileEnd();
+                    case "delete.word.before" -> {
+                        deleteWordBefore();
+                        if (completionActive) recheckCompletion();
+                    }
+                    case "cursor.right"  -> { dismissCompletion(); moveCursor(0, 1); }
+                    case "cursor.left"   -> { dismissCompletion(); moveCursor(0, -1); }
+                    case "cursor.down"   -> { dismissCompletion(); moveCursor(1, 0); }
+                    case "cursor.up"     -> { dismissCompletion(); moveCursor(-1, 0); }
+                    case "word.forward"  -> { dismissCompletion(); moveWordForward(); }
+                    case "word.backward" -> { dismissCompletion(); moveWordBackward(); }
+                    case "word.end"      -> { dismissCompletion(); moveWordEnd(); }
+                    case "line.start"    -> { dismissCompletion(); moveLineStart(); }
+                    case "line.end"      -> { dismissCompletion(); moveLineEnd(); }
+                    case "file.start"    -> { dismissCompletion(); moveFileStart(); }
+                    case "file.end"      -> { dismissCompletion(); moveFileEnd(); }
                     case "organize.imports" -> organizeImports();
                 }
             }
@@ -495,7 +549,127 @@ public class ModalEditor {
                 buffer.insert(offsetOfCursor(), String.valueOf(keyChar));
                 cursorCol++;
             }
+            // 文字挿入後: 補完を再クエリ
+            if (completionActive) {
+                recheckCompletion();
+            }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // 入力補完ロジック
+    // -------------------------------------------------------------------------
+
+    /** Ctrl+Space で補完ポップアップを起動する。 */
+    private void triggerCompletion() {
+        if (completionIndex == null || !completionIndex.isReady()) {
+            setStatusMessage("補完インデックス構築中...");
+            return;
+        }
+        String prefix = extractCompletionPrefix();
+        if (prefix.isEmpty()) {
+            dismissCompletion();
+            return;
+        }
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
+            completionIndex.query(prefix, 10);
+        if (items.isEmpty()) {
+            dismissCompletion();
+            setStatusMessage("補完候補なし: " + prefix);
+            return;
+        }
+        completionPrefix  = prefix;
+        completionItems   = items;
+        completionSelectedIdx = 0;
+        completionActive  = true;
+        syncCompletionCanvas();
+    }
+
+    /** 補完ポップアップを閉じる。 */
+    private void dismissCompletion() {
+        if (!completionActive) return;
+        completionActive = false;
+        completionItems  = java.util.List.of();
+        completionPrefix = "";
+        syncCompletionCanvas();
+    }
+
+    /** 文字を挿入・削除した後に補完候補を再クエリする。 */
+    private void recheckCompletion() {
+        if (completionIndex == null) return;
+        String prefix = extractCompletionPrefix();
+        if (prefix.isEmpty()) {
+            dismissCompletion();
+            return;
+        }
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
+            completionIndex.query(prefix, 10);
+        if (items.isEmpty()) {
+            dismissCompletion();
+            return;
+        }
+        completionPrefix      = prefix;
+        completionItems       = items;
+        completionSelectedIdx = 0;
+        syncCompletionCanvas();
+    }
+
+    /** 現在選択中の補完候補をバッファに適用する。 */
+    private void applyCompletion() {
+        if (!completionActive || completionItems.isEmpty()) return;
+        dev.javatexteditor.analysis.CompletionItem item =
+            completionItems.get(completionSelectedIdx);
+        String label = item.label();
+
+        // カーソル前の識別子プレフィックスを削除してラベルを挿入
+        String[] lines = getLines();
+        String line = (cursorRow < lines.length) ? lines[cursorRow] : "";
+        int col = Math.min(cursorCol, line.length());
+        int start = col;
+        while (start > 0
+               && (Character.isLetterOrDigit(line.charAt(start - 1))
+                   || line.charAt(start - 1) == '_')) {
+            start--;
+        }
+        int prefixLen = col - start;
+        int offsetStart = offsetAt(cursorRow, start);
+        if (prefixLen > 0) {
+            buffer.delete(offsetStart, prefixLen);
+        }
+        buffer.insert(offsetStart, label);
+        cursorCol = start + label.length();
+        dismissCompletion();
+    }
+
+    /** カーソル直前の Java 識別子プレフィックスを返す。 */
+    private String extractCompletionPrefix() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return "";
+        String line = lines[cursorRow];
+        int col = Math.min(cursorCol, line.length());
+        int start = col;
+        while (start > 0
+               && (Character.isLetterOrDigit(line.charAt(start - 1))
+                   || line.charAt(start - 1) == '_')) {
+            start--;
+        }
+        return line.substring(start, col);
+    }
+
+    /** 補完状態を EditorCanvas に反映する。 */
+    private void syncCompletionCanvas() {
+        if (canvas == null) return;
+        if (!completionActive || completionItems.isEmpty()) {
+            canvas.setCompletionState(false,
+                java.util.List.of(), java.util.List.of(), 0, 0, 0);
+            return;
+        }
+        java.util.List<String> labels = completionItems.stream()
+            .map(dev.javatexteditor.analysis.CompletionItem::label).toList();
+        java.util.List<String> kinds = completionItems.stream()
+            .map(dev.javatexteditor.analysis.CompletionItem::kind).toList();
+        canvas.setCompletionState(true, labels, kinds,
+            completionSelectedIdx, cursorRow, cursorCol);
     }
 
     private static final java.util.Set<Character> CLOSING_PAIRS =
@@ -1870,6 +2044,11 @@ public class ModalEditor {
     /** JDK クラスインデックスを設定する（Main.java からバックグラウンド構築後に呼ぶ）。 */
     public void setJdkClassIndex(JdkClassIndex index) {
         this.jdkIndex = index;
+    }
+
+    /** 入力補完インデックスを設定する。 */
+    public void setCompletionIndex(dev.javatexteditor.analysis.CompletionIndex index) {
+        this.completionIndex = index;
     }
 
     /** auto-import ハンドラを設定する。 */

@@ -39,6 +39,14 @@ public class EditorCanvas extends JPanel {
     private List<int[]> searchHighlights = List.of();
     private static final Color SEARCH_HIGHLIGHT_COLOR = new Color(0xFF, 0xE0, 0x00, 0x90);
 
+    // 入力補完ポップアップ状態
+    private boolean completionActive = false;
+    private List<String> completionLabels = List.of();
+    private List<String> completionKinds  = List.of();
+    private int completionSelectedIdx = 0;
+    private int completionAnchorRow = 0;
+    private int completionAnchorCol = 0;
+
     // telescope オーバーレイ状態
     private boolean telescopeActive = false;
     private String telescopeTitle = "";
@@ -127,6 +135,21 @@ public class EditorCanvas extends JPanel {
     public void clearSelection() {
         this.selAnchorRow = -1;
         this.visualLineMode = false;
+        repaint();
+    }
+
+    /**
+     * 入力補完ポップアップの状態をセットする。
+     * labels / kinds は CompletionItem のリストから変換して渡す。
+     */
+    public void setCompletionState(boolean active, List<String> labels, List<String> kinds,
+                                   int selectedIdx, int anchorRow, int anchorCol) {
+        this.completionActive       = active;
+        this.completionLabels       = (labels != null) ? List.copyOf(labels)  : List.of();
+        this.completionKinds        = (kinds  != null) ? List.copyOf(kinds)   : List.of();
+        this.completionSelectedIdx  = selectedIdx;
+        this.completionAnchorRow    = anchorRow;
+        this.completionAnchorCol    = anchorCol;
         repaint();
     }
 
@@ -349,6 +372,11 @@ public class EditorCanvas extends JPanel {
         if (telescopeActive) {
             drawTelescopeOverlay(g2, lineHeight);
         }
+
+        // 8. 入力補完ポップアップ（telescope より前面）
+        if (completionActive && !completionLabels.isEmpty()) {
+            drawCompletionPopup(g2, charWidth, lineHeight, gutterWidth);
+        }
     }
 
     private void drawTelescopeOverlay(Graphics2D g2, int lineHeight) {
@@ -421,6 +449,80 @@ public class EditorCanvas extends JPanel {
             String clipped = clipToWidth(previewLines[i], fm, previewW - pad * 2);
             g2.drawString(clipped, previewX + pad, py);
             py += fh;
+        }
+    }
+
+    /**
+     * カーソル直下に補完候補のドロップダウンを描画する。
+     * テキスト本体より前面・telescope より後面に描画される。
+     */
+    private void drawCompletionPopup(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
+        if (completionLabels.isEmpty()) return;
+
+        Font popupFont = new Font(Font.MONOSPACED, Font.PLAIN, Math.max(10, lineHeight - 2));
+        g2.setFont(popupFont);
+        FontMetrics fm = g2.getFontMetrics(popupFont);
+        int fh = fm.getHeight();
+        int pad = 4;
+        int kindW = fm.stringWidth("mth") + pad; // kind ラベルの幅
+
+        // 最長ラベル幅を計算してポップアップ幅を決定
+        int maxLabelW = 0;
+        for (String label : completionLabels) {
+            maxLabelW = Math.max(maxLabelW, fm.stringWidth(label));
+        }
+        int popupW = kindW + maxLabelW + pad * 3;
+        int popupH = completionLabels.size() * fh + pad * 2;
+
+        // カーソル行の文字列でセルオフセットを計算（全角対応）
+        String[] lines = text.split("\n", -1);
+        String anchorLine = (completionAnchorRow < lines.length) ? lines[completionAnchorRow] : "";
+        int cellOffset = cellsForCol(anchorLine, completionAnchorCol);
+
+        int anchorScreenRow = completionAnchorRow - scrollRow;
+        int popupX = gutterWidth + cellOffset * charWidth - scrollCol * charWidth;
+        int popupY = (anchorScreenRow + 1) * lineHeight; // カーソル行の下
+
+        // 画面右端・下端をはみ出さないよう調整
+        if (popupX + popupW > getWidth()) {
+            popupX = Math.max(0, getWidth() - popupW);
+        }
+        if (popupY + popupH > getHeight() - lineHeight) {
+            // 上に出す
+            popupY = anchorScreenRow * lineHeight - popupH;
+        }
+
+        // ポップアップ背景・枠
+        Color popupBg = new Color(
+            Math.max(0, theme.background.getRed()   - 20),
+            Math.max(0, theme.background.getGreen() - 20),
+            Math.max(0, theme.background.getBlue()  - 20));
+        g2.setColor(popupBg);
+        g2.fillRect(popupX, popupY, popupW, popupH);
+        g2.setColor(theme.accent);
+        g2.drawRect(popupX, popupY, popupW, popupH);
+
+        // 各候補を描画
+        for (int i = 0; i < completionLabels.size(); i++) {
+            int iy = popupY + pad + (i + 1) * fh - fm.getDescent();
+            int rowTop = popupY + pad + i * fh;
+
+            if (i == completionSelectedIdx) {
+                g2.setColor(theme.accent);
+                g2.fillRect(popupX + 1, rowTop, popupW - 2, fh);
+                // kind ラベル（選択行）
+                g2.setColor(theme.background);
+                String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
+                g2.drawString(kind, popupX + pad, iy);
+                g2.drawString(completionLabels.get(i), popupX + pad + kindW, iy);
+            } else {
+                // kind ラベルをアクセント色で
+                g2.setColor(theme.accent);
+                String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
+                g2.drawString(kind, popupX + pad, iy);
+                g2.setColor(theme.foreground);
+                g2.drawString(completionLabels.get(i), popupX + pad + kindW, iy);
+            }
         }
     }
 
