@@ -2013,7 +2013,8 @@ public class ModalEditor {
 
     /** NORMALモードの K キー: カーソル位置の識別子を JDK ソースで開く。
      *  src.zip がなければステータスバーへのフォールバック表示。
-     *  カーソルが "ClassName.methodName" の上にある場合は native メソッドのトレースも試みる。
+     *  カーソルが "ClassName.methodName" の上にある場合、または jdk-source 疑似バッファ内で
+     *  メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
      */
     private void lookupJdkDoc() {
         if (jdkIndex == null || !jdkIndex.isReady()) {
@@ -2024,6 +2025,36 @@ public class ModalEditor {
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
             return;
+        }
+
+        // jdk-source 疑似バッファ内では、バッファタイトルから FQN を取り出してメソッドトレースを試みる
+        // 例: currentFilePath = "*jdk-source:java.lang.reflect.Array*" → FQN = "java.lang.reflect.Array"
+        if (inJdkSourceBuffer && currentFilePath != null && currentFilePath.startsWith("*jdk-source:")) {
+            String fqn = currentFilePath
+                .replaceFirst("^\\*jdk-source:", "")
+                .replaceAll("\\*$", "");
+            // FQN がクラスを指す場合（ドット区切りで末尾が大文字始まり）のみ試みる
+            if (fqn.contains(".") && !fqn.contains(" ")) {
+                Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
+                if (cls.isPresent()) {
+                    OpenjdkSourceTracer.TracingResult result = sourceTracer.trace(cls.get(), word);
+                    if (result.isNative()) {
+                        String simpleName = fqn.contains(".")
+                            ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+                        if (result.sourceFile().isPresent() && result.snippet().isPresent()) {
+                            openJdkSourceBuffer(
+                                "*jdk-source:" + simpleName + "." + word + "*",
+                                "[native] " + result.jniMangledName() + "\n"
+                                    + "Source: " + result.sourceFile().get() + "\n\n"
+                                    + result.snippet().get()
+                            );
+                        } else {
+                            setStatusMessage(result.toStatusLine());
+                        }
+                        return;
+                    }
+                }
+            }
         }
 
         // カーソルが "ClassName.methodName" の methodName 上にある場合: native トレースを試みる
