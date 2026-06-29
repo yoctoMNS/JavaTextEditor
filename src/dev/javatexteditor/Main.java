@@ -175,6 +175,29 @@ public class Main {
             trigger.run();
         });
         editor.setOnSave(trigger);
+        // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
+        editor.setOnOrganizeImports(() -> {
+            String filePath = editor.getCurrentFilePath();
+            String source   = editor.getText();
+            editor.setStatusMessage("import 整理中...");
+            Thread.ofVirtual().start(() -> {
+                try {
+                    List<CompileDiagnostic> diags = (filePath != null)
+                        ? COMPILE_ANALYZER.analyzeFile(Path.of(filePath))
+                        : COMPILE_ANALYZER.analyze(source);
+                    SwingUtilities.invokeLater(() -> {
+                        canvas.setDiagnostics(diags);
+                        editor.handleAutoImport(diags);
+                        editor.organizeImportsRemoveUnused();
+                    });
+                } catch (AnalysisException e) {
+                    SwingUtilities.invokeLater(() -> {
+                        canvas.setDiagnostics(List.of());
+                        editor.setStatusMessage("E: コンパイル解析失敗");
+                    });
+                }
+            });
+        });
     }
 
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */

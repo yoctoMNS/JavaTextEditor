@@ -46,6 +46,8 @@ public class ModalEditor {
     private Runnable onReturnToNormal = null;
     // ファイル保存成功時に呼ばれるコールバック（バックグラウンドコンパイル等）
     private Runnable onSave = null;
+    // Ctrl+Shift+O（organize imports）時に呼ばれるコールバック（コンパイル→auto-import）
+    private Runnable onOrganizeImports = null;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -146,6 +148,14 @@ public class ModalEditor {
      */
     public void setOnSave(Runnable callback) {
         this.onSave = callback;
+    }
+
+    /**
+     * Ctrl+Shift+O（organize imports）が呼ばれたときのコールバックを登録する。
+     * Main.java でコンパイル→auto-import挿入→未使用import削除の順に実行する処理を渡す。
+     */
+    public void setOnOrganizeImports(Runnable callback) {
+        this.onOrganizeImports = callback;
     }
 
     /** 現在開いているファイルのパスを返す（未設定の場合は null）。 */
@@ -1860,7 +1870,25 @@ public class ModalEditor {
     }
 
     /** 未使用の import をすべて削除する（SPC+i+o / :oi）。 */
+    /** Main.java の onOrganizeImports コールバックから EDT 上で呼ばれる：未使用 import 削除のみ。 */
+    public void organizeImportsRemoveUnused() {
+        if (autoImportHandler == null) return;
+        List<String> removed = autoImportHandler.removeUnusedImports(buffer);
+        if (removed.isEmpty()) {
+            statusMessage = "import 整理完了（削除なし）";
+        } else {
+            statusMessage = removed.size() + " 件の import を削除しました";
+        }
+        syncCanvas();
+    }
+
     private void organizeImports() {
+        if (onOrganizeImports != null) {
+            // Main.java 側でコンパイル→auto-import挿入→未使用削除の全処理を実行
+            onOrganizeImports.run();
+            return;
+        }
+        // コールバック未設定の場合は未使用 import 削除のみ（テスト環境等）
         if (autoImportHandler == null) {
             statusMessage = "E: AutoImportHandler が設定されていません";
             syncCanvas();
