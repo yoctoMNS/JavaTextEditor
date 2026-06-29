@@ -49,7 +49,7 @@ public class CompileAnalyzer {
         DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
 
         try (StandardJavaFileManager stdFm =
-                compiler.getStandardFileManager(collector, null, null)) {
+                compiler.getStandardFileManager(collector, Locale.ENGLISH, null)) {
 
             StringJavaFileObject fileObj = new StringJavaFileObject(filePath, sourceCode);
 
