@@ -26,6 +26,15 @@ public class CompileAnalyzer {
     }
 
     /**
+     * バッファ文字列を実ファイルパスの URI として解析する。
+     * public class 名とファイル名の不一致エラーを防ぐため、保存済みファイルを編集中のときに使う。
+     */
+    public List<CompileDiagnostic> analyzeWithPath(String filePath, String sourceCode)
+            throws AnalysisException {
+        return analyzeSource(filePath, sourceCode);
+    }
+
+    /**
      * ファイルパスからソースを読み込んでコンパイル診断を返す。
      */
     public List<CompileDiagnostic> analyzeFile(Path path) throws AnalysisException {

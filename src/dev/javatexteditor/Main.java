@@ -155,13 +155,16 @@ public class Main {
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
         Runnable trigger = () -> {
             String source = editor.getText();
+            String snapshotPath = editor.getCurrentFilePath();
             editor.setStatusMessage("auto-import: 解析中...");
             Thread.ofVirtual().start(() -> {
                 try {
                     // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
                     JDK_INDEX.awaitReady();
-                    // バッファ内容を直接解析する（ファイル未保存でも正しく動作させるため）
-                    List<CompileDiagnostic> diags = COMPILE_ANALYZER.analyze(source);
+                    // ファイルが保存済みの場合は実パスを URI に渡す（public class 名不一致エラーを防ぐ）
+                    List<CompileDiagnostic> diags = (snapshotPath != null)
+                        ? COMPILE_ANALYZER.analyzeWithPath(snapshotPath, source)
+                        : COMPILE_ANALYZER.analyze(source);
                     SwingUtilities.invokeLater(() -> {
                         canvas.setDiagnostics(diags);
                         editor.handleAutoImport(diags);
@@ -351,6 +354,11 @@ public class Main {
 
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addKeyEventDispatcher(e -> {
+                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
+                    java.awt.Window focused = KeyboardFocusManager
+                        .getCurrentKeyboardFocusManager().getFocusedWindow();
+                    if (focused != frame) return false;
+
                     if (e.getID() == KeyEvent.KEY_PRESSED) {
                         pressedHandled[0] = false;
 
