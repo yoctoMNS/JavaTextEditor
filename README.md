@@ -42,8 +42,30 @@ Vimのモーダルキーバインドとエディタ拡張性を統合した、Ja
 
 ## 必要環境
 
-- Java 21 (LTS)
-- JDK（`javac` が使えること）
+- Java 21 JDK（`javac` が使えること）
+
+## セットアップ
+
+クローン後、最初に一度だけセットアップスクリプトを実行してください。OpenJDK 21 のソース（`src.zip`）を `lib/` に配置します。
+
+```bash
+# Linux / macOS / WSL
+./scripts/setup.sh
+
+# Windows
+scripts\setup.bat
+```
+
+スクリプトは以下の順で `src.zip` を探します：
+
+| 優先順 | Linux/macOS | Windows |
+|---|---|---|
+| 1 | `$JAVA_HOME/lib/src.zip` | `%JAVA_HOME%\lib\src.zip` |
+| 2 | `java` コマンドのパスから JDK ルートを推定 | `java.exe` のパスから JDK ルートを推定 |
+| 3 | `apt install openjdk-21-source`（Ubuntu/Debian） | `%ProgramFiles%\Java`, `Eclipse Adoptium`, `Microsoft`, `Azul Zulu`, `BellSoft Liberica` を探索 |
+| 4 | `dnf install java-21-openjdk-src`（Fedora/RHEL） | `winget install EclipseAdoptium.Temurin.21.JDK` |
+
+自動検出に失敗した場合は、`lib/src.zip` に手動で配置してください。`src.zip` がなくてもエディタは起動しますが、`K` キーによる native メソッドのソース表示が無効になります。
 
 ## ビルドと実行
 
@@ -298,7 +320,10 @@ project-root/
 │       └── YankPasteDemo.java      # ヤンク/ペースト動作実演用
 ├── docs/
 │   └── requirements.md
+├── lib/                             ← .gitignore 対象（setup.sh/bat で自動生成）
+│   └── src.zip                      # OpenJDK 21 Java ソース（native トレース用）
 └── scripts/
+    ├── setup.sh / setup.bat         # src.zip を lib/ に配置するセットアップスクリプト
     ├── build.sh / build.bat
     ├── test.sh  / test.bat
     └── run.sh   / run.bat
@@ -600,7 +625,7 @@ n / N キー（NORMAL モード）
 === dev.javatexteditor.analysis.CompileAnalyzerTest ===            PASS: 15 / 15
 === dev.javatexteditor.analysis.JdkClassIndexTest ===              PASS: 18 / 18
 === dev.javatexteditor.analysis.JdkJavadocReaderTest ===           PASS: 15 / 15
-=== dev.javatexteditor.analysis.OpenjdkSourceTracingTest ===       PASS: 29 / 29
+=== dev.javatexteditor.analysis.OpenjdkSourceTracingTest ===       PASS: 30 / 30
 === dev.javatexteditor.analysis.SourceAnalyzerTest ===             PASS: 49 / 49
 === dev.javatexteditor.buffer.PieceTableTest ===                   PASS: 15 / 15
 === dev.javatexteditor.buffer.PieceTableEdgeCaseTest ===           PASS: 46 / 46
@@ -620,7 +645,7 @@ n / N キー（NORMAL モード）
 === dev.javatexteditor.ui.KeyboardSimulationTest ===               PASS: 110 / 110
 === dev.javatexteditor.ui.RobotKeyInputTest ===                    PASS: 134 / 134  (Xvfb 仮想ディスプレイ)
 
-合計: 1008 テストケース全 PASS
+合計: 1009 テストケース全 PASS
 ```
 
 > **RobotKeyInputTest について**: `java.awt.Robot` は `DISPLAY` 環境変数が必要です。Xvfb（`Xvfb :99`）などの仮想ディスプレイがあれば CI 環境でも実行可能です。`Shift` 修飾を含む `:` / `V` / `P` / `Shift+K` キーの実イベント経由の動作と auto-import の選択 UI・`:rename` コマンドのファイル書き換え・native メソッドの JNI トレースを全件検証しています。
