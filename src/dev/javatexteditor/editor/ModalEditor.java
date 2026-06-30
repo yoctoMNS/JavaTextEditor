@@ -1568,6 +1568,7 @@ public class ModalEditor {
         if (custom != null) { custom.run(); return; }
 
         switch (action) {
+            case "enter.normal" -> mode = Mode.NORMAL;
             case "cursor.left"   -> moveCursor(0, -1);
             case "cursor.right"  -> moveCursor(0, 1);
             case "cursor.down"   -> moveCursor(1, 0);
@@ -1613,6 +1614,7 @@ public class ModalEditor {
         if (custom != null) { custom.run(); return; }
 
         switch (action) {
+            case "enter.normal" -> mode = Mode.NORMAL;
             case "cursor.left"  -> moveCursor(0, -1);
             case "cursor.right" -> moveCursor(0, 1);
             case "cursor.down"  -> moveCursor(1, 0);

@@ -185,6 +185,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('y', "yank"), "yank");
         bind(Mode.VISUAL, KeyBinding.ofChar('d', "delete"), "delete");
         bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
+        bind(Mode.VISUAL, KeyBinding.ofChar('v', "enter.normal"), "enter.normal");
         bind(Mode.VISUAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
         bind(Mode.VISUAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");
         bind(Mode.VISUAL, KeyBinding.ofChar('e', "word.end"),      "word.end");
@@ -205,6 +206,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('y', "yank"), "yank");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('d', "delete"), "delete");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('V', "enter.normal"), "enter.normal");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('G', "file.end"), "file.end");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_F, KeyEvent.CTRL_DOWN_MASK, "scroll.page.down"), "scroll.page.down");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),   "scroll.page.up");
