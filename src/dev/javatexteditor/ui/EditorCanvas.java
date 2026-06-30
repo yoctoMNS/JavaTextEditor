@@ -554,6 +554,7 @@ public class EditorCanvas extends JPanel {
             int charWidth, int scrollOffsetX, int gutterWidth) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
+        int swingBaselineY = y - BitmapFont10x20.descentPixels(cellH);
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
             int widthMult = charCellWidth(codePoint);
@@ -563,7 +564,7 @@ public class EditorCanvas extends JPanel {
                     g2.drawImage(getGlyphFg(codePoint), x, y - cellTopOffset, null);
                 } else {
                     g2.setColor(theme.foreground);
-                    g2.drawString(new String(Character.toChars(codePoint)), x, y);
+                    g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
                 }
             }
             x += charPixelWidth;
@@ -596,7 +597,8 @@ public class EditorCanvas extends JPanel {
                     g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
                 } else {
                     g2.setColor(theme.background);
-                    g2.drawString(new String(Character.toChars(codePoint)), x, (screenRow + 1) * lineHeight);
+                    int swingBaselineY = (screenRow + 1) * lineHeight - BitmapFont10x20.descentPixels(lineHeight);
+                    g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
                 }
             }
         }
