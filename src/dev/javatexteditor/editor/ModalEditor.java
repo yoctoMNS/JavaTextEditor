@@ -20,6 +20,7 @@ import dev.javatexteditor.telescope.FilePicker;
 import dev.javatexteditor.telescope.GrepPicker;
 import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
+import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
@@ -1295,6 +1296,8 @@ public class ModalEditor {
         } else if (cmd.startsWith("e ")) {
             String path = cmd.substring(2).trim();
             loadFromFile(path);
+        } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
+            openTutorial();
         } else if (cmd.startsWith("grep ")) {
             String pattern = cmd.substring(5).trim();
             executeGrep(pattern);
@@ -1358,6 +1361,24 @@ public class ModalEditor {
         searchMatches = List.of();
         currentMatchIdx = -1;
         statusMessage = "[新規バッファ]";
+    }
+
+    /**
+     * :tutor — vimtutor 同様、実際に編集して学ぶ対話型チュートリアルを開く。
+     * 保存先を持たない通常のバッファとして開くため、ここで学んだ操作
+     * （x/dd/yy/p/u 等）がそのままこのバッファ上で機能する。
+     */
+    private void openTutorial() {
+        pushBuffer();
+        buffer = new UndoablePieceTable(Tutorial.CONTENT);
+        currentFilePath = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        statusMessage = "チュートリアルを開きました — :q で終了、Ctrl+U で元のバッファに戻れます";
     }
 
     private void loadFromFile(String path) {

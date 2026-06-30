@@ -98,6 +98,7 @@ project-root/
 | ⑲ | `file-search` | \fファイル名検索・\gファイル内容grep（NORMALモード・疑似バッファ表示） | ✅ 完了（43/43テスト） |
 | ⑳ | `telescope-picker` | telescope.vim風ファジーファインダー（SPC+f/SPC+//SPC+b・3ペインオーバーレイ） | ✅ 完了（28/28テスト・FilePicker/GrepPicker/BufferPicker・FuzzyMatcher） |
 | ㉑ | `simple-filer` | `:cd` 実行後に表示されるディレクトリ一覧・ファイルブラウザ（FILERモード） | ✅ 完了（46/46テスト） |
+| ㉒ | `editor-tutorial` | `:tutor`/`:tutorial` で開く vimtutor 形式の対話型チュートリアル | ✅ 完了（9/9テスト） |
 
 ### 依存関係（Skillを作る順序の制約）
 
@@ -125,6 +126,14 @@ project-root/
 - **描画の再利用**: `EditorCanvas.setTelescopeState()` / `drawTelescopeOverlay()` を FILER モードでも流用（IMPORT_SELECT と同じパターン）。`DirEntry` を `TelescopeItem` に変換して渡す。
 - **純粋ロジックの分離**: ディレクトリ列挙・フィルタは `dev.javatexteditor.search.DirectoryLister` に独立させ、ModalEditor はオーケストレーション（状態管理・キー処理）のみ担う。
 - **ファイルオープンの再利用**: `openSelectedEntry()` がファイルを選択した際は既存の `loadFromFile(String)` を呼び出す（pushBuffer・onFileOpened コールバック等が確実に動く）。
+
+## チュートリアルモード（㉒ editor-tutorial）の設計決定事項
+
+- **自動採点はしない**。vimtutor と同じ設計判断: チュートリアルは「読みながら実際にそのテキストを編集する」だけの通常バッファであり、キー入力の正誤判定・進捗トラッキングの仕組みは持たない。理由: 自動採点を入れるとモード追加（専用Mode・状態機械）が必要になり、「学習目的のシンプルさ」という本プロジェクトの方針に反するため。
+- **本文は `dev.javatexteditor.tutorial.Tutorial.CONTENT`（Java 21 テキストブロック）として埋め込む**。`scripts/build.sh` は `.java` ファイルしかコンパイルせずリソースファイルをコピーしないため、外部の `.txt` ファイルを `lib/` 等に同梱する方式は採れない。
+- **`:tutor` コマンドは `:enew`（`newBuffer()`）や `:grep`（`executeGrep()`）と同じ「疑似バッファ」パターンを踏襲する**: `pushBuffer()` で現在のバッファを履歴に積み、`currentFilePath = null` の新規 `UndoablePieceTable` に差し替える。`:w` で保存しようとすると（保存先がないため）通常の "no file name" エラーになるのは意図した挙動。
+- **`Ctrl+U`（バッファ履歴の前へ）でチュートリアルを開く前のバッファに戻れる**。これは新規実装ではなく、既存のバッファ履歴機構（`bufferHistory`/`historyIdx`）がそのまま使える。
+- コマンド名は `:tutor`（vimtutor 由来）と `:tutorial`（分かりやすさのためのエイリアス）の両方を受け付ける。
 
 ## 作業時の方針
 
