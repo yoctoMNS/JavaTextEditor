@@ -41,6 +41,7 @@ public class ModalEditorTest {
         testRedoKey();
         testVisualEnter();
         testVisualEscape();
+        testVisualToggle();
         testVisualMovement();
         testVisualYank();
         testVisualDelete();
@@ -55,6 +56,7 @@ public class ModalEditorTest {
         testLinePasteAfter();
         testLinePasteBefore();
         testVisualLineEnter();
+        testVisualLineToggle();
         testVisualLineMovement();
         testVisualLineYank();
         testVisualLineDelete();
@@ -551,6 +553,17 @@ public class ModalEditorTest {
         check("ESC でNORMALモード", !ed.isVisualMode());
     }
 
+    static void testVisualToggle() {
+        System.out.println("[VISUALモード: v でトグル]");
+        ModalEditor ed = new ModalEditor("hello");
+        pressKey(ed, 'v');
+        check("v でVISUALモード", ed.isVisualMode());
+        pressKey(ed, 'v');
+        check("VISUAL中に v でNORMALモードに戻る", !ed.isVisualMode());
+        pressKey(ed, 'v');
+        check("再度 v でVISUALモードに", ed.isVisualMode());
+    }
+
     static void testVisualMovement() {
         System.out.println("[VISUALモード: カーソル移動]");
         ModalEditor ed = new ModalEditor("abc\ndef");
@@ -874,6 +887,17 @@ public class ModalEditorTest {
         pressKey(ed, 'V');
         check("V で VISUAL LINE モードに", ed.isVisualLineMode());
         check("NORMAL/INSERT/VISUAL/COMMAND でない", !ed.isInsertMode() && !ed.isVisualMode());
+    }
+
+    static void testVisualLineToggle() {
+        System.out.println("[VISUAL LINEモード: V でトグル]");
+        ModalEditor ed = new ModalEditor("line0\nline1\nline2");
+        pressKey(ed, 'V');
+        check("V で VISUAL LINE モード", ed.isVisualLineMode());
+        pressKey(ed, 'V');
+        check("VISUAL LINE中に V でNORMALモードに戻る", !ed.isVisualLineMode());
+        pressKey(ed, 'V');
+        check("再度 V で VISUAL LINE モードに", ed.isVisualLineMode());
     }
 
     // -------------------------------------------------------------------------

@@ -171,6 +171,22 @@ INSERT / VISUAL / VISUAL_LINE モードも移行する。
 - `ModalEditor` の各モード処理（NORMAL/INSERT/VISUAL/VISUAL_LINE）でカスタムアクションを先行チェック
 - プラグインは既存アクションを上書きすることも、新規アクション名を定義することも可能
 
+### VISUAL / VISUAL_LINE モードの `v`/`V` トグル離脱（追加実装）
+
+`ESC` に加え、VISUAL モード中に `v` をもう一度押す、または VISUAL_LINE モード中に
+`V` をもう一度押すと NORMAL モードへ戻れるようにした（本家 Vim と同じ挙動）。
+
+- `KeymapRegistry`: `Mode.VISUAL` に `v → enter.normal`、`Mode.VISUAL_LINE` に
+  `V → enter.normal` を追加バインド（NORMAL モードの `v → enter.visual` /
+  `V → enter.visual.line` とは別モードなので衝突しない）。
+- `ModalEditor.processVisualKey` / `processVisualLineKey` の switch に
+  `case "enter.normal" -> mode = Mode.NORMAL;` を追加。
+  `ESC` は `processKey()` 冒頭で VISUAL/VISUAL_LINE 中は早期 return する既存ガード
+  （`pendingSequence` クリアあり）で処理されるため、この case は実質 `v`/`V` 用。
+- アンカー（`anchorRow`/`anchorCol`）は再利用しない設計のまま: NORMAL に戻った後
+  もう一度 `v`/`V` を押すと、その時点のカーソル位置から新しい選択が始まる
+  （Vim 本家と同じ）。
+
 ---
 
 ## 実装ファイル一覧
