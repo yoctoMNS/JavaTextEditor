@@ -14,6 +14,18 @@ public final class BitmapFont10x20 {
     public static final int FIRST_CHAR  = 0x20;
     public static final int LAST_CHAR   = 0x7E;
     private static final int GLYPH_BYTES = 40;
+    /** グリフ下部に確保された descender 用の行数（20行中4行）。 */
+    private static final int BASE_DESCENT = 4;
+
+    /**
+     * セル高さ cellH における、セル底辺からビットマップフォントの実際の
+     * ベースライン（descender を除いた文字の下端）までの距離（px）。
+     * Swing フォント（全角文字等）の drawString 呼び出し時に、この値だけ
+     * y 座標を上げることで、ASCII と非ASCII のベースラインを揃える。
+     */
+    public static int descentPixels(int cellH) {
+        return Math.round(cellH * (float) BASE_DESCENT / BASE_CELL_H);
+    }
 
     private static final byte[] GLYPHS = {
         // ' ' (space)
