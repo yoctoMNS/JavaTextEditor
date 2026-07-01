@@ -149,6 +149,8 @@ public class ModalEditor {
     private record BufferSnapshot(String text, String filePath, int row, int col) {}
     private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
     private int historyIdx = -1; // -1 = 未初期化（最初の pushBuffer で初期化）
+    // Shift+K で定義ジャンプする直前の位置（Shift+J で一つ前に戻るため）
+    private BufferSnapshot lastJumpOrigin = null;
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -462,6 +464,7 @@ public class ModalEditor {
             case "file.start"          -> moveFileStart();
             case "file.end"            -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
+            case "jump.back" -> jumpBack();
             case "organize.imports" -> organizeImports();
             case "search.enter" -> {
                 searchBuffer.setLength(0);
@@ -2573,6 +2576,40 @@ public class ModalEditor {
      * メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
      */
     private void lookupJdkDoc() {
+        BufferSnapshot before = new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
+        lookupJdkDocAndJump(before.text());
+        boolean moved = cursorRow != before.row() || cursorCol != before.col()
+            || !java.util.Objects.equals(currentFilePath, before.filePath());
+        if (moved) {
+            lastJumpOrigin = before;
+        }
+    }
+
+    /**
+     * Shift+J（jump.back）: 直前の Shift+K 定義ジャンプの前にいた位置へ一つ戻る。
+     * ジャンプ元がファイルを跨いでいた場合はそのファイルを再度開く。
+     */
+    private void jumpBack() {
+        if (lastJumpOrigin == null) {
+            setStatusMessage("No previous jump to go back to");
+            return;
+        }
+        BufferSnapshot origin = lastJumpOrigin;
+        lastJumpOrigin = null;
+        buffer = new UndoablePieceTable(origin.text());
+        currentFilePath = origin.filePath();
+        cursorRow = origin.row();
+        cursorCol = origin.col();
+        inJdkSourceBuffer = origin.filePath() != null && origin.filePath().startsWith("*jdk-source:");
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        String label = (origin.filePath() != null) ? "\"" + origin.filePath() + "\"" : "[新規バッファ]";
+        setStatusMessage("← back to " + label + " line " + (origin.row() + 1));
+    }
+
+    private void lookupJdkDocAndJump(String bufferTextSnapshot) {
         String word = wordAtCursor();
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
@@ -2583,7 +2620,7 @@ public class ModalEditor {
         // （jdk-source 疑似バッファ内では対象外。ネイティブトレース等の既存フローに任せる）
         if (!inJdkSourceBuffer) {
             Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
-                getProjectRoot(), currentFilePath, buffer.getText(), word);
+                getProjectRoot(), currentFilePath, bufferTextSnapshot, word);
             if (loc.isPresent()) {
                 ProjectSymbolResolver.SymbolLocation l = loc.get();
                 if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
