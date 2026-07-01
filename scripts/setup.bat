@@ -1,14 +1,20 @@
 @echo off
-rem Setup script: fetches OpenJDK 21 Java sources (src.zip) and native C/C++
-rem sources via a single git clone (sparse-checkout) into lib\.
+rem Setup script: fetches OpenJDK 21 Java sources, i.e. src.zip, and native
+rem C/C++ sources via a single git clone with sparse-checkout into lib\.
 rem Requires git to be installed.
-rem NOTE: keep this file ASCII-only. cmd.exe parses batch files using the
+rem NOTE 1: keep this file ASCII-only. cmd.exe parses batch files using the
 rem active console codepage, and this repo's default UTF-8 encoding does not
-rem match the legacy codepage many Windows consoles use (e.g. CP932 on
-rem Japanese Windows). Multi-byte UTF-8 sequences can be misread as batch
-rem metacharacters under the wrong codepage and break parsing (observed as
-rem garbled text plus "Exited with code 255"). Put any commentary in
+rem match the legacy codepage many Windows consoles use, e.g. CP932 on
+rem Japanese Windows. Multi-byte UTF-8 sequences can be misread as batch
+rem metacharacters under the wrong codepage and break parsing, observed as
+rem garbled text plus "Exited with code 255". Put any commentary in
 rem Japanese/other non-ASCII text in SKILL.md instead of this file.
+rem NOTE 2: avoid literal parentheses in echo/rem text that sits inside an
+rem if/for block below. cmd.exe's block parser scans raw characters for
+rem "(" and ")" to find the block's end; an unescaped pair inside such text
+rem can desync that scan and corrupt execution (observed as a stray word
+rem from the text being run as its own command). This is safe at top level
+rem (outside any block), which is why this header comment may still use them.
 setlocal enabledelayedexpansion
 
 set SCRIPT_DIR=%~dp0
@@ -136,7 +142,7 @@ if !HOTSPOT_READY! equ 1 (
     goto :cleanup
 )
 if exist "%WORK_DIR%\src\hotspot\share\" (
-    echo === Placing HotSpot (share) sources ===
+    echo === Placing HotSpot share sources ===
     mkdir "%HOTSPOT_DIR%\share" 2>nul
     xcopy "%WORK_DIR%\src\hotspot\share" "%HOTSPOT_DIR%\share\" /e /i /q /y >nul
     echo HotSpot sources stored at: %HOTSPOT_DIR%\share
