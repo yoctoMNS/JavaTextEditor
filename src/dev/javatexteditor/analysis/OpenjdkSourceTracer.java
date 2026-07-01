@@ -77,6 +77,11 @@ public class OpenjdkSourceTracer {
         return nativeSrcDir.isPresent();
     }
 
+    /** lib/openjdk-native/ のパスを返す（grep 検索の起点に使う）。 */
+    public Optional<Path> getNativeSrcDir() {
+        return nativeSrcDir;
+    }
+
     /**
      * C/C++ シンボル（関数名・マクロ名）の定義箇所を native ソースから検索する。
      * 定義行とは「行頭付近でシンボル名に '(' が続く行」と判定する。

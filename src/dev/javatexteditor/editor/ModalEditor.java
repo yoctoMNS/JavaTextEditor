@@ -95,6 +95,7 @@ public class ModalEditor {
     // project-wide-search: grep 結果バッファ
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
+    private Path grepBaseDir = null; // grepResults の各 filePath() が相対的な起点ディレクトリ
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
     // symbol-definition-navigation: gd (go to definition) / gr (go to references)
     private final ProjectSymbolResolver projectSymbolResolver = new ProjectSymbolResolver();
@@ -1458,11 +1459,15 @@ public class ModalEditor {
     }
 
     private void executeGrep(String pattern) {
+        executeGrep(pattern, getProjectRoot());
+    }
+
+    /** baseDir 配下を grep して *grep* 疑似バッファに結果を表示する。 */
+    private void executeGrep(String pattern, Path baseDir) {
         if (pattern.isEmpty()) {
             statusMessage = "E: no pattern";
             return;
         }
-        Path baseDir = getProjectRoot();
         List<SearchResult> results;
         try {
             results = projectSearcher.search(baseDir, pattern);
@@ -1482,6 +1487,7 @@ public class ModalEditor {
             sb.append(r.toDisplayLine()).append("\n");
         }
         grepResults = results;
+        grepBaseDir = baseDir;
         fileNameResults = null;
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
@@ -1548,11 +1554,13 @@ public class ModalEditor {
             return;
         }
         SearchResult r = grepResults.get(resultIdx);
-        Path target = getProjectRoot().resolve(r.filePath());
+        Path base = (grepBaseDir != null) ? grepBaseDir : getProjectRoot();
+        Path target = base.resolve(r.filePath());
         try {
             String content = Files.readString(target).replace("\r\n", "\n");
             buffer = new UndoablePieceTable(content);
             currentFilePath = target.toString();
+            inJdkSourceBuffer = false;
             grepResults = null;
             // 目的の行へジャンプ（1-indexed → 0-indexed）
             cursorRow = Math.max(0, r.lineNumber() - 1);
@@ -2556,14 +2564,24 @@ public class ModalEditor {
         }
     }
 
-    /** gr (go to references): カーソル位置の識別子をプロジェクト全体から grep 検索する。 */
+    /**
+     * gr (go to references): カーソル位置の識別子の使用箇所を grep 検索する。
+     * jdk-source 疑似バッファ内で native ソース（lib/openjdk-native/）が利用可能な場合は
+     * そちらを検索対象にする（呼び出し箇所・ヘッダ宣言を含め C/C++ 側の参照を横断的に探す）。
+     * それ以外は通常通りプロジェクト全体を検索する。
+     */
     private void goToReferences() {
         String word = wordAtCursor();
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
             return;
         }
-        executeGrep("\\b" + Pattern.quote(word) + "\\b");
+        String pattern = "\\b" + Pattern.quote(word) + "\\b";
+        if (inJdkSourceBuffer && sourceTracer.hasNativeSrcDir()) {
+            executeGrep(pattern, sourceTracer.getNativeSrcDir().get());
+            return;
+        }
+        executeGrep(pattern);
     }
 
     /**
