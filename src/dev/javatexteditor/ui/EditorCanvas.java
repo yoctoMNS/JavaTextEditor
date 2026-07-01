@@ -1,5 +1,6 @@
 package dev.javatexteditor.ui;
 
+import dev.javatexteditor.TextEditorSettings;
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.DiagnosticKind;
 import dev.javatexteditor.telescope.TelescopeItem;
@@ -59,6 +60,8 @@ public class EditorCanvas extends JPanel {
 
     // 作業ディレクトリ（ステータス行の中央に省略表示、ホバー時ツールチップでフルパス表示）
     private Path workingDirectory = null;
+    // :pwd コマンド実行までステータス行への作業ディレクトリ表示を隠す（TextEditorSettings で既定値を設定）
+    private boolean pwdVisible = TextEditorSettings.SHOW_PWD_ON_STARTUP;
 
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
@@ -128,6 +131,7 @@ public class EditorCanvas extends JPanel {
     public int getScrollCol() { return scrollCol; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
+    public void setPwdVisible(boolean visible) { this.pwdVisible = visible; repaint(); }
     public void setWorkingDirectory(Path wd) {
         this.workingDirectory = wd;
         setToolTipText(wd != null ? wd.toString() : null);
@@ -845,10 +849,10 @@ public class EditorCanvas extends JPanel {
                      :                  "-- NORMAL --";
         g2.drawString(label, 4, y - 4);
 
-        // 中央に作業ディレクトリを省略表示
-        if (workingDirectory != null) {
+        // 中央に作業ディレクトリを省略表示（:pwd コマンド実行後のみ、既定では非表示）
+        if (pwdVisible && workingDirectory != null) {
             FontMetrics fm = g2.getFontMetrics();
-            String wdStr = abbreviatePath(workingDirectory);
+            String wdStr = TextEditorSettings.formatPwdStatusLine(workingDirectory);
             int wdWidth = fm.stringWidth(wdStr);
             g2.drawString(wdStr, (getWidth() - wdWidth) / 2, y - 4);
         }
@@ -867,16 +871,6 @@ public class EditorCanvas extends JPanel {
 
         // ウォーキングパーソンアニメーション（左→右へ走り抜ける）
         drawWalkingPerson(g2, y - lineHeight + 1, lineHeight);
-    }
-
-    /** ホームディレクトリを ~ に置換し、長いパスを末尾2要素に省略する。 */
-    private static String abbreviatePath(Path p) {
-        try {
-            Path home = Path.of(System.getProperty("user.home", ""));
-            Path rel  = home.relativize(p);
-            return "~/" + rel.toString().replace('\\', '/');
-        } catch (IllegalArgumentException ignored) {}
-        return p.toString();
     }
 
     @Override
