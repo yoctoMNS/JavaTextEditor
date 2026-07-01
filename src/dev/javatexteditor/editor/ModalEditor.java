@@ -46,7 +46,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CD_COMPLETE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
     private enum FileSearchType { NAME, GREP }
 
     private UndoablePieceTable buffer;
@@ -129,10 +129,16 @@ public class ModalEditor {
     // 作業ディレクトリ変更コールバック（Main.java から WorkingDirectoryManager に委譲）
     // 成功時は null, 失敗時は日本語エラーメッセージを返す。
     private java.util.function.Function<Path, String> changeWdCallback = null;
-    // :cd タブ補完状態（CD_COMPLETE モード: 候補が複数件のときにモーダルオーバーレイで選択させる）
+    // :cd タブ補完状態（候補が複数件のとき *cd候補* 疑似バッファを開いて選択させる。
+    // jdk-source 疑似バッファ（saved*/inJdkSourceBuffer）と同じ「一時退避→復元」パターン）
     private List<String> cdCandidates = List.of(); // 候補ディレクトリ名（末尾 "/" は含まない）
-    private int cdCandidateIdx = 0;
     private String cdCandidateParentPart = ""; // 補完対象パスのうち末尾ディレクトリ名より前の部分（区切り文字含む）
+    private boolean cdSelectionActive = false; // true の間は *cd候補* 疑似バッファを表示中
+    private String cdSavedBufferText = null;   // 選択中に退避した元バッファのテキスト
+    private String cdSavedFilePath = null;
+    private int cdSavedCursorRow = 0;
+    private int cdSavedCursorCol = 0;
+    private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
     // filer モード状態
     private List<DirEntry> filerEntries = List.of();
     private List<DirEntry> filerFiltered = List.of();
@@ -279,7 +285,6 @@ public class ModalEditor {
             case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
             case IMPORT_SELECT -> processImportSelectKey(keyCode, modifiers);
             case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
-            case CD_COMPLETE   -> processCdCompleteKey(keyCode, modifiers);
         }
         syncCanvas();
     }
@@ -312,6 +317,16 @@ public class ModalEditor {
         // jdk-source 疑似バッファ: q で元バッファに戻る
         if (inJdkSourceBuffer && keyChar == 'q') {
             closeJdkSourceBuffer();
+            return;
+        }
+
+        // *cd候補* 疑似バッファ: Enter で選択、q でキャンセルして元バッファへ戻る
+        if (cdSelectionActive && keyCode == KeyEvent.VK_ENTER) {
+            applySelectedCdCandidate();
+            return;
+        }
+        if (cdSelectionActive && keyChar == 'q') {
+            cancelCdSelection();
             return;
         }
 
@@ -902,7 +917,7 @@ public class ModalEditor {
 
     /**
      * commandBuffer が "cd" / "cd " で始まる場合のみ有効。
-     * 候補0件 → 何もしない、1件 → その場で補完、複数件 → CD_COMPLETE オーバーレイで選択させる。
+     * 候補0件 → 何もしない、1件 → その場で補完、複数件 → *cd候補* 疑似バッファで選択させる。
      */
     private void handleCdTabCompletion() {
         String cmd = commandBuffer.toString();
@@ -949,11 +964,7 @@ public class ModalEditor {
             applyCdCandidate(parentPart, candidates.get(0));
             return;
         }
-        cdCandidates = candidates;
-        cdCandidateIdx = 0;
-        cdCandidateParentPart = parentPart;
-        mode = Mode.CD_COMPLETE;
-        statusMessage = "";
+        openCdCandidateBuffer(cmd, parentPart, candidates);
     }
 
     /** commandBuffer を "cd " + parentPart + name + "/" に置き換える（続けて補完できるよう末尾に区切り文字を付与）。 */
@@ -962,26 +973,78 @@ public class ModalEditor {
         commandBuffer.append("cd ").append(parentPart).append(name).append("/");
     }
 
-    private void processCdCompleteKey(int keyCode, int modifiers) {
-        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+    /**
+     * 複数候補が見つかった場合、telescope オーバーレイではなく既存の
+     * *grep* や jdk-source と同様の「疑似バッファ」としてエディタ画面上に候補一覧を表示する。
+     * 現在編集中のバッファは cdSaved* に退避し、Enter で選択 / q でキャンセルすると復元する。
+     */
+    private void openCdCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
+        cdSavedBufferText = buffer.getText();
+        cdSavedFilePath = currentFilePath;
+        cdSavedCursorRow = cursorRow;
+        cdSavedCursorCol = cursorCol;
+        cdSavedCommandText = originalCmd;
+        cdCandidates = candidates;
+        cdCandidateParentPart = parentPart;
+        cdSelectionActive = true;
 
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            mode = Mode.COMMAND;
+        StringBuilder sb = new StringBuilder();
+        sb.append("*cd候補* ").append(parentPart.isEmpty() ? "." : parentPart)
+          .append(" — ").append(candidates.size()).append("件\n");
+        for (String name : candidates) {
+            sb.append(name).append("/\n");
+        }
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        cursorRow = 1;
+        cursorCol = 0;
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        commandBuffer.setLength(0);
+        mode = Mode.NORMAL;
+        statusMessage = "cd候補: " + candidates.size() + "件 — Enter で選択、q でキャンセル";
+    }
+
+    /** cd候補疑似バッファ内でカーソルがある行の候補を選択し、元のバッファへ戻って :cd 入力を継続する。 */
+    private void applySelectedCdCandidate() {
+        int idx = cursorRow - 1; // 行0はヘッダ
+        if (idx < 0 || idx >= cdCandidates.size()) {
+            statusMessage = "E: no candidate at this line";
             return;
         }
-        if (keyCode == KeyEvent.VK_ENTER || keyCode == KeyEvent.VK_TAB) {
-            applyCdCandidate(cdCandidateParentPart, cdCandidates.get(cdCandidateIdx));
-            mode = Mode.COMMAND;
-            return;
-        }
-        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
-            if (cdCandidateIdx < cdCandidates.size() - 1) cdCandidateIdx++;
-            return;
-        }
-        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
-            if (cdCandidateIdx > 0) cdCandidateIdx--;
-            return;
-        }
+        String name = cdCandidates.get(idx);
+        String parentPart = cdCandidateParentPart;
+        restoreCdSavedBuffer();
+        mode = Mode.COMMAND;
+        applyCdCandidate(parentPart, name);
+        statusMessage = "";
+    }
+
+    /** cd候補疑似バッファをキャンセルし、元のバッファと入力中のコマンド文字列を復元する。 */
+    private void cancelCdSelection() {
+        String savedCmd = cdSavedCommandText;
+        restoreCdSavedBuffer();
+        mode = Mode.COMMAND;
+        commandBuffer.setLength(0);
+        commandBuffer.append(savedCmd);
+        statusMessage = "";
+    }
+
+    private void restoreCdSavedBuffer() {
+        buffer = new UndoablePieceTable(cdSavedBufferText != null ? cdSavedBufferText : "");
+        currentFilePath = cdSavedFilePath;
+        cursorRow = cdSavedCursorRow;
+        cursorCol = cdSavedCursorCol;
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        cdSelectionActive = false;
+        cdSavedBufferText = null;
+        cdSavedFilePath = null;
+        cdSavedCommandText = "";
     }
 
     // -------------------------------------------------------------------------
@@ -2372,7 +2435,7 @@ public class ModalEditor {
             String[] lines = buffer.getText().split("\n", -1);
             String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
             canvas.ensureCursorColVisible(cursorCol, curLine);
-            if (mode == Mode.COMMAND || mode == Mode.CD_COMPLETE) {
+            if (mode == Mode.COMMAND) {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
             } else if (mode == Mode.SEARCH) {
                 canvas.setCommandLineText("/" + searchBuffer.toString());
@@ -2414,13 +2477,6 @@ public class ModalEditor {
                 String filerTitle = filerSearchMode ? dirName + " /" : dirName;
                 String filerQ = filerSearchMode ? filerQuery.toString() : "";
                 canvas.setTelescopeState(true, filerTitle, filerQ, items, filerSelectedIdx, buildFilerPreview());
-            } else if (mode == Mode.CD_COMPLETE) {
-                // :cd タブ補完候補オーバーレイ: ディレクトリ名のリストとして表示する
-                List<TelescopeItem> items = new ArrayList<>();
-                for (String name : cdCandidates) {
-                    items.add(new TelescopeItem(name + "/", null, 0, 0));
-                }
-                canvas.setTelescopeState(true, "cd: " + cdCandidateParentPart, "", items, cdCandidateIdx, "");
             } else {
                 canvas.setTelescopeState(false, "", "", List.of(), 0, "");
             }
@@ -2444,9 +2500,8 @@ public class ModalEditor {
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
-    public boolean isCdCompleteMode()     { return mode == Mode.CD_COMPLETE; }
+    public boolean isCdSelectionActive()  { return cdSelectionActive; }
     public List<String> getCdCandidates() { return cdCandidates; }
-    public int getCdCandidateIdx()        { return cdCandidateIdx; }
     public int getFilerSelectedIdx()      { return filerSelectedIdx; }
     public List<DirEntry> getFilerFiltered() { return filerFiltered; }
     public boolean isFilerSearchMode()    { return filerSearchMode; }

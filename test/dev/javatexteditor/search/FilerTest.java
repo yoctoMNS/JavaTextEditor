@@ -35,11 +35,11 @@ public class FilerTest {
         testEnterOpenFile();
         testEnterEnterDirectory();
         testCdTabSingleCandidateCompletes();
-        testCdTabMultipleCandidatesShowsOverlay();
+        testCdTabMultipleCandidatesOpensPseudoBuffer();
         testCdTabNoCandidateDoesNothing();
         testCdCompleteEnterAppliesSelection();
-        testCdCompleteEscCancels();
-        testCdCompleteArrowNavigation();
+        testCdCompleteQCancelsAndRestoresBuffer();
+        testCdCompleteJKNavigation();
         testCdTabEmptyPrefixListsAllDirs();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
@@ -354,7 +354,7 @@ public class FilerTest {
         }
     }
 
-    static void testCdTabMultipleCandidatesShowsOverlay() throws Exception {
+    static void testCdTabMultipleCandidatesOpensPseudoBuffer() throws Exception {
         Path tmp = Files.createTempDirectory("filer_tabcomp2_");
         try {
             Files.createDirectory(tmp.resolve("project-a"));
@@ -362,8 +362,12 @@ public class FilerTest {
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommandNoEnter(editor, "cd proj");
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
-            assertTrue("enters CD_COMPLETE mode with multiple candidates", editor.isCdCompleteMode());
+            // telescope オーバーレイではなく通常のテキストバッファ(NORMALモード)として表示される
+            assertTrue("returns to NORMAL mode (not an overlay mode)", editor.isNormalMode());
+            assertTrue("cd selection is active", editor.isCdSelectionActive());
             assertEquals("two candidates found", 2, editor.getCdCandidates().size());
+            assertTrue("buffer text contains first candidate", editor.getText().contains("project-a/"));
+            assertTrue("buffer text contains second candidate", editor.getText().contains("project-b/"));
         } finally {
             deleteDir(tmp);
         }
@@ -391,33 +395,38 @@ public class FilerTest {
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommandNoEnter(editor, "cd aa");
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
-            assertTrue("in CD_COMPLETE mode", editor.isCdCompleteMode());
+            assertTrue("cd selection active after TAB with multiple candidates", editor.isCdSelectionActive());
             String first = editor.getCdCandidates().get(0);
+            // カーソルは候補一覧の1行目（ヘッダの次）にあるはず
             editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
             assertTrue("Enter returns to command mode", editor.isCommandMode());
+            assertTrue("selection cleared after Enter", !editor.isCdSelectionActive());
             assertEquals("commandBuffer completed with selected candidate", "cd " + first + "/", editor.getCommandBuffer());
         } finally {
             deleteDir(tmp);
         }
     }
 
-    static void testCdCompleteEscCancels() throws Exception {
+    static void testCdCompleteQCancelsAndRestoresBuffer() throws Exception {
         Path tmp = Files.createTempDirectory("filer_tabcomp5_");
         try {
             Files.createDirectory(tmp.resolve("aaa"));
             Files.createDirectory(tmp.resolve("aab"));
-            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            ModalEditor editor = makeEditorWithFilerSupport(tmp); // initial buffer text is "hello\n"
             typeCommandNoEnter(editor, "cd aa");
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
-            editor.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
-            assertTrue("Esc returns to command mode without applying", editor.isCommandMode());
-            assertEquals("commandBuffer unchanged by cancel", "cd aa", editor.getCommandBuffer());
+            assertTrue("original buffer replaced by candidate pseudo-buffer", !editor.getText().contains("hello"));
+            editor.processKey(0, 'q', 0);
+            assertTrue("q returns to command mode without applying", editor.isCommandMode());
+            assertTrue("selection cleared after q", !editor.isCdSelectionActive());
+            assertEquals("commandBuffer restored to pre-TAB text", "cd aa", editor.getCommandBuffer());
+            assertTrue("original buffer content restored", editor.getText().contains("hello"));
         } finally {
             deleteDir(tmp);
         }
     }
 
-    static void testCdCompleteArrowNavigation() throws Exception {
+    static void testCdCompleteJKNavigation() throws Exception {
         Path tmp = Files.createTempDirectory("filer_tabcomp6_");
         try {
             Files.createDirectory(tmp.resolve("aaa"));
@@ -425,11 +434,11 @@ public class FilerTest {
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommandNoEnter(editor, "cd aa");
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
-            assertEquals("initial selection is 0", 0, editor.getCdCandidateIdx());
-            editor.processKey(KeyEvent.VK_DOWN, KeyEvent.CHAR_UNDEFINED, 0);
-            assertEquals("Down moves selection to 1", 1, editor.getCdCandidateIdx());
-            editor.processKey(KeyEvent.VK_UP, KeyEvent.CHAR_UNDEFINED, 0);
-            assertEquals("Up moves selection back to 0", 0, editor.getCdCandidateIdx());
+            List<String> candidates = editor.getCdCandidates();
+            editor.processKey(0, 'j', 0); // 2行目（2番目の候補）へ移動
+            editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+            assertEquals("j moved to second candidate before Enter",
+                "cd " + candidates.get(1) + "/", editor.getCommandBuffer());
         } finally {
             deleteDir(tmp);
         }
@@ -444,7 +453,7 @@ public class FilerTest {
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommandNoEnter(editor, "cd ");
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
-            assertTrue("empty prefix lists directories only (files excluded)", editor.isCdCompleteMode());
+            assertTrue("cd selection active (files excluded from candidates)", editor.isCdSelectionActive());
             assertEquals("only the 2 directories are candidates", 2, editor.getCdCandidates().size());
         } finally {
             deleteDir(tmp);
