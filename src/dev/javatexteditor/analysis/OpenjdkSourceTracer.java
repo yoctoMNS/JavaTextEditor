@@ -103,7 +103,7 @@ public class OpenjdkSourceTracer {
             return Files.walk(nativeSrcDir.get())
                 .filter(p -> {
                     String n = p.getFileName().toString();
-                    return n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".h");
+                    return n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".h") || n.endsWith(".hpp");
                 })
                 .flatMap(p -> {
                     try {

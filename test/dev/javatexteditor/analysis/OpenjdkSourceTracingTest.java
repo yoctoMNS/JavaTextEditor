@@ -43,6 +43,7 @@ public class OpenjdkSourceTracingTest {
 
         testFindCSymbolDoesNotMatchSubstringOfOtherIdentifier();
         testFindCSymbolMatchesRealDefinition();
+        testFindCSymbolMatchesHotspotStyleCppDefinition();
 
         System.out.println("\n結果: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -253,6 +254,30 @@ public class OpenjdkSourceTracingTest {
         Optional<OpenjdkSourceTracer.CSymbolLocation> loc = tracer.findCSymbol("gc");
         check("'gc' は gc.c の実際の定義行に一致する",
             loc.isPresent() && loc.get().relativePath().endsWith("gc.c") && loc.get().lineNumber() == 0,
+            loc.map(l -> l.relativePath() + ":" + l.lineNumber()).orElse("empty"));
+    }
+
+    /**
+     * HotSpot共通ソース（src/hotspot/share）を lib/openjdk-native/hotspot/ 配下に
+     * 取得できるようにした際の回帰テスト。HotSpotは .cpp/.hpp を使うため、
+     * これらの拡張子も findCSymbol の検索対象になっていることを確認する
+     * （例: JVM_GC() は src/hotspot/share/prims/jvm.cpp に実装されている）。
+     */
+    private static void testFindCSymbolMatchesHotspotStyleCppDefinition() throws Exception {
+        Path dir = Files.createTempDirectory("hotspot-src-test");
+        Path prims = dir.resolve("prims");
+        Files.createDirectories(prims);
+        Files.writeString(prims.resolve("jvm.hpp"), """
+            JVM_LEAF(void, JVM_GC(void));
+            """);
+        Files.writeString(prims.resolve("jvm.cpp"), """
+            JVM_ENTRY_NO_ENV(void, JVM_GC(void))
+              Universe::heap()->collect(GCCause::_jvm_gc);
+            JVM_END
+            """);
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc = tracer.findCSymbol("JVM_GC");
+        check("'JVM_GC' は jvm.cpp(.hpp含む) の定義に一致する", loc.isPresent(),
             loc.map(l -> l.relativePath() + ":" + l.lineNumber()).orElse("empty"));
     }
 
