@@ -1,5 +1,7 @@
 #!/bin/bash
-# セットアップスクリプト: OpenJDK 21 src.zip と native C ソースを lib/ に配置する
+# セットアップスクリプト: OpenJDK 21 の Java ソース(src.zip) と native C ソースを
+# git clone (sparse-checkout) 一本で lib/ に配置する。
+# git がインストール済みであることを前提とする。
 # Linux / macOS / WSL 対応
 set -e
 
@@ -9,159 +11,83 @@ mkdir -p "$LIB_DIR"
 SRC_ZIP="$LIB_DIR/src.zip"
 NATIVE_DIR="$LIB_DIR/openjdk-native"
 
-# ---- ヘルパー関数 ----
+if [ -f "$SRC_ZIP" ] && [ -d "$NATIVE_DIR" ] && [ "$(find "$NATIVE_DIR" -name '*.c' | head -1)" != "" ]; then
+    echo "src.zip and openjdk-native already exist. Nothing to do."
+    exit 0
+fi
 
-fetch_native_via_git() {
-    local DEST_DIR="$1"
-    local WORK_DIR="$LIB_DIR/_openjdk_clone_tmp"
-    rm -rf "$WORK_DIR"
-    mkdir -p "$WORK_DIR"
+if ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: git not found. This script requires git to fetch OpenJDK 21 sources."
+    exit 1
+fi
 
-    echo "Cloning openjdk/jdk (blob:none, depth=1) ..."
-    if ! git clone \
-            --no-checkout \
-            --depth=1 \
-            --filter=blob:none \
-            --branch jdk-21+35 \
-            https://github.com/openjdk/jdk.git \
-            "$WORK_DIR" 2>&1; then
-        rm -rf "$WORK_DIR"
-        return 1
-    fi
+WORK_DIR="$LIB_DIR/_openjdk_clone_tmp"
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR"
 
-    echo "Configuring sparse-checkout for native sources ..."
-    git -C "$WORK_DIR" sparse-checkout init --cone
-    git -C "$WORK_DIR" sparse-checkout set \
-        "src/java.base/share/native" \
-        "src/java.base/unix/native" \
-        "src/java.base/windows/native" \
-        "src/java.desktop/share/native" \
-        "src/java.desktop/unix/native" \
-        "src/java.desktop/windows/native" \
-        "src/java.lang.instrument/share/native" \
-        "src/jdk.management/share/native" \
-        "src/jdk.sctp/unix/native"
+echo "=== Cloning openjdk/jdk (blob:none, depth=1) ==="
+git clone \
+    --no-checkout \
+    --depth=1 \
+    --filter=blob:none \
+    --branch jdk-21+35 \
+    https://github.com/openjdk/jdk.git \
+    "$WORK_DIR"
 
-    git -C "$WORK_DIR" checkout
-    mv "$WORK_DIR/src" "$DEST_DIR"
-    rm -rf "$WORK_DIR"
-    return 0
-}
+echo "Configuring sparse-checkout for Java/native sources ..."
+git -C "$WORK_DIR" sparse-checkout init --no-cone
+git -C "$WORK_DIR" sparse-checkout set \
+    "src/*/share/classes" \
+    "src/*/unix/classes" \
+    "src/*/windows/classes" \
+    "src/*/share/native" \
+    "src/*/unix/native" \
+    "src/*/windows/native"
 
-fetch_native_via_apt() {
-    local DEST_DIR="$1"
-    local WORK_DIR="$LIB_DIR/_apt_source_tmp"
-    rm -rf "$WORK_DIR"
-    mkdir -p "$WORK_DIR"
+git -C "$WORK_DIR" checkout
 
-    echo "Downloading OpenJDK 21 source package via apt-get source ..."
-    ( cd "$WORK_DIR" && apt-get source openjdk-21 2>&1 ) || {
-        rm -rf "$WORK_DIR"
-        return 1
-    }
-
-    local SRC_DIR
-    SRC_DIR=$(find "$WORK_DIR" -maxdepth 1 -type d -name "openjdk-21*" | head -1)
-    if [ -z "$SRC_DIR" ] || [ ! -d "$SRC_DIR/src" ]; then
-        rm -rf "$WORK_DIR"
-        return 1
-    fi
-
-    mkdir -p "$DEST_DIR"
-    find "$SRC_DIR/src" -type d -name "native" | while read -r NATDIR; do
-        REL="${NATDIR#$SRC_DIR/src/}"
-        PARENT=$(dirname "$REL")
-        mkdir -p "$DEST_DIR/$PARENT"
-        cp -r "$NATDIR" "$DEST_DIR/$PARENT/"
-    done
-    rm -rf "$WORK_DIR"
-    # コピー結果が空でないか確認
-    [ "$(find "$DEST_DIR" -name "*.c" | head -1)" != "" ]
-}
-
-# ---- 1. src.zip の配置 ----
+# ---- 1. src.zip の生成（module/pkg/Class.java 形式） ----
 
 if [ -f "$SRC_ZIP" ]; then
     echo "src.zip already exists: $SRC_ZIP"
 else
-    echo "=== Setting up OpenJDK 21 source (src.zip) ==="
+    echo "=== Building src.zip from checked-out Java sources ==="
+    ZIP_STAGE="$LIB_DIR/_src_zip_stage_tmp"
+    rm -rf "$ZIP_STAGE"
+    mkdir -p "$ZIP_STAGE"
 
-    JAVA_HOME_CANDIDATE=""
-    if [ -n "$JAVA_HOME" ]; then
-        JAVA_HOME_CANDIDATE="$JAVA_HOME"
-    elif command -v java >/dev/null 2>&1; then
-        JAVA_BIN=$(command -v java)
-        while [ -L "$JAVA_BIN" ]; do
-            JAVA_BIN=$(readlink -f "$JAVA_BIN" 2>/dev/null || readlink "$JAVA_BIN")
-        done
-        JAVA_HOME_CANDIDATE=$(dirname "$(dirname "$JAVA_BIN")")
-    fi
-
-    FOUND_SRC=""
-    for CANDIDATE in \
-        "$JAVA_HOME_CANDIDATE/lib/src.zip" \
-        "$JAVA_HOME_CANDIDATE/../lib/src.zip" \
-        "$JAVA_HOME_CANDIDATE/../../lib/src.zip"
-    do
-        if [ -f "$CANDIDATE" ]; then
-            FOUND_SRC="$CANDIDATE"
-            break
-        fi
+    find "$WORK_DIR/src" -maxdepth 3 -type d -name "classes" | while read -r CLASSES_DIR; do
+        # 例: $WORK_DIR/src/java.base/share/classes -> module=java.base
+        MODULE=$(echo "$CLASSES_DIR" | sed -E "s#^$WORK_DIR/src/([^/]+)/.*#\1#")
+        mkdir -p "$ZIP_STAGE/$MODULE"
+        cp -rn "$CLASSES_DIR/." "$ZIP_STAGE/$MODULE/" 2>/dev/null || true
     done
 
-    # macOS: Homebrew の openjdk@21
-    if [ -z "$FOUND_SRC" ]; then
-        for BREW_PREFIX in /opt/homebrew /usr/local; do
-            CANDIDATE="$BREW_PREFIX/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/lib/src.zip"
-            if [ -f "$CANDIDATE" ]; then
-                FOUND_SRC="$CANDIDATE"
-                break
-            fi
-        done
-    fi
-
-    # Linux: apt パッケージ
-    if [ -z "$FOUND_SRC" ] && command -v apt-get >/dev/null 2>&1; then
-        echo "Installing openjdk-21-source via apt..."
-        apt-get install -y openjdk-21-source
-        for F in /usr/lib/jvm/java-21*/lib/src.zip /usr/lib/jvm/openjdk-21*/lib/src.zip; do
-            if [ -f "$F" ]; then FOUND_SRC="$F"; break; fi
-        done
-    fi
-
-    # Linux: dnf/yum (Fedora/RHEL系)
-    if [ -z "$FOUND_SRC" ] && command -v dnf >/dev/null 2>&1; then
-        echo "Installing java-21-openjdk-src via dnf..."
-        dnf install -y java-21-openjdk-src
-        for F in /usr/lib/jvm/java-21*/lib/src.zip; do
-            if [ -f "$F" ]; then FOUND_SRC="$F"; break; fi
-        done
-    fi
-
-    if [ -n "$FOUND_SRC" ]; then
-        cp "$FOUND_SRC" "$SRC_ZIP"
-        echo "Copied src.zip to: $SRC_ZIP"
+    if [ -n "$(find "$ZIP_STAGE" -name '*.java' | head -1)" ]; then
+        jar cf "$SRC_ZIP" -C "$ZIP_STAGE" .
+        echo "Created src.zip: $SRC_ZIP"
     else
-        echo "WARNING: src.zip not found. Place it manually at: $SRC_ZIP"
+        echo "WARNING: No Java sources found; src.zip was not created."
     fi
+    rm -rf "$ZIP_STAGE"
 fi
 
-# ---- 2. OpenJDK native C ソースの取得 ----
+# ---- 2. openjdk-native への native C ソース配置 ----
 
 if [ -d "$NATIVE_DIR" ] && [ "$(find "$NATIVE_DIR" -name '*.c' | head -1)" != "" ]; then
     echo "openjdk-native already exists: $NATIVE_DIR"
 else
-    echo "=== Fetching OpenJDK 21 native C sources ==="
-
-    if command -v git >/dev/null 2>&1 && fetch_native_via_git "$NATIVE_DIR"; then
-        echo "Native C sources stored at: $NATIVE_DIR (via git sparse-checkout)"
-    elif command -v apt-get >/dev/null 2>&1 && fetch_native_via_apt "$NATIVE_DIR"; then
-        echo "Native C sources stored at: $NATIVE_DIR (via apt-get source)"
-    else
-        echo "WARNING: Could not fetch native C sources automatically."
-        echo "  Install git and re-run setup.sh to enable native method source tracing."
-    fi
+    echo "=== Placing native C sources ==="
+    mkdir -p "$NATIVE_DIR"
+    find "$WORK_DIR/src" -type d -name "native" | while read -r NATIVE_SUBDIR; do
+        REL="${NATIVE_SUBDIR#$WORK_DIR/src/}"
+        mkdir -p "$NATIVE_DIR/$(dirname "$REL")"
+        cp -r "$NATIVE_SUBDIR" "$NATIVE_DIR/$(dirname "$REL")/"
+    done
+    echo "Native C sources stored at: $NATIVE_DIR"
 fi
+
+rm -rf "$WORK_DIR"
 
 echo ""
 echo "=== Setup complete ==="
