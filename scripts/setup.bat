@@ -1,7 +1,14 @@
 @echo off
-rem セットアップスクリプト: OpenJDK 21 の Java ソース(src.zip) と native C ソースを
-rem git clone (sparse-checkout) 一本で lib\ に配置する。
-rem git がインストール済みであることを前提とする。
+rem Setup script: fetches OpenJDK 21 Java sources (src.zip) and native C/C++
+rem sources via a single git clone (sparse-checkout) into lib\.
+rem Requires git to be installed.
+rem NOTE: keep this file ASCII-only. cmd.exe parses batch files using the
+rem active console codepage, and this repo's default UTF-8 encoding does not
+rem match the legacy codepage many Windows consoles use (e.g. CP932 on
+rem Japanese Windows). Multi-byte UTF-8 sequences can be misread as batch
+rem metacharacters under the wrong codepage and break parsing (observed as
+rem garbled text plus "Exited with code 255"). Put any commentary in
+rem Japanese/other non-ASCII text in SKILL.md instead of this file.
 setlocal enabledelayedexpansion
 
 set SCRIPT_DIR=%~dp0
@@ -53,7 +60,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-rem ---- 1. src.zip の生成（module/pkg/Class.java 形式） ----
+rem ---- 1. Build src.zip (module/pkg/Class.java layout) ----
 
 if exist "%SRC_ZIP%" (
     echo src.zip already exists: %SRC_ZIP%
@@ -88,7 +95,7 @@ if %errorlevel% equ 0 (
 )
 rmdir /s /q "%ZIP_STAGE%"
 
-rem ---- 2. openjdk-native への native C ソース配置 ----
+rem ---- 2. Place native C sources under openjdk-native ----
 
 :setup_native
 if exist "%NATIVE_DIR%\" (
@@ -111,11 +118,12 @@ for /d %%M in ("%WORK_DIR%\src\*") do (
 )
 echo Native C sources stored at: %NATIVE_DIR%
 
-rem ---- 3. HotSpot (share) ソースの配置 ----
-rem src\hotspot は "native" という名前のサブディレクトリを持たないため、
-rem 上記のループでは拾えない。JVM_GC() 等のランタイム関数はここに実装されている。
-rem os/cpu 固有部分（src\hotspot\os\*, src\hotspot\cpu\*）はサイズが大きく、
-rem 対応プラットフォームの絞り込みが必要になるため、まずは共通部分（share）のみを対象にする。
+rem ---- 3. Place HotSpot (share) sources ----
+rem src\hotspot has no subdirectory named "native", so the loop above never
+rem picks it up. Runtime functions such as JVM_GC() live here. The os/cpu
+rem specific backends (src\hotspot\os\*, src\hotspot\cpu\*) are excluded for
+rem now since they are large and platform specific; only the common "share"
+rem sources are fetched.
 
 :setup_hotspot
 if !HOTSPOT_READY! equ 1 (

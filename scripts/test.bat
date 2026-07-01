@@ -15,7 +15,7 @@ set OVERALL_FAIL=0
 
 for /r build %%f in (*Test.class) do (
     set "fname=%%~nf"
-    rem $が名前に含まれる内部クラス（*$*.class）を除外する
+    rem exclude nested classes whose name contains "$" (*$*.class)
     if "!fname:$=!" == "!fname!" (
         set "classfile=%%f"
         set "classfile=!classfile:%cd%\build\=!"
