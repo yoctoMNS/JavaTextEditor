@@ -128,8 +128,6 @@ public class ModalEditor {
     // 作業ディレクトリ変更コールバック（Main.java から WorkingDirectoryManager に委譲）
     // 成功時は null, 失敗時は日本語エラーメッセージを返す。
     private java.util.function.Function<Path, String> changeWdCallback = null;
-    // :pwd コマンド実行後のみステータス行に作業ディレクトリを表示する（既定値は TextEditorSettings）
-    private boolean pwdVisible = dev.javatexteditor.TextEditorSettings.SHOW_PWD_ON_STARTUP;
     // filer モード状態
     private List<DirEntry> filerEntries = List.of();
     private List<DirEntry> filerFiltered = List.of();
@@ -1326,7 +1324,6 @@ public class ModalEditor {
             executeRemoveImport(fqn);
         } else if (cmd.equals("pwd")) {
             statusMessage = getProjectRoot().toString();
-            pwdVisible = true;
         } else if (cmd.startsWith("cd ")) {
             changeDirectory(cmd.substring(3).trim());
         } else if (cmd.equals("sp") || cmd.equals("split")) {
@@ -2257,7 +2254,6 @@ public class ModalEditor {
 
     private void syncCanvas() {
         if (canvas != null) {
-            canvas.setPwdVisible(pwdVisible);
             canvas.setText(buffer.getText());
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
