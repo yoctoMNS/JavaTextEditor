@@ -162,6 +162,11 @@ public class ModalEditor {
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> completionItems = java.util.List.of();
     private int completionSelectedIdx = 0;
     private String completionPrefix = "";
+    // 単語補完（Alt+/）: 作業ディレクトリ配下の全単語・クラス名・変数名等から補完する。
+    // Ctrl+N は INSERT モードで Emacs 式「カーソル下移動」に割り当て済み（keymap-conflict-resolution
+    // スキル参照）のため、単語補完のトリガーは Alt+/ を使う。
+    private dev.javatexteditor.analysis.WordIndex wordIndex = null;
+    private boolean completionIsWordMode = false; // true の間は recheckCompletion() が wordIndex を使う
     // バッファ履歴（Ctrl+U で前へ・Ctrl+P で次へ）
     private record BufferSnapshot(String text, String filePath, int row, int col) {}
     private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
@@ -531,6 +536,14 @@ public class ModalEditor {
             return;
         }
 
+        // Alt+/ → 単語補完トリガー（作業ディレクトリ配下の単語・クラス名・変数名・メソッド名等）。
+        // Ctrl+N は INSERT モードで既に Emacs 式カーソル下移動に割り当て済みのため使わない。
+        if ((modifiers & KeyEvent.ALT_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SLASH) {
+            triggerWordCompletion();
+            syncCanvas();
+            return;
+        }
+
         // 補完ポップアップが開いているときのナビゲーションキー処理
         if (completionActive) {
             switch (keyCode) {
@@ -661,7 +674,52 @@ public class ModalEditor {
         completionItems   = items;
         completionSelectedIdx = 0;
         completionActive  = true;
+        completionIsWordMode = false;
         syncCompletionCanvas();
+    }
+
+    /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
+    private void triggerWordCompletion() {
+        if (wordIndex == null || !wordIndex.isReady()) {
+            setStatusMessage("単語インデックス構築中...");
+            return;
+        }
+        String prefix = extractCompletionPrefix();
+        if (prefix.isEmpty()) {
+            dismissCompletion();
+            return;
+        }
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryWordCompletion(prefix);
+        if (items.isEmpty()) {
+            dismissCompletion();
+            setStatusMessage("補完候補なし: " + prefix);
+            return;
+        }
+        completionPrefix  = prefix;
+        completionItems   = items;
+        completionSelectedIdx = 0;
+        completionActive  = true;
+        completionIsWordMode = true;
+        syncCompletionCanvas();
+    }
+
+    /**
+     * wordIndex（作業ディレクトリ全体、バックグラウンドで正規表現ビルド済み）と
+     * 現在編集中バッファ（保存前の未確定な単語も拾うため毎回その場で抽出）をマージして検索する。
+     * prefix 自体（カーソル直前の、今まさに入力中の未完成な語）は bufferWords から除く。
+     * 除かないとカーソル位置の識別子トークンが常に「prefix と完全一致する単語」として
+     * 候補に混入し、何も入力していないのに補完候補が出る／選択しても何も変わらない、
+     * という無意味な結果になる。
+     */
+    private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
+        java.util.Set<String> bufferWords = dev.javatexteditor.analysis.WordIndex.extractWords(buffer.getText());
+        bufferWords.remove(prefix);
+        java.util.List<String> words = wordIndex.query(prefix, 10, bufferWords);
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items = new java.util.ArrayList<>(words.size());
+        for (String w : words) {
+            items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));
+        }
+        return items;
     }
 
     /** 補完ポップアップを閉じる。 */
@@ -670,6 +728,7 @@ public class ModalEditor {
         completionActive = false;
         completionItems  = java.util.List.of();
         completionPrefix = "";
+        completionIsWordMode = false;
         syncCompletionCanvas();
     }
 
@@ -677,8 +736,13 @@ public class ModalEditor {
      * 文字を挿入・削除した後に補完候補を再クエリする。
      * インデックス未完了・候補なし・プレフィックスなしのときはサイレントに閉じる。
      * completionActive の状態に関わらず常に呼んでよい。
+     * completionIsWordMode に応じて単語補完/シンボル補完のどちらを再クエリするか切り替える。
      */
     private void recheckCompletion() {
+        if (completionIsWordMode) {
+            recheckWordCompletion();
+            return;
+        }
         if (completionIndex == null || !completionIndex.isReady()) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
@@ -689,6 +753,28 @@ public class ModalEditor {
             completionIndex.query(prefix, 10);
         if (items.isEmpty()) {
             if (completionActive) dismissCompletion();
+            return;
+        }
+        completionPrefix      = prefix;
+        completionItems       = items;
+        completionSelectedIdx = 0;
+        completionActive      = true;
+        syncCompletionCanvas();
+    }
+
+    private void recheckWordCompletion() {
+        if (wordIndex == null) {
+            dismissCompletion();
+            return;
+        }
+        String prefix = extractCompletionPrefix();
+        if (prefix.isEmpty()) {
+            dismissCompletion();
+            return;
+        }
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryWordCompletion(prefix);
+        if (items.isEmpty()) {
+            dismissCompletion();
             return;
         }
         completionPrefix      = prefix;
@@ -2500,6 +2586,8 @@ public class ModalEditor {
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
+    public boolean isCompletionActive()   { return completionActive; }
+    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completionItems; }
     public boolean isCdSelectionActive()  { return cdSelectionActive; }
     public List<String> getCdCandidates() { return cdCandidates; }
     public int getFilerSelectedIdx()      { return filerSelectedIdx; }
@@ -2573,6 +2661,11 @@ public class ModalEditor {
     /** 入力補完インデックスを設定する。 */
     public void setCompletionIndex(dev.javatexteditor.analysis.CompletionIndex index) {
         this.completionIndex = index;
+    }
+
+    /** Alt+/ 単語補完インデックスを設定する。 */
+    public void setWordIndex(dev.javatexteditor.analysis.WordIndex index) {
+        this.wordIndex = index;
     }
 
     /** auto-import ハンドラを設定する。 */
