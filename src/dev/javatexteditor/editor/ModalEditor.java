@@ -6,6 +6,7 @@ import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.JdkJavadocReader;
 import dev.javatexteditor.analysis.JdkTypeInfo;
 import dev.javatexteditor.analysis.OpenjdkSourceTracer;
+import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.buffer.PieceTable;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.refactor.RenameRefactorer;
@@ -95,6 +96,8 @@ public class ModalEditor {
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
+    // symbol-definition-navigation: gd (go to definition) / gr (go to references)
+    private final ProjectSymbolResolver projectSymbolResolver = new ProjectSymbolResolver();
     // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
     private List<CompileDiagnostic> localDiagnostics = List.of();
     // ファイル名検索 / ファイル内容grep（\f / \g）
@@ -319,6 +322,8 @@ public class ModalEditor {
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
+            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { goToDefinition(); return; }
+            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_R, 'r')) { goToReferences(); return; }
             if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
                 return;
@@ -2549,6 +2554,71 @@ public class ModalEditor {
         }
     }
 
+    /**
+     * gd (go to definition): カーソル位置の識別子の宣言箇所へジャンプする。
+     * まずプロジェクト内（フィールド・定数・メソッド・クラス）を検索し、
+     * 見つからなければ "ClassName.member" 形式の JDK メンバー宣言を試みる。
+     */
+    private void goToDefinition() {
+        String word = wordAtCursor();
+        if (word.isEmpty()) {
+            setStatusMessage("No identifier at cursor");
+            return;
+        }
+
+        Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
+            getProjectRoot(), currentFilePath, buffer.getText(), word);
+        if (loc.isPresent()) {
+            ProjectSymbolResolver.SymbolLocation l = loc.get();
+            if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
+                cursorRow = l.lineNumber();
+                cursorCol = 0;
+            } else {
+                loadFromFile(l.filePath());
+                cursorRow = l.lineNumber();
+                cursorCol = 0;
+            }
+            setStatusMessage("→ " + word + " (" + l.kind() + ")  "
+                + l.filePath() + ":" + (l.lineNumber() + 1));
+            return;
+        }
+
+        if (jdkIndex != null && jdkIndex.isReady() && jumpToJdkMemberDefinition(word)) {
+            return;
+        }
+
+        setStatusMessage("Definition not found: " + word);
+    }
+
+    /**
+     * カーソルが "ClassName.member" の member 上にある場合、JDK ソースを疑似バッファで開き
+     * member（メソッドまたはフィールド）の宣言行へジャンプする。
+     */
+    private boolean jumpToJdkMemberDefinition(String word) {
+        String[] classAndMember = classAndMethodAtCursor();
+        if (classAndMember == null) return false;
+        List<String> classCandidates = jdkIndex.lookup(classAndMember[0]);
+        if (classCandidates.isEmpty()) return false;
+        String fqn = pickBestFqn(classCandidates);
+        Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
+        if (cls.isEmpty()) return false;
+        Optional<String> src = sourceTracer.readJavaSource(cls.get());
+        if (src.isEmpty()) return false;
+        openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
+        jumpToMember(classAndMember[1]);
+        return true;
+    }
+
+    /** gr (go to references): カーソル位置の識別子をプロジェクト全体から grep 検索する。 */
+    private void goToReferences() {
+        String word = wordAtCursor();
+        if (word.isEmpty()) {
+            setStatusMessage("No identifier at cursor");
+            return;
+        }
+        executeGrep("\\b" + Pattern.quote(word) + "\\b");
+    }
+
     /** NORMALモードの K キー: カーソル位置の識別子を JDK ソースで開く。
      *  src.zip がなければステータスバーへのフォールバック表示。
      *  カーソルが "ClassName.methodName" の上にある場合、または jdk-source 疑似バッファ内で
@@ -2629,11 +2699,11 @@ public class ModalEditor {
                         }
                         return;
                     }
-                    // non-native: ソースにジャンプ（メソッド行を探す）
+                    // non-native: ソースにジャンプ（メソッド宣言 → フィールド宣言の順で探す）
                     Optional<String> src = sourceTracer.readJavaSource(cls.get());
                     if (src.isPresent()) {
                         openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
-                        jumpToMethod(methodName);
+                        jumpToMember(methodName);
                         return;
                     }
                 }
@@ -2723,9 +2793,8 @@ public class ModalEditor {
     }
 
     /** 疑似バッファ内でメソッド名の宣言行を探してカーソルを移動する。 */
-    private void jumpToMethod(String methodName) {
-        String text = buffer.getText();
-        String[] lines = text.split("\n", -1);
+    private boolean jumpToMethod(String methodName) {
+        String[] lines = buffer.getText().split("\n", -1);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             if (line.contains(methodName + "(") &&
@@ -2734,9 +2803,37 @@ public class ModalEditor {
                 cursorRow = i;
                 cursorCol = 0;
                 setStatusMessage("→ " + methodName + " (line " + (i + 1) + ")  q: close");
-                return;
+                return true;
             }
         }
+        return false;
+    }
+
+    /** 疑似バッファ内でフィールド（定数含む）名の宣言行を探してカーソルを移動する。 */
+    private boolean jumpToField(String fieldName) {
+        Pattern wordBoundary = Pattern.compile("\\b" + Pattern.quote(fieldName) + "\\b");
+        String[] lines = buffer.getText().split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.contains(fieldName + "(")) continue; // メソッド呼び出し/宣言は除外
+            if (!wordBoundary.matcher(line).find()) continue;
+            if ((line.contains("public") || line.contains("protected")
+                    || line.contains("private") || line.contains("static") || line.contains("final"))
+                    && (line.contains(";") || line.contains("="))) {
+                cursorRow = i;
+                cursorCol = 0;
+                setStatusMessage("→ " + fieldName + " (line " + (i + 1) + ")  q: close");
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** メソッド宣言 → フィールド（定数）宣言の順で疑似バッファ内の宣言行へジャンプする。 */
+    private void jumpToMember(String name) {
+        if (jumpToMethod(name)) return;
+        if (jumpToField(name)) return;
+        setStatusMessage("Declaration of " + name + " not found in source  q: close");
     }
 
     /**
