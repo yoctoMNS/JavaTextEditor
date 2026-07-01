@@ -99,6 +99,7 @@ project-root/
 | ⑳ | `telescope-picker` | telescope.vim風ファジーファインダー（SPC+f/SPC+//SPC+b・3ペインオーバーレイ） | ✅ 完了（28/28テスト・FilePicker/GrepPicker/BufferPicker・FuzzyMatcher） |
 | ㉑ | `simple-filer` | `:cd` 実行後に表示されるディレクトリ一覧・ファイルブラウザ（FILERモード） | ✅ 完了（46/46テスト） |
 | ㉒ | `editor-tutorial` | `:tutor`/`:tutorial` で開く vimtutor 形式の対話型チュートリアル | ✅ 完了（9/9テスト） |
+| ㉓ | `symbol-definition-navigation` | `gd`（定義へジャンプ）/`gr`（参照一覧）— 自プロジェクトのフィールド・定数・メソッドと、JDKクラスのフィールド・メソッド | ✅ 完了（13/13テスト・`ProjectSymbolResolver`・⑩の`jumpToMethod`を`jumpToMember`に一般化してJDKフィールドにも対応） |
 
 ### 依存関係（Skillを作る順序の制約）
 
@@ -110,6 +111,7 @@ project-root/
 | ⑥ | ③ |
 | ⑨⑩⑭⑯ | ①⑧（⑧の索引・AST解析基盤を再利用するため。⑨のコンパイルエラーから未定義シンボルを抽出） |
 | ⑫ | ⑩（nativeメソッドのナビゲーションを拡張する機能のため） |
+| ㉓ | ①⑧⑩⑬（⑧のSourceAnalyzer/SymbolEntryと⑬のProjectSearcherでプロジェクト内シンボルを検索し、⑩のJDKクラス解決・`classAndMethodAtCursor()`を再利用してJDKメンバーにも対応） |
 
 **補足**: ⑧〜⑭はいずれも「裏側のロジック」と「画面への表示」が分かれている。ロジック部分は上表の依存関係で着手できるが、実際に画面に結果を表示する部分は⑤の完成が前提になる。
 
