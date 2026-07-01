@@ -10,9 +10,12 @@ mkdir -p "$LIB_DIR"
 
 SRC_ZIP="$LIB_DIR/src.zip"
 NATIVE_DIR="$LIB_DIR/openjdk-native"
+HOTSPOT_DIR="$NATIVE_DIR/hotspot"
 
-if [ -f "$SRC_ZIP" ] && [ -d "$NATIVE_DIR" ] && [ "$(find "$NATIVE_DIR" -name '*.c' | head -1)" != "" ]; then
-    echo "src.zip and openjdk-native already exist. Nothing to do."
+if [ -f "$SRC_ZIP" ] && [ -d "$NATIVE_DIR" ] \
+    && [ "$(find "$NATIVE_DIR" -name '*.c' | head -1)" != "" ] \
+    && [ -d "$HOTSPOT_DIR" ] && [ "$(find "$HOTSPOT_DIR" -name '*.cpp' | head -1)" != "" ]; then
+    echo "src.zip, openjdk-native, and hotspot sources already exist. Nothing to do."
     exit 0
 fi
 
@@ -42,7 +45,8 @@ git -C "$WORK_DIR" sparse-checkout set \
     "src/*/windows/classes" \
     "src/*/share/native" \
     "src/*/unix/native" \
-    "src/*/windows/native"
+    "src/*/windows/native" \
+    "src/hotspot/share"
 
 git -C "$WORK_DIR" checkout
 
@@ -87,9 +91,26 @@ else
     echo "Native C sources stored at: $NATIVE_DIR"
 fi
 
+# ---- 3. HotSpot (share) ソースの配置 ----
+# src/hotspot は "native" という名前のサブディレクトリを持たないため、
+# 上記のループでは拾えない。JVM_GC() 等のランタイム関数はここに実装されている。
+# os/cpu 固有部分（src/hotspot/os/*, src/hotspot/cpu/*）はサイズが大きく、
+# 対応プラットフォームの絞り込みが必要になるため、まずは共通部分（share）のみを対象にする。
+if [ -d "$HOTSPOT_DIR" ] && [ "$(find "$HOTSPOT_DIR" -name '*.cpp' | head -1)" != "" ]; then
+    echo "hotspot sources already exist: $HOTSPOT_DIR"
+elif [ -d "$WORK_DIR/src/hotspot/share" ]; then
+    echo "=== Placing HotSpot (share) sources ==="
+    mkdir -p "$HOTSPOT_DIR"
+    cp -r "$WORK_DIR/src/hotspot/share" "$HOTSPOT_DIR/"
+    echo "HotSpot sources stored at: $HOTSPOT_DIR/share"
+else
+    echo "WARNING: src/hotspot/share not found in checkout; hotspot sources were not placed."
+fi
+
 rm -rf "$WORK_DIR"
 
 echo ""
 echo "=== Setup complete ==="
 [ -f "$SRC_ZIP" ]    && echo "  src.zip    : $SRC_ZIP"
 [ -d "$NATIVE_DIR" ] && echo "  native src : $NATIVE_DIR"
+[ -d "$HOTSPOT_DIR" ] && echo "  hotspot src: $HOTSPOT_DIR"

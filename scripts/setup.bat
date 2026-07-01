@@ -8,11 +8,18 @@ set SCRIPT_DIR=%~dp0
 set LIB_DIR=%SCRIPT_DIR%..\lib
 set SRC_ZIP=%LIB_DIR%\src.zip
 set NATIVE_DIR=%LIB_DIR%\openjdk-native
+set HOTSPOT_DIR=%NATIVE_DIR%\hotspot
 
 if not exist "%LIB_DIR%\" mkdir "%LIB_DIR%\"
 
-if exist "%SRC_ZIP%" if exist "%NATIVE_DIR%\" (
-    echo src.zip and openjdk-native already exist. Nothing to do.
+set HOTSPOT_READY=0
+if exist "%HOTSPOT_DIR%\" (
+    dir /s /b "%HOTSPOT_DIR%\*.cpp" >nul 2>&1
+    if !errorlevel! equ 0 set HOTSPOT_READY=1
+)
+
+if exist "%SRC_ZIP%" if exist "%NATIVE_DIR%\" if !HOTSPOT_READY! equ 1 (
+    echo src.zip, openjdk-native, and hotspot sources already exist. Nothing to do.
     goto :eof
 )
 
@@ -36,7 +43,7 @@ if %errorlevel% neq 0 (
 
 echo Configuring sparse-checkout for Java/native sources ...
 git -C "%WORK_DIR%" sparse-checkout init --no-cone
-git -C "%WORK_DIR%" sparse-checkout set "src/*/share/classes" "src/*/windows/classes" "src/*/share/native" "src/*/windows/native"
+git -C "%WORK_DIR%" sparse-checkout set "src/*/share/classes" "src/*/windows/classes" "src/*/share/native" "src/*/windows/native" "src/hotspot/share"
 
 echo Checking out sources ...
 git -C "%WORK_DIR%" checkout
@@ -86,7 +93,7 @@ rem ---- 2. openjdk-native への native C ソース配置 ----
 :setup_native
 if exist "%NATIVE_DIR%\" (
     echo openjdk-native already exists: %NATIVE_DIR%
-    goto :cleanup
+    goto :setup_hotspot
 )
 
 echo === Placing native C sources ===
@@ -104,6 +111,26 @@ for /d %%M in ("%WORK_DIR%\src\*") do (
 )
 echo Native C sources stored at: %NATIVE_DIR%
 
+rem ---- 3. HotSpot (share) ソースの配置 ----
+rem src\hotspot は "native" という名前のサブディレクトリを持たないため、
+rem 上記のループでは拾えない。JVM_GC() 等のランタイム関数はここに実装されている。
+rem os/cpu 固有部分（src\hotspot\os\*, src\hotspot\cpu\*）はサイズが大きく、
+rem 対応プラットフォームの絞り込みが必要になるため、まずは共通部分（share）のみを対象にする。
+
+:setup_hotspot
+if !HOTSPOT_READY! equ 1 (
+    echo hotspot sources already exist: %HOTSPOT_DIR%
+    goto :cleanup
+)
+if exist "%WORK_DIR%\src\hotspot\share\" (
+    echo === Placing HotSpot (share) sources ===
+    mkdir "%HOTSPOT_DIR%\share" 2>nul
+    xcopy "%WORK_DIR%\src\hotspot\share" "%HOTSPOT_DIR%\share\" /e /i /q /y >nul
+    echo HotSpot sources stored at: %HOTSPOT_DIR%\share
+) else (
+    echo WARNING: src/hotspot/share not found in checkout; hotspot sources were not placed.
+)
+
 :cleanup
 rmdir /s /q "%WORK_DIR%"
 
@@ -111,3 +138,4 @@ echo.
 echo === Setup complete ===
 if exist "%SRC_ZIP%"    echo   src.zip    : %SRC_ZIP%
 if exist "%NATIVE_DIR%" echo   native src : %NATIVE_DIR%
+if exist "%HOTSPOT_DIR%" echo   hotspot src: %HOTSPOT_DIR%
