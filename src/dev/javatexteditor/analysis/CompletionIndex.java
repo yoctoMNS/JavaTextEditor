@@ -1,6 +1,7 @@
 package dev.javatexteditor.analysis;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -136,7 +137,10 @@ public class CompletionIndex {
         try (Stream<Path> files = Files.walk(projectRoot)) {
             files.filter(p -> p.toString().endsWith(".java"))
                  .forEach(p -> indexFile(p, analyzer));
-        } catch (IOException ignored) {}
+        } catch (IOException | UncheckedIOException ignored) {
+            // Files.walk はアクセス不可なディレクトリ（Windowsのジャンクション等）に遭遇すると
+            // 走査中に UncheckedIOException を投げる。IOException だけでは捕捉できないため両方catchする。
+        }
     }
 
     private void indexFile(Path path, SourceAnalyzer analyzer) {
