@@ -595,8 +595,21 @@ public class Main {
                 pb.directory(scriptDir.getParent().toFile());
                 pb.redirectErrorStream(true);
                 Process proc = pb.start();
+                // 子プロセス（cmd.exe/xcopy/git 等）の出力はOSのネイティブエンコーディング
+                // （Windowsではコンソールのコードページ、日本語版なら通常 CP932）でバイト列化される。
+                // JDK 18+ の既定文字セットは JEP 400 により常に UTF-8 になっているため、
+                // InputStreamReader をそのまま使うと非ASCII文字（日本語のシステムメッセージ等）が
+                // 文字化けする。native.encoding（無ければ sun.jnu.encoding）で明示的にデコードする。
+                String nativeEncodingName = System.getProperty("native.encoding",
+                    System.getProperty("sun.jnu.encoding", "UTF-8"));
+                java.nio.charset.Charset nativeEncoding;
+                try {
+                    nativeEncoding = java.nio.charset.Charset.forName(nativeEncodingName);
+                } catch (Exception e) {
+                    nativeEncoding = java.nio.charset.Charset.defaultCharset();
+                }
                 try (var reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(proc.getInputStream()))) {
+                        new java.io.InputStreamReader(proc.getInputStream(), nativeEncoding))) {
                     reader.lines().forEach(line -> System.out.println("[setup] " + line));
                 }
                 int exit = proc.waitFor();

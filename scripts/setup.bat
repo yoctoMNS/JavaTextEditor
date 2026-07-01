@@ -48,6 +48,11 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+rem HotSpot's directory tree is deeply nested and can exceed Windows' 260
+rem character MAX_PATH limit, especially under an already-long base path.
+rem Enable long path support for this clone to avoid checkout/copy failures.
+git -C "%WORK_DIR%" config core.longpaths true
+
 echo Configuring sparse-checkout for Java/native sources ...
 git -C "%WORK_DIR%" sparse-checkout init --no-cone
 git -C "%WORK_DIR%" sparse-checkout set "src/*/share/classes" "src/*/windows/classes" "src/*/share/native" "src/*/windows/native" "src/hotspot/share"
