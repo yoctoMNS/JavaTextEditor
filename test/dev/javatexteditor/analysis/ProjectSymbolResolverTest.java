@@ -18,6 +18,9 @@ public class ProjectSymbolResolverTest {
         test_currentBufferTakesPriorityOverDisk();
         test_unknownSymbolReturnsEmpty();
         test_findClassDeclaration();
+        test_resolveMemberInType_disambiguatesSameNamedMethod();
+        test_resolveMemberInType_unknownTypeReturnsEmpty();
+        test_resolveMemberInType_memberNotInThatTypeReturnsEmpty();
 
         System.out.println();
         System.out.println("Results: " + passed + " passed, " + failed + " failed");
@@ -172,5 +175,66 @@ public class ProjectSymbolResolverTest {
 
         assertTrue("class Widget is found", loc.isPresent());
         assertEquals("class kind is CLASS", SymbolKind.CLASS, loc.get().kind());
+    }
+
+    /**
+     * "instanceVar.member" のバグ再現: 同名メソッドが複数クラスに存在する場合、
+     * 型を指定した resolveMemberInType() は正しいクラスのファイルだけを見る。
+     */
+    static void test_resolveMemberInType_disambiguatesSameNamedMethod() throws Exception {
+        Path dir = tempDir();
+        writeFile(dir, "Dog.java", """
+            public class Dog {
+                void speak() {
+                    System.out.println("Woof");
+                }
+            }
+            """);
+        writeFile(dir, "Cat.java", """
+            public class Cat {
+                void speak() {
+                    System.out.println("Meow");
+                }
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolveMemberInType(dir, null, null, "Cat", "speak");
+
+        assertTrue("speak() resolved via Cat type is found", loc.isPresent());
+        assertTrue("resolved to Cat.java, not Dog.java",
+            loc.get().filePath().endsWith("Cat.java"));
+    }
+
+    static void test_resolveMemberInType_unknownTypeReturnsEmpty() throws Exception {
+        Path dir = tempDir();
+        writeFile(dir, "Cat.java", """
+            public class Cat {
+                void speak() {}
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolveMemberInType(dir, null, null, "List", "speak");
+
+        assertTrue("unknown (JDK) type returns empty so caller can try JDK", loc.isEmpty());
+    }
+
+    static void test_resolveMemberInType_memberNotInThatTypeReturnsEmpty() throws Exception {
+        Path dir = tempDir();
+        writeFile(dir, "Cat.java", """
+            public class Cat {
+                void speak() {}
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolveMemberInType(dir, null, null, "Cat", "bark");
+
+        assertTrue("member absent from resolved type returns empty (no cross-class fallback)",
+            loc.isEmpty());
     }
 }
