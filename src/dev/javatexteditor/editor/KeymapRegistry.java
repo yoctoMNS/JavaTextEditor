@@ -93,6 +93,7 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('y', "yank.pending"), "yank.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('d', "delete.pending"), "delete.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.SHIFT_DOWN_MASK, "jdk.doc"), "jdk.doc");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_J, KeyEvent.SHIFT_DOWN_MASK, "jump.back"), "jump.back");
         // 単語移動
         bind(Mode.NORMAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
         bind(Mode.NORMAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");

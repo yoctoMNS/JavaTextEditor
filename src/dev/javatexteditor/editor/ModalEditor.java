@@ -95,6 +95,7 @@ public class ModalEditor {
     // project-wide-search: grep 結果バッファ
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
+    private Path grepBaseDir = null; // grepResults の各 filePath() が相対的な起点ディレクトリ
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
     // symbol-definition-navigation: gd (go to definition) / gr (go to references)
     private final ProjectSymbolResolver projectSymbolResolver = new ProjectSymbolResolver();
@@ -149,6 +150,8 @@ public class ModalEditor {
     private record BufferSnapshot(String text, String filePath, int row, int col) {}
     private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
     private int historyIdx = -1; // -1 = 未初期化（最初の pushBuffer で初期化）
+    // Shift+K で定義ジャンプする直前の位置（Shift+J で一つ前に戻るため）
+    private BufferSnapshot lastJumpOrigin = null;
 
     public ModalEditor(String initialText) {
         this.buffer = new UndoablePieceTable(initialText);
@@ -322,7 +325,6 @@ public class ModalEditor {
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
-            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { goToDefinition(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_R, 'r')) { goToReferences(); return; }
             if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
@@ -463,6 +465,7 @@ public class ModalEditor {
             case "file.start"          -> moveFileStart();
             case "file.end"            -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
+            case "jump.back" -> jumpBack();
             case "organize.imports" -> organizeImports();
             case "search.enter" -> {
                 searchBuffer.setLength(0);
@@ -1456,11 +1459,15 @@ public class ModalEditor {
     }
 
     private void executeGrep(String pattern) {
+        executeGrep(pattern, getProjectRoot());
+    }
+
+    /** baseDir 配下を grep して *grep* 疑似バッファに結果を表示する。 */
+    private void executeGrep(String pattern, Path baseDir) {
         if (pattern.isEmpty()) {
             statusMessage = "E: no pattern";
             return;
         }
-        Path baseDir = getProjectRoot();
         List<SearchResult> results;
         try {
             results = projectSearcher.search(baseDir, pattern);
@@ -1480,6 +1487,7 @@ public class ModalEditor {
             sb.append(r.toDisplayLine()).append("\n");
         }
         grepResults = results;
+        grepBaseDir = baseDir;
         fileNameResults = null;
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
@@ -1546,11 +1554,13 @@ public class ModalEditor {
             return;
         }
         SearchResult r = grepResults.get(resultIdx);
-        Path target = getProjectRoot().resolve(r.filePath());
+        Path base = (grepBaseDir != null) ? grepBaseDir : getProjectRoot();
+        Path target = base.resolve(r.filePath());
         try {
             String content = Files.readString(target).replace("\r\n", "\n");
             buffer = new UndoablePieceTable(content);
             currentFilePath = target.toString();
+            inJdkSourceBuffer = false;
             grepResults = null;
             // 目的の行へジャンプ（1-indexed → 0-indexed）
             cursorRow = Math.max(0, r.lineNumber() - 1);
@@ -2555,83 +2565,98 @@ public class ModalEditor {
     }
 
     /**
-     * gd (go to definition): カーソル位置の識別子の宣言箇所へジャンプする。
-     * まずプロジェクト内（フィールド・定数・メソッド・クラス）を検索し、
-     * 見つからなければ "ClassName.member" 形式の JDK メンバー宣言を試みる。
+     * gr (go to references): カーソル位置の識別子の使用箇所を grep 検索する。
+     * jdk-source 疑似バッファ内で native ソース（lib/openjdk-native/）が利用可能な場合は
+     * そちらを検索対象にする（呼び出し箇所・ヘッダ宣言を含め C/C++ 側の参照を横断的に探す）。
+     * それ以外は通常通りプロジェクト全体を検索する。
      */
-    private void goToDefinition() {
-        String word = wordAtCursor();
-        if (word.isEmpty()) {
-            setStatusMessage("No identifier at cursor");
-            return;
-        }
-
-        Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
-            getProjectRoot(), currentFilePath, buffer.getText(), word);
-        if (loc.isPresent()) {
-            ProjectSymbolResolver.SymbolLocation l = loc.get();
-            if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
-                cursorRow = l.lineNumber();
-                cursorCol = 0;
-            } else {
-                loadFromFile(l.filePath());
-                cursorRow = l.lineNumber();
-                cursorCol = 0;
-            }
-            setStatusMessage("→ " + word + " (" + l.kind() + ")  "
-                + l.filePath() + ":" + (l.lineNumber() + 1));
-            return;
-        }
-
-        if (jdkIndex != null && jdkIndex.isReady() && jumpToJdkMemberDefinition(word)) {
-            return;
-        }
-
-        setStatusMessage("Definition not found: " + word);
-    }
-
-    /**
-     * カーソルが "ClassName.member" の member 上にある場合、JDK ソースを疑似バッファで開き
-     * member（メソッドまたはフィールド）の宣言行へジャンプする。
-     */
-    private boolean jumpToJdkMemberDefinition(String word) {
-        String[] classAndMember = classAndMethodAtCursor();
-        if (classAndMember == null) return false;
-        List<String> classCandidates = jdkIndex.lookup(classAndMember[0]);
-        if (classCandidates.isEmpty()) return false;
-        String fqn = pickBestFqn(classCandidates);
-        Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
-        if (cls.isEmpty()) return false;
-        Optional<String> src = sourceTracer.readJavaSource(cls.get());
-        if (src.isEmpty()) return false;
-        openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
-        jumpToMember(classAndMember[1]);
-        return true;
-    }
-
-    /** gr (go to references): カーソル位置の識別子をプロジェクト全体から grep 検索する。 */
     private void goToReferences() {
         String word = wordAtCursor();
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
             return;
         }
-        executeGrep("\\b" + Pattern.quote(word) + "\\b");
-    }
-
-    /** NORMALモードの K キー: カーソル位置の識別子を JDK ソースで開く。
-     *  src.zip がなければステータスバーへのフォールバック表示。
-     *  カーソルが "ClassName.methodName" の上にある場合、または jdk-source 疑似バッファ内で
-     *  メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
-     */
-    private void lookupJdkDoc() {
-        if (jdkIndex == null || !jdkIndex.isReady()) {
-            setStatusMessage("JDK index building...");
+        String pattern = "\\b" + Pattern.quote(word) + "\\b";
+        if (inJdkSourceBuffer && sourceTracer.hasNativeSrcDir()) {
+            executeGrep(pattern, sourceTracer.getNativeSrcDir().get());
             return;
         }
+        executeGrep(pattern);
+    }
+
+    /**
+     * NORMALモードの Shift+K（K）キー: カーソル位置の識別子の宣言箇所へジャンプする
+     * （Eclipse/IntelliJ IDEA の "Open Declaration" 相当）。
+     * 自プロジェクト内のクラス・メソッド・フィールド・定数を優先して検索し、
+     * 見つからなければ JDK のクラス／"ClassName.member" 形式のメンバー宣言を試みる。
+     * src.zip がなければステータスバーへのフォールバック表示。
+     * カーソルが "ClassName.methodName" の上にある場合、または jdk-source 疑似バッファ内で
+     * メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
+     */
+    private void lookupJdkDoc() {
+        BufferSnapshot before = new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
+        lookupJdkDocAndJump(before.text());
+        boolean moved = cursorRow != before.row() || cursorCol != before.col()
+            || !java.util.Objects.equals(currentFilePath, before.filePath());
+        if (moved) {
+            lastJumpOrigin = before;
+        }
+    }
+
+    /**
+     * Shift+J（jump.back）: 直前の Shift+K 定義ジャンプの前にいた位置へ一つ戻る。
+     * ジャンプ元がファイルを跨いでいた場合はそのファイルを再度開く。
+     */
+    private void jumpBack() {
+        if (lastJumpOrigin == null) {
+            setStatusMessage("No previous jump to go back to");
+            return;
+        }
+        BufferSnapshot origin = lastJumpOrigin;
+        lastJumpOrigin = null;
+        buffer = new UndoablePieceTable(origin.text());
+        currentFilePath = origin.filePath();
+        cursorRow = origin.row();
+        cursorCol = origin.col();
+        inJdkSourceBuffer = origin.filePath() != null && origin.filePath().startsWith("*jdk-source:");
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+        String label = (origin.filePath() != null) ? "\"" + origin.filePath() + "\"" : "[新規バッファ]";
+        setStatusMessage("← back to " + label + " line " + (origin.row() + 1));
+    }
+
+    private void lookupJdkDocAndJump(String bufferTextSnapshot) {
         String word = wordAtCursor();
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
+            return;
+        }
+
+        // 自プロジェクト内のフィールド・定数・メソッド・クラス宣言を最優先で検索する
+        // （jdk-source 疑似バッファ内では対象外。ネイティブトレース等の既存フローに任せる）
+        if (!inJdkSourceBuffer) {
+            Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
+                getProjectRoot(), currentFilePath, bufferTextSnapshot, word);
+            if (loc.isPresent()) {
+                ProjectSymbolResolver.SymbolLocation l = loc.get();
+                if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
+                    cursorRow = l.lineNumber();
+                    cursorCol = 0;
+                } else {
+                    loadFromFile(l.filePath());
+                    cursorRow = l.lineNumber();
+                    cursorCol = 0;
+                }
+                setStatusMessage("→ " + word + " (" + l.kind() + ")  "
+                    + l.filePath() + ":" + (l.lineNumber() + 1));
+                return;
+            }
+        }
+
+        if (jdkIndex == null || !jdkIndex.isReady()) {
+            setStatusMessage("JDK index building...");
             return;
         }
 
