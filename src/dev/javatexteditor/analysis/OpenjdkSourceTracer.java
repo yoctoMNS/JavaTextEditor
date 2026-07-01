@@ -54,6 +54,16 @@ public class OpenjdkSourceTracer {
         this.nativeSrcDir = findNativeSrcDir();
     }
 
+    /** テスト用コンストラクタ: src.zip と native ソースディレクトリの両方を直接指定。 */
+    public OpenjdkSourceTracer(Path srcZipPath, Path nativeSrcDirOverride) {
+        this.srcZip = (srcZipPath != null && Files.exists(srcZipPath))
+            ? Optional.of(srcZipPath)
+            : Optional.empty();
+        this.nativeSrcDir = (nativeSrcDirOverride != null && Files.isDirectory(nativeSrcDirOverride))
+            ? Optional.of(nativeSrcDirOverride)
+            : Optional.empty();
+    }
+
     /** src.zip が利用可能かどうかを返す。 */
     public boolean hasSrcZip() {
         return srcZip.isPresent();
@@ -125,17 +135,19 @@ public class OpenjdkSourceTracer {
     /**
      * ソーステキストから C 関数定義行を探す（0-indexed 行番号を返す）。
      * 定義行の条件:
-     *   - symbol + "(" を含む
+     *   - symbol に単語境界で一致し、直後（空白を挟んでもよい）に "(" が続く
+     *     （例: "argc(" のように symbol が他の識別子の部分文字列であるケースを誤マッチしない）
      *   - 行頭が空白でない（インデントされた関数呼び出しを除外）
      *   - "//" や "*" で始まるコメント行でない
      * 見つからなければ -1。
      */
     private static int findDefinitionLine(String content, String symbol) {
         String[] lines = content.split("\n", -1);
-        String pat = symbol + "(";
+        java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
+            "\\b" + java.util.regex.Pattern.quote(symbol) + "\\s*\\(");
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
-            if (!line.contains(pat)) continue;
+            if (!pat.matcher(line).find()) continue;
             String trimmed = line.stripLeading();
             // コメント行を除外
             if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
@@ -145,11 +157,12 @@ public class OpenjdkSourceTracer {
         // 行頭条件を緩めてもう一度探す（マクロや static inline など）
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
-            if (!line.contains(pat)) continue;
+            java.util.regex.Matcher m = pat.matcher(line);
+            if (!m.find()) continue;
             String trimmed = line.stripLeading();
             if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
             // = が直前にない（代入や関数ポインタ呼び出しを除外）
-            int idx = line.indexOf(pat);
+            int idx = m.start();
             if (idx > 0 && line.charAt(idx - 1) == '=') continue;
             return i;
         }
