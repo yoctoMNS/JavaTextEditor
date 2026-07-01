@@ -139,6 +139,10 @@ public class ModalEditor {
     private int savedCursorRow = 0;
     private int savedCursorCol = 0;
     private boolean inJdkSourceBuffer = false;   // true のとき q で元に戻る
+    // true = 現在の jdk-source 疑似バッファは C/C++ ネイティブソース（.c/.cpp/.h やJNIスニペット）。
+    // false = Java ソース（クラス本体）。K の native シンボル探索(A)を誤って
+    // Javaソース閲覧中に発動させない（"gc" が "argc(" に誤マッチする等）ためのガード。
+    private boolean jdkSourceIsNative = false;
 
     // 入力補完状態（INSERT モード内で管理）
     private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
@@ -2619,6 +2623,7 @@ public class ModalEditor {
         cursorRow = origin.row();
         cursorCol = origin.col();
         inJdkSourceBuffer = origin.filePath() != null && origin.filePath().startsWith("*jdk-source:");
+        jdkSourceIsNative = inJdkSourceBuffer && looksLikeNativeJdkSource(origin.filePath(), origin.text());
         grepResults = null;
         fileNameResults = null;
         searchMatches = List.of();
@@ -2664,7 +2669,11 @@ public class ModalEditor {
         if (inJdkSourceBuffer && currentFilePath != null && currentFilePath.startsWith("*jdk-source:")) {
 
             // (A) C/C++ シンボル定義ジャンプ（lib/openjdk-native/ を検索）
-            if (sourceTracer.hasNativeSrcDir()) {
+            // 現在の疑似バッファが実際に C/C++ ソースを表示している場合のみ試みる。
+            // Java クラスソース閲覧中（jdkSourceIsNative == false）にこれを行うと、
+            // "gc" が native ソース内の無関係な識別子（例: "argc(" の部分文字列）に
+            // 誤ってマッチし、全く関係ない箇所へジャンプしてしまうバグがあった。
+            if (jdkSourceIsNative && sourceTracer.hasNativeSrcDir()) {
                 Optional<OpenjdkSourceTracer.CSymbolLocation> loc = sourceTracer.findCSymbol(word);
                 if (loc.isPresent()) {
                     openCSymbolBuffer(loc.get());
@@ -2676,7 +2685,7 @@ public class ModalEditor {
             String fqn = currentFilePath
                 .replaceFirst("^\\*jdk-source:", "")
                 .replaceAll("\\*$", "");
-            if (fqn.contains(".") && !fqn.contains(" ")) {
+            if (!jdkSourceIsNative && fqn.contains(".") && !fqn.contains(" ")) {
                 Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
                 if (cls.isPresent()) {
                     OpenjdkSourceTracer.TracingResult result = sourceTracer.trace(cls.get(), word);
@@ -2688,7 +2697,8 @@ public class ModalEditor {
                                 "*jdk-source:" + simpleName + "." + word + "*",
                                 "[native] " + result.jniMangledName() + "\n"
                                     + "Source: " + result.sourceFile().get() + "\n\n"
-                                    + result.snippet().get()
+                                    + result.snippet().get(),
+                                true
                             );
                         } else {
                             setStatusMessage(result.toStatusLine());
@@ -2717,7 +2727,8 @@ public class ModalEditor {
                                 "*jdk-source:" + className + "." + methodName + "*",
                                 "[native] " + result.jniMangledName() + "\n"
                                     + "Source: " + result.sourceFile().get() + "\n\n"
-                                    + result.snippet().get()
+                                    + result.snippet().get(),
+                                true
                             );
                         } else {
                             setStatusMessage(result.toStatusLine());
@@ -2780,15 +2791,36 @@ public class ModalEditor {
             setStatusMessage("E: cannot read " + loc.relativePath() + ": " + e.getMessage());
             return;
         }
-        openJdkSourceBuffer("*jdk-source:" + loc.relativePath() + "*", content);
+        openJdkSourceBuffer("*jdk-source:" + loc.relativePath() + "*", content, true);
         // 定義行へカーソルを移動
         cursorRow = loc.lineNumber();
         cursorCol = 0;
         setStatusMessage("→ line " + (loc.lineNumber() + 1) + "  [" + loc.relativePath() + "]  q: close");
     }
 
-    /** JDK ソース疑似バッファを開く。元バッファの状態を退避する。 */
+    /**
+     * jump.back で復元する jdk-source 疑似バッファのタイトル/内容から、
+     * それが C/C++ ネイティブソースだったかを推測する（BufferSnapshot には
+     * isNative フラグを保持していないため、既知のパターンから逆算する）。
+     * 実ファイル（.c/.cpp/.h）は拡張子で、JNIスニペットは "[native] " プレフィックスで判定する。
+     */
+    private static boolean looksLikeNativeJdkSource(String title, String content) {
+        String inner = title.replaceFirst("^\\*jdk-source:", "").replaceAll("\\*$", "");
+        if (inner.endsWith(".c") || inner.endsWith(".cpp") || inner.endsWith(".h")) return true;
+        return content.startsWith("[native] ");
+    }
+
+    /** JDK Javaソースの疑似バッファを開く。元バッファの状態を退避する。 */
     private void openJdkSourceBuffer(String title, String content) {
+        openJdkSourceBuffer(title, content, false);
+    }
+
+    /**
+     * JDK ソース疑似バッファを開く。元バッファの状態を退避する。
+     * @param isNative 開く内容が C/C++ ネイティブソース（実ファイルまたはJNIスニペット）かどうか。
+     *                 Java クラスソースを開く場合は false。
+     */
+    private void openJdkSourceBuffer(String title, String content, boolean isNative) {
         if (!inJdkSourceBuffer) {
             savedBufferText = buffer.getText();
             savedFilePath = currentFilePath;
@@ -2802,6 +2834,7 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         inJdkSourceBuffer = true;
+        jdkSourceIsNative = isNative;
         setStatusMessage("q: close  [" + title + "]");
     }
 
@@ -2813,6 +2846,7 @@ public class ModalEditor {
         cursorRow = savedCursorRow;
         cursorCol = savedCursorCol;
         inJdkSourceBuffer = false;
+        jdkSourceIsNative = false;
         savedBufferText = null;
         setStatusMessage("Returned from JDK source");
     }

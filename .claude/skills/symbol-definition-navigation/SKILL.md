@@ -183,6 +183,44 @@ private void executeGrep(String pattern, Path baseDir) { ... } // 実体。baseD
 `getNativeSrcDir(): Optional<Path>` を追加した（既存の `findCSymbol()` 等と同じ
 `nativeSrcDir` フィールドをそのまま公開するだけで、探索ロジックの変更はない）。
 
+## バグ修正: Javaソース閲覧中に無関係なCシンボルへ誤ジャンプする問題
+
+**症状**: `public native void gc();` の `gc` にカーソルを置いて Shift+K を押すと、
+`Runtime.gc()` のネイティブ実装とは全く無関係な `JNIEXPORT int main(int argc, char **argv)`
+（JLIランチャーの `main.c`）の114行目 `argc = JLI_GetStdArgc();` へジャンプしてしまうバグがあった。
+
+**根本原因は2つの複合**:
+
+1. **`ModalEditor.lookupJdkDocAndJump()` のゲート漏れ**: jdk-source疑似バッファ内でのK処理には
+   (A) C/C++シンボル定義ジャンプ（`findCSymbol`）と (B) JavaソースからのJNIネイティブトレース
+   の2経路があるが、(A) は「`inJdkSourceBuffer` かつ `currentFilePath` が `*jdk-source:` で
+   始まる」ことしか条件にしておらず、これは **Javaクラスソースを表示している場合にも true**
+   になってしまう（`*jdk-source:java.lang.Runtime*` のようなタイトルも同じプレフィックスを持つため）。
+   結果、Javaソース閲覧中に `K` を押すと本来通るべき (B) より先に (A) が発動し、
+   `word`（例: `"gc"`）をそのまま **C言語シンボルとして** `lib/openjdk-native/` 全体から検索してしまっていた。
+2. **`OpenjdkSourceTracer.findDefinitionLine()` の部分文字列マッチ**: C定義行の判定が
+   `line.contains(symbol + "(")` という単純な部分文字列一致だったため、`"gc"` を探すと
+   `"argc("` （`"JLI_GetStdArgc();"` 等）のような、たまたま `"gc("` を含む**別の識別子の内部**
+   にも誤ってマッチしていた。
+
+**修正**:
+
+- `ModalEditor` に `jdkSourceIsNative`（現在のjdk-source疑似バッファがC/C++実ファイルか
+  JNIスニペットかを示すフラグ。Javaクラスソースなら false）を追加し、`openJdkSourceBuffer()`
+  に `boolean isNative` 引数を追加して呼び出し側で明示的に指定するようにした。
+  (A) は `jdkSourceIsNative` が true の場合のみ実行するようゲートし、Javaソース閲覧中に
+  C言語シンボル探索が発動しないようにした。
+- `jumpBack()`（Shift+J）でこの状態を復元する際は `BufferSnapshot` に `isNative` を
+  保持していないため、タイトルの拡張子（`.c`/`.cpp`/`.h`）または内容が `"[native] "` で
+  始まるかから逆算する `looksLikeNativeJdkSource()` ヘルパーで推測する。
+- `OpenjdkSourceTracer.findDefinitionLine()` の判定を `\bsymbol\s*\(` という単語境界付き
+  正規表現に変更し、`"argc("` のような他の識別子の部分文字列に誤マッチしないようにした。
+- テスト用に `OpenjdkSourceTracer(Path srcZipPath, Path nativeSrcDirOverride)` コンストラクタを
+  追加し、実際の `lib/openjdk-native/` が無い環境でも一時ディレクトリで `findCSymbol()` の
+  回帰テストを書けるようにした（`test/dev/javatexteditor/analysis/OpenjdkSourceTracingTest.java`
+  に `testFindCSymbolDoesNotMatchSubstringOfOtherIdentifier()` /
+  `testFindCSymbolMatchesRealDefinition()` を追加）。
+
 ## JDKソース疑似バッファ内でのフィールド宣言ジャンプ（⑩の拡張）
 
 ⑩ `jdk-api-navigation` の `jumpToMethod()` はメソッド宣言行（`name(` を含み、

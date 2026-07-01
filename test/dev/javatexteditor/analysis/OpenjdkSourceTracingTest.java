@@ -1,5 +1,7 @@
 package dev.javatexteditor.analysis;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Optional;
 
 /**
@@ -11,7 +13,7 @@ public class OpenjdkSourceTracingTest {
     private static int passed = 0;
     private static int failed = 0;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         System.out.println("=== OpenjdkSourceTracingTest ===");
 
         testJniMangledNameSimple();
@@ -38,6 +40,9 @@ public class OpenjdkSourceTracingTest {
         testTraceResultStatusLineNoSource();
 
         testNoSrcZipGracefulDegradation();
+
+        testFindCSymbolDoesNotMatchSubstringOfOtherIdentifier();
+        testFindCSymbolMatchesRealDefinition();
 
         System.out.println("\n結果: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -208,6 +213,47 @@ public class OpenjdkSourceTracingTest {
         check("src.zip なし: isNative=true", r.isNative(), "");
         check("src.zip なし: sourceFile empty", r.sourceFile().isEmpty(), "");
         check("src.zip なし: statusLine not empty", !r.toStatusLine().isEmpty(), "");
+    }
+
+    /**
+     * 回帰テスト: "gc" というシンボルを探すと、無関係な識別子 "argc" の内部の
+     * "gc(" という部分文字列に誤ってマッチしてはいけない
+     * （実際に発生したバグ: `public native void gc();` で Shift+K を押すと、
+     * main.c の "argc = JLI_GetStdArgc();" という全く無関係な行へ飛んでしまっていた）。
+     */
+    private static void testFindCSymbolDoesNotMatchSubstringOfOtherIdentifier() throws Exception {
+        Path dir = Files.createTempDirectory("native-src-test");
+        Files.writeString(dir.resolve("main.c"), """
+            JNIEXPORT int main(int argc, char **argv) {
+                argc = JLI_GetStdArgc();
+                return 0;
+            }
+            """);
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc = tracer.findCSymbol("gc");
+        check("'gc' は 'argc(' に誤マッチしない", loc.isEmpty(),
+            loc.isPresent() ? "matched at line " + loc.get().lineNumber() : "");
+    }
+
+    /** 同じ状況で、実際に "gc(" という定義が存在すれば正しく見つかる。 */
+    private static void testFindCSymbolMatchesRealDefinition() throws Exception {
+        Path dir = Files.createTempDirectory("native-src-test2");
+        Files.writeString(dir.resolve("main.c"), """
+            JNIEXPORT int main(int argc, char **argv) {
+                argc = JLI_GetStdArgc();
+                return 0;
+            }
+            """);
+        Files.writeString(dir.resolve("gc.c"), """
+            void gc(int flags) {
+                do_collect(flags);
+            }
+            """);
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc = tracer.findCSymbol("gc");
+        check("'gc' は gc.c の実際の定義行に一致する",
+            loc.isPresent() && loc.get().relativePath().endsWith("gc.c") && loc.get().lineNumber() == 0,
+            loc.map(l -> l.relativePath() + ":" + l.lineNumber()).orElse("empty"));
     }
 
     // --- Helper ---
