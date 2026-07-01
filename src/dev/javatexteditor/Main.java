@@ -48,6 +48,7 @@ public class Main {
     private static final AutoImportHandler AUTO_IMPORT_HANDLER =
         new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
     private static dev.javatexteditor.analysis.CompletionIndex COMPLETION_INDEX = null;
+    private static dev.javatexteditor.analysis.WordIndex WORD_INDEX = null;
 
     // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
@@ -279,6 +280,9 @@ public class Main {
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }
+        if (WORD_INDEX != null) {
+            editor.setWordIndex(WORD_INDEX);
+        }
         // 作業ディレクトリを反映
         if (WD_MANAGER != null) {
             Path wd = WD_MANAGER.getWorkingDirectory();
@@ -384,6 +388,8 @@ public class Main {
         // 補完インデックスをバックグラウンドで構築
         COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(
             JDK_INDEX, projectRoot, SOURCE_ANALYZER);
+        // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
+        WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
 
         final GraphicsConfiguration targetScreen = detectMouseScreen();
         final String text = initialText;

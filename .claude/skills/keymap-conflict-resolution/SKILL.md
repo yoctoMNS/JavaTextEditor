@@ -208,3 +208,4 @@ INSERT / VISUAL / VISUAL_LINE モードも移行する。
 | キーの正規化に `"keyChar:modifiers"` 形式を使う | `HashMap` の `equals` が単純に機能し、衝突検出が容易 |
 | `KeymapRegistry` を `ModalEditor` とは別クラスに分離 | テスト容易性・プラグインからの参照のため |
 | `loadDefaults()` でデフォルトを一元定義 | 設定ファイル対応（将来）で `loadDefaults()` を上書きするだけで済む |
+| 単語補完（Alt+/）のトリガーに `Ctrl+N` を使わない | ユーザーから「作業ディレクトリ配下の単語・クラス名・変数名・定数名・メソッド名を Ctrl+N で補完したい」という要望があったが、INSERT モードの `Ctrl+N` は本表の通り既に Emacs 式「カーソル下移動」に確定済み。ユーザーに確認したところ「別キーを使う」を選択したため、`Ctrl+N` は現状維持し、単語補完のトリガーには未使用の `Alt+/` を新規に割り当てた（`ModalEditor.processInsertKey()` で `KeyEvent.VK_SLASH` + `ALT_DOWN_MASK` を直接判定。Ctrl+Space のシンボル補完トリガーと同じくキーマップレジストリを経由しないハードコード方式に揃えた）。 |
