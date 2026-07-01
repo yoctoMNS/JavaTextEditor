@@ -30,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -45,7 +46,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CD_COMPLETE }
     private enum FileSearchType { NAME, GREP }
 
     private UndoablePieceTable buffer;
@@ -128,6 +129,10 @@ public class ModalEditor {
     // 作業ディレクトリ変更コールバック（Main.java から WorkingDirectoryManager に委譲）
     // 成功時は null, 失敗時は日本語エラーメッセージを返す。
     private java.util.function.Function<Path, String> changeWdCallback = null;
+    // :cd タブ補完状態（CD_COMPLETE モード: 候補が複数件のときにモーダルオーバーレイで選択させる）
+    private List<String> cdCandidates = List.of(); // 候補ディレクトリ名（末尾 "/" は含まない）
+    private int cdCandidateIdx = 0;
+    private String cdCandidateParentPart = ""; // 補完対象パスのうち末尾ディレクトリ名より前の部分（区切り文字含む）
     // filer モード状態
     private List<DirEntry> filerEntries = List.of();
     private List<DirEntry> filerFiltered = List.of();
@@ -274,6 +279,7 @@ public class ModalEditor {
             case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
             case IMPORT_SELECT -> processImportSelectKey(keyCode, modifiers);
             case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
+            case CD_COMPLETE   -> processCdCompleteKey(keyCode, modifiers);
         }
         syncCanvas();
     }
@@ -882,8 +888,99 @@ public class ModalEditor {
             commandBuffer.setLength(0);
             if (mode == Mode.COMMAND) mode = Mode.NORMAL;
 
+        } else if (keyCode == KeyEvent.VK_TAB) {
+            handleCdTabCompletion();
+
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             commandBuffer.append(keyChar);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // :cd タブ補完（COMMAND モードで "cd " 入力中に TAB を押すと候補を補完する）
+    // -------------------------------------------------------------------------
+
+    /**
+     * commandBuffer が "cd" / "cd " で始まる場合のみ有効。
+     * 候補0件 → 何もしない、1件 → その場で補完、複数件 → CD_COMPLETE オーバーレイで選択させる。
+     */
+    private void handleCdTabCompletion() {
+        String cmd = commandBuffer.toString();
+        String pathStr;
+        if (cmd.equals("cd") || cmd.startsWith("cd ")) {
+            pathStr = cmd.length() > 2 ? cmd.substring(2).stripLeading() : "";
+        } else {
+            return; // cd 以外のコマンドでは補完しない
+        }
+
+        String expanded = expandHome(pathStr);
+        int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
+        String parentPart = sepIdx >= 0 ? expanded.substring(0, sepIdx + 1) : "";
+        String prefix = sepIdx >= 0 ? expanded.substring(sepIdx + 1) : expanded;
+
+        Path parentDir;
+        try {
+            parentDir = parentPart.isEmpty()
+                ? getProjectRoot()
+                : getProjectRoot().resolve(parentPart).toAbsolutePath().normalize();
+        } catch (Exception ex) {
+            return;
+        }
+
+        List<String> candidates;
+        try {
+            String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
+            candidates = new ArrayList<>();
+            for (DirEntry e : DirectoryLister.listDirectoryEntries(parentDir)) {
+                if (e.kind() == DirEntry.Kind.DIRECTORY
+                        && e.name().toLowerCase(Locale.ROOT).startsWith(lowerPrefix)) {
+                    candidates.add(e.name());
+                }
+            }
+        } catch (IOException ex) {
+            statusMessage = "E: " + ex.getMessage();
+            return;
+        }
+
+        if (candidates.isEmpty()) {
+            return;
+        }
+        if (candidates.size() == 1) {
+            applyCdCandidate(parentPart, candidates.get(0));
+            return;
+        }
+        cdCandidates = candidates;
+        cdCandidateIdx = 0;
+        cdCandidateParentPart = parentPart;
+        mode = Mode.CD_COMPLETE;
+        statusMessage = "";
+    }
+
+    /** commandBuffer を "cd " + parentPart + name + "/" に置き換える（続けて補完できるよう末尾に区切り文字を付与）。 */
+    private void applyCdCandidate(String parentPart, String name) {
+        commandBuffer.setLength(0);
+        commandBuffer.append("cd ").append(parentPart).append(name).append("/");
+    }
+
+    private void processCdCompleteKey(int keyCode, int modifiers) {
+        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            mode = Mode.COMMAND;
+            return;
+        }
+        if (keyCode == KeyEvent.VK_ENTER || keyCode == KeyEvent.VK_TAB) {
+            applyCdCandidate(cdCandidateParentPart, cdCandidates.get(cdCandidateIdx));
+            mode = Mode.COMMAND;
+            return;
+        }
+        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
+            if (cdCandidateIdx < cdCandidates.size() - 1) cdCandidateIdx++;
+            return;
+        }
+        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
+            if (cdCandidateIdx > 0) cdCandidateIdx--;
+            return;
         }
     }
 
@@ -2275,7 +2372,7 @@ public class ModalEditor {
             String[] lines = buffer.getText().split("\n", -1);
             String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
             canvas.ensureCursorColVisible(cursorCol, curLine);
-            if (mode == Mode.COMMAND) {
+            if (mode == Mode.COMMAND || mode == Mode.CD_COMPLETE) {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
             } else if (mode == Mode.SEARCH) {
                 canvas.setCommandLineText("/" + searchBuffer.toString());
@@ -2317,6 +2414,13 @@ public class ModalEditor {
                 String filerTitle = filerSearchMode ? dirName + " /" : dirName;
                 String filerQ = filerSearchMode ? filerQuery.toString() : "";
                 canvas.setTelescopeState(true, filerTitle, filerQ, items, filerSelectedIdx, buildFilerPreview());
+            } else if (mode == Mode.CD_COMPLETE) {
+                // :cd タブ補完候補オーバーレイ: ディレクトリ名のリストとして表示する
+                List<TelescopeItem> items = new ArrayList<>();
+                for (String name : cdCandidates) {
+                    items.add(new TelescopeItem(name + "/", null, 0, 0));
+                }
+                canvas.setTelescopeState(true, "cd: " + cdCandidateParentPart, "", items, cdCandidateIdx, "");
             } else {
                 canvas.setTelescopeState(false, "", "", List.of(), 0, "");
             }
@@ -2340,6 +2444,9 @@ public class ModalEditor {
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
+    public boolean isCdCompleteMode()     { return mode == Mode.CD_COMPLETE; }
+    public List<String> getCdCandidates() { return cdCandidates; }
+    public int getCdCandidateIdx()        { return cdCandidateIdx; }
     public int getFilerSelectedIdx()      { return filerSelectedIdx; }
     public List<DirEntry> getFilerFiltered() { return filerFiltered; }
     public boolean isFilerSearchMode()    { return filerSearchMode; }

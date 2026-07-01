@@ -34,6 +34,13 @@ public class FilerTest {
         testEscExitsFilerMode();
         testEnterOpenFile();
         testEnterEnterDirectory();
+        testCdTabSingleCandidateCompletes();
+        testCdTabMultipleCandidatesShowsOverlay();
+        testCdTabNoCandidateDoesNothing();
+        testCdCompleteEnterAppliesSelection();
+        testCdCompleteEscCancels();
+        testCdCompleteArrowNavigation();
+        testCdTabEmptyPrefixListsAllDirs();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -320,6 +327,127 @@ public class FilerTest {
             assertEquals("entry is inner.txt", "inner.txt", editor.getFilerFiltered().get(0).name());
         } finally {
             deleteDir(parent);
+        }
+    }
+
+    // ── :cd タブ補完テスト ──────────────────────────────────────────────────
+
+    /** COMMAND モードへ入り、Enter を押さずに cmd を打鍵した状態にする（TAB を試せる状態）。 */
+    private static void typeCommandNoEnter(ModalEditor editor, String cmd) {
+        editor.processKey(0, ':', 0);
+        for (char c : cmd.toCharArray()) {
+            editor.processKey(0, c, 0);
+        }
+    }
+
+    static void testCdTabSingleCandidateCompletes() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp1_");
+        try {
+            Files.createDirectory(tmp.resolve("project"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd proj");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("stays in command mode after single-candidate completion", editor.isCommandMode());
+            assertEquals("commandBuffer completed to project/", "cd project/", editor.getCommandBuffer());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdTabMultipleCandidatesShowsOverlay() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp2_");
+        try {
+            Files.createDirectory(tmp.resolve("project-a"));
+            Files.createDirectory(tmp.resolve("project-b"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd proj");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("enters CD_COMPLETE mode with multiple candidates", editor.isCdCompleteMode());
+            assertEquals("two candidates found", 2, editor.getCdCandidates().size());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdTabNoCandidateDoesNothing() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp3_");
+        try {
+            Files.createDirectory(tmp.resolve("project"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd nomatch");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("stays in command mode when no candidate matches", editor.isCommandMode());
+            assertEquals("commandBuffer unchanged", "cd nomatch", editor.getCommandBuffer());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdCompleteEnterAppliesSelection() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp4_");
+        try {
+            Files.createDirectory(tmp.resolve("aaa"));
+            Files.createDirectory(tmp.resolve("aab"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd aa");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("in CD_COMPLETE mode", editor.isCdCompleteMode());
+            String first = editor.getCdCandidates().get(0);
+            editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Enter returns to command mode", editor.isCommandMode());
+            assertEquals("commandBuffer completed with selected candidate", "cd " + first + "/", editor.getCommandBuffer());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdCompleteEscCancels() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp5_");
+        try {
+            Files.createDirectory(tmp.resolve("aaa"));
+            Files.createDirectory(tmp.resolve("aab"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd aa");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            editor.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Esc returns to command mode without applying", editor.isCommandMode());
+            assertEquals("commandBuffer unchanged by cancel", "cd aa", editor.getCommandBuffer());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdCompleteArrowNavigation() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp6_");
+        try {
+            Files.createDirectory(tmp.resolve("aaa"));
+            Files.createDirectory(tmp.resolve("aab"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd aa");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertEquals("initial selection is 0", 0, editor.getCdCandidateIdx());
+            editor.processKey(KeyEvent.VK_DOWN, KeyEvent.CHAR_UNDEFINED, 0);
+            assertEquals("Down moves selection to 1", 1, editor.getCdCandidateIdx());
+            editor.processKey(KeyEvent.VK_UP, KeyEvent.CHAR_UNDEFINED, 0);
+            assertEquals("Up moves selection back to 0", 0, editor.getCdCandidateIdx());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdTabEmptyPrefixListsAllDirs() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_tabcomp7_");
+        try {
+            Files.createDirectory(tmp.resolve("dirA"));
+            Files.createDirectory(tmp.resolve("dirB"));
+            Files.writeString(tmp.resolve("file.txt"), "x");
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "cd ");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("empty prefix lists directories only (files excluded)", editor.isCdCompleteMode());
+            assertEquals("only the 2 directories are candidates", 2, editor.getCdCandidates().size());
+        } finally {
+            deleteDir(tmp);
         }
     }
 
