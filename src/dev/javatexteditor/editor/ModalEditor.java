@@ -322,7 +322,6 @@ public class ModalEditor {
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
-            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { goToDefinition(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_R, 'r')) { goToReferences(); return; }
             if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
@@ -2554,61 +2553,6 @@ public class ModalEditor {
         }
     }
 
-    /**
-     * gd (go to definition): カーソル位置の識別子の宣言箇所へジャンプする。
-     * まずプロジェクト内（フィールド・定数・メソッド・クラス）を検索し、
-     * 見つからなければ "ClassName.member" 形式の JDK メンバー宣言を試みる。
-     */
-    private void goToDefinition() {
-        String word = wordAtCursor();
-        if (word.isEmpty()) {
-            setStatusMessage("No identifier at cursor");
-            return;
-        }
-
-        Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
-            getProjectRoot(), currentFilePath, buffer.getText(), word);
-        if (loc.isPresent()) {
-            ProjectSymbolResolver.SymbolLocation l = loc.get();
-            if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
-                cursorRow = l.lineNumber();
-                cursorCol = 0;
-            } else {
-                loadFromFile(l.filePath());
-                cursorRow = l.lineNumber();
-                cursorCol = 0;
-            }
-            setStatusMessage("→ " + word + " (" + l.kind() + ")  "
-                + l.filePath() + ":" + (l.lineNumber() + 1));
-            return;
-        }
-
-        if (jdkIndex != null && jdkIndex.isReady() && jumpToJdkMemberDefinition(word)) {
-            return;
-        }
-
-        setStatusMessage("Definition not found: " + word);
-    }
-
-    /**
-     * カーソルが "ClassName.member" の member 上にある場合、JDK ソースを疑似バッファで開き
-     * member（メソッドまたはフィールド）の宣言行へジャンプする。
-     */
-    private boolean jumpToJdkMemberDefinition(String word) {
-        String[] classAndMember = classAndMethodAtCursor();
-        if (classAndMember == null) return false;
-        List<String> classCandidates = jdkIndex.lookup(classAndMember[0]);
-        if (classCandidates.isEmpty()) return false;
-        String fqn = pickBestFqn(classCandidates);
-        Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
-        if (cls.isEmpty()) return false;
-        Optional<String> src = sourceTracer.readJavaSource(cls.get());
-        if (src.isEmpty()) return false;
-        openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
-        jumpToMember(classAndMember[1]);
-        return true;
-    }
-
     /** gr (go to references): カーソル位置の識別子をプロジェクト全体から grep 検索する。 */
     private void goToReferences() {
         String word = wordAtCursor();
@@ -2619,19 +2563,45 @@ public class ModalEditor {
         executeGrep("\\b" + Pattern.quote(word) + "\\b");
     }
 
-    /** NORMALモードの K キー: カーソル位置の識別子を JDK ソースで開く。
-     *  src.zip がなければステータスバーへのフォールバック表示。
-     *  カーソルが "ClassName.methodName" の上にある場合、または jdk-source 疑似バッファ内で
-     *  メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
+    /**
+     * NORMALモードの Shift+K（K）キー: カーソル位置の識別子の宣言箇所へジャンプする
+     * （Eclipse/IntelliJ IDEA の "Open Declaration" 相当）。
+     * 自プロジェクト内のクラス・メソッド・フィールド・定数を優先して検索し、
+     * 見つからなければ JDK のクラス／"ClassName.member" 形式のメンバー宣言を試みる。
+     * src.zip がなければステータスバーへのフォールバック表示。
+     * カーソルが "ClassName.methodName" の上にある場合、または jdk-source 疑似バッファ内で
+     * メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
      */
     private void lookupJdkDoc() {
-        if (jdkIndex == null || !jdkIndex.isReady()) {
-            setStatusMessage("JDK index building...");
-            return;
-        }
         String word = wordAtCursor();
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
+            return;
+        }
+
+        // 自プロジェクト内のフィールド・定数・メソッド・クラス宣言を最優先で検索する
+        // （jdk-source 疑似バッファ内では対象外。ネイティブトレース等の既存フローに任せる）
+        if (!inJdkSourceBuffer) {
+            Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
+                getProjectRoot(), currentFilePath, buffer.getText(), word);
+            if (loc.isPresent()) {
+                ProjectSymbolResolver.SymbolLocation l = loc.get();
+                if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
+                    cursorRow = l.lineNumber();
+                    cursorCol = 0;
+                } else {
+                    loadFromFile(l.filePath());
+                    cursorRow = l.lineNumber();
+                    cursorCol = 0;
+                }
+                setStatusMessage("→ " + word + " (" + l.kind() + ")  "
+                    + l.filePath() + ":" + (l.lineNumber() + 1));
+                return;
+            }
+        }
+
+        if (jdkIndex == null || !jdkIndex.isReady()) {
+            setStatusMessage("JDK index building...");
             return;
         }
 
