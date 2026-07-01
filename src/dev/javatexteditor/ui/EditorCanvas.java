@@ -760,7 +760,6 @@ public class EditorCanvas extends JPanel {
         String[] lines = {
             "Java Text Editor",
             "",
-            "モーダル編集（Vim 式）× 高い拡張性（Emacs 式）",
             "Java SE 製の軽量テキストエディタ",
             "",
             "version 1.0.0  |  Java " + System.getProperty("java.version"),
