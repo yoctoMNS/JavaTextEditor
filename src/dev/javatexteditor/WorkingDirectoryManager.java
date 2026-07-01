@@ -1,30 +1,28 @@
 package dev.javatexteditor;
 
 import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.prefs.Preferences;
 
 /**
  * アプリケーション全体の「作業ディレクトリ」を管理する。
  *
  * 初期値の決定順（上が優先）:
  *   1. コンストラクタに渡したヒント（初期ファイルの親ディレクトリ等）
- *   2. Preferences に永続化された前回値
- *   3. ユーザーのホームディレクトリ
- *   4. JVM 起動ディレクトリ（user.dir）
+ *   2. ユーザーのホームディレクトリ
+ *   3. JVM 起動ディレクトリ（user.dir）
  *
- * setWorkingDirectory() はバリデーション・永続化・リスナー通知を一括で行う。
+ * 以前は Preferences に前回の作業ディレクトリを永続化し、次回起動時の既定値として
+ * 使っていたが、「常にホームディレクトリから開始する」という要件と衝突する
+ * （一度 :cd で他のディレクトリに移動すると、以降ずっとそこが既定値になってしまう）
+ * ため廃止した。setWorkingDirectory() は現在プロセス内の状態変更のみを行う。
+ *
+ * setWorkingDirectory() はバリデーション・リスナー通知を一括で行う。
  */
 public final class WorkingDirectoryManager {
-
-    private static final String PREF_KEY = "workingDirectory";
-    private static final Preferences PREFS =
-        Preferences.userNodeForPackage(WorkingDirectoryManager.class);
 
     private Path workingDirectory;
     private final List<Consumer<Path>> listeners = new ArrayList<>();
@@ -38,14 +36,6 @@ public final class WorkingDirectoryManager {
 
     private static Path resolve(Path hint) {
         if (isValidDir(hint)) return hint.toAbsolutePath().normalize();
-
-        String saved = PREFS.get(PREF_KEY, null);
-        if (saved != null) {
-            try {
-                Path p = Paths.get(saved);
-                if (isValidDir(p)) return p;
-            } catch (InvalidPathException ignored) {}
-        }
 
         Path home = Paths.get(System.getProperty("user.home", ""));
         if (isValidDir(home)) return home;
@@ -72,7 +62,6 @@ public final class WorkingDirectoryManager {
         if (!Files.isDirectory(normalized))  return "ディレクトリではありません: " + normalized;
         if (!Files.isReadable(normalized))   return "読み取り権限がありません: " + normalized;
         workingDirectory = normalized;
-        PREFS.put(PREF_KEY, normalized.toString());
         for (Consumer<Path> l : listeners) l.accept(normalized);
         return null;
     }

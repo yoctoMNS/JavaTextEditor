@@ -137,12 +137,11 @@ project-root/
 - **`Ctrl+U`（バッファ履歴の前へ）でチュートリアルを開く前のバッファに戻れる**。これは新規実装ではなく、既存のバッファ履歴機構（`bufferHistory`/`historyIdx`）がそのまま使える。
 - コマンド名は `:tutor`（vimtutor 由来）と `:tutorial`（分かりやすさのためのエイリアス）の両方を受け付ける。
 
-## 作業ディレクトリ・ステータス行表示（`:pwd`/`:cd`）の設計決定事項
+## 作業ディレクトリ・`:pwd`/`:cd`の設計決定事項
 
-- **`TextEditorSettings`（`src/dev/javatexteditor/TextEditorSettings.java`）を新設**。表示のON/OFF既定値（`SHOW_PWD_ON_STARTUP`）や文言フォーマット（`formatPwdStatusLine()`）など「見た目・文言」に関する設定はここに集約する。依存ライブラリなしの単純な `static final` フィールド/staticメソッドのみで構成し、`Theme.java`（enum）と同様に他のソースと一緒に `javac` でビルドされるだけでよい（③の動的コンパイル機構には依存しない）。
-- **ステータス行中央の作業ディレクトリ表示は既定で非表示**（`EditorCanvas.pwdVisible`、既定値は `TextEditorSettings.SHOW_PWD_ON_STARTUP = false`）。`:pwd` コマンド実行時に `ModalEditor.pwdVisible` を `true` にし、`syncCanvas()` 経由で毎回 `canvas.setPwdVisible()` に反映する（`:pwd` 実行時に一度だけ呼ぶのではなく、split pane など複数 `EditorCanvas` インスタンスとの整合性を保つため常時同期する設計）。一度 `true` になったら次回起動まで表示され続ける（vimの `:pwd` がメッセージを出すだけなのに対し、本エディタはステータス行に恒常表示する点が異なる仕様だが、これは意図的な拡張）。
-- **`:cd` の `~` 展開は `ModalEditor.expandHome()` で行う**。`Path.resolve()` は `~` を特別扱いしないため、`getProjectRoot().resolve(pathStr)` に渡す前に文字列レベルで `System.getProperty("user.home")` に置換する。`~`単体・`~/...`・`~\...`（Windows想定）の3パターンに対応。展開後は絶対パスになるため、`Path.resolve()` の「絶対パスを渡すとそれがそのまま返る」仕様にそのまま乗せられる。
-- **既定の作業ディレクトリがホームディレクトリである点は `WorkingDirectoryManager.resolve()`（起動時ヒント→Preferences保存値→ホームディレクトリ→`user.dir`の優先順）で既に実装済み**。今回の対応でロジック変更はしていない。
+- **ステータス行中央への作業ディレクトリの常時/切替表示機能は廃止**。一度 `EditorCanvas.pwdVisible` フラグと `TextEditorSettings.java`（表示ON/OFF既定値・文言フォーマット集約用に新設）で実装したが、「画面中央にカレントディレクトリを表示する仕組み自体が不要」という判断により全面削除した。`:pwd` コマンドは以前からある「`statusMessage` にフルパスを設定し、`commandLineText` としてステータス行左側に一時表示する」という既存動作のみを残す（このプロジェクトにおけるコマンド実行結果メッセージの標準パターンで、`:oi`/`:remove-import` 等と同じ）。ステータス行中央表示のような新規UI要素は今後も要求がない限り追加しない。
+- **`:cd` の `~` 展開は `ModalEditor.expandHome()` で行う**（維持）。`Path.resolve()` は `~` を特別扱いしないため、`getProjectRoot().resolve(pathStr)` に渡す前に文字列レベルで `System.getProperty("user.home")` に置換する。`~`単体・`~/...`・`~\...`（Windows想定）の3パターンに対応。展開後は絶対パスになるため、`Path.resolve()` の「絶対パスを渡すとそれがそのまま返る」仕様にそのまま乗せられる。
+- **`WorkingDirectoryManager` は前回終了時のディレクトリを `Preferences` に永続化する仕組みを持っていたが廃止した**。「起動時の既定作業ディレクトリは常にホームディレクトリ」という要件と矛盾していたため（一度 `:cd` で別ディレクトリに移動すると、その値が `Preferences` に保存され、以後の起動では常にそのディレクトリが既定値になってしまっていた）。現在の初期値決定順は「起動時ヒント（開いたファイルの親ディレクトリ）→ホームディレクトリ→`user.dir`」のみで、セッションをまたいだ永続化は行わない。
 
 ## 作業時の方針
 
