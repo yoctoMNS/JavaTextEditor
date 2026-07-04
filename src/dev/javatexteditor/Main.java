@@ -269,7 +269,7 @@ public class Main {
     /** 新しいリーフを生成してコールバックを設定する。 */
     private static Leaf createLeaf(String text, String path) {
         EditorCanvas canvas = new EditorCanvas();
-        canvas.setTheme(Theme.DARK_MODE);
+        canvas.setTheme(Theme.LIGHT_MODE);
         ModalEditor editor = new ModalEditor(text, path, canvas);
         setupCompileAnalysis(editor, canvas);
         editor.setJdkClassIndex(JDK_INDEX);
