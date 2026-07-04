@@ -139,25 +139,4 @@ public class CompileAnalyzer {
         }
         return d.getMessage(Locale.ENGLISH);
     }
-
-    /** 文字列ソースを JavaFileObject として渡すためのアダプタ */
-    private static final class StringJavaFileObject extends SimpleJavaFileObject {
-        private final String source;
-
-        StringJavaFileObject(String filePath, String source) {
-            super(toUri(filePath), Kind.SOURCE);
-            this.source = source;
-        }
-
-        private static URI toUri(String filePath) {
-            String safe = filePath.replace('\\', '/')
-                                  .replaceAll("[<>\"{}|\\\\^`\\[\\] ]", "_");
-            return URI.create("string:///" + safe);
-        }
-
-        @Override
-        public CharSequence getCharContent(boolean ignoreEncodingErrors) {
-            return source;
-        }
-    }
 }

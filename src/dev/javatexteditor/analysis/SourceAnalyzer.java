@@ -146,26 +146,4 @@ public class SourceAnalyzer {
             default -> {} // 型宣言以外（エラーノード等）は無視
         }
     }
-
-    /** 文字列ソースを JavaFileObject として渡すためのアダプタ */
-    private static final class StringJavaFileObject extends SimpleJavaFileObject {
-        private final String source;
-
-        StringJavaFileObject(String filePath, String source) {
-            super(toUri(filePath), Kind.SOURCE);
-            this.source = source;
-        }
-
-        private static URI toUri(String filePath) {
-            // Strip characters illegal in URI path segments
-            String safe = filePath.replace('\\', '/')
-                                  .replaceAll("[<>\"{}|\\\\^`\\[\\] ]", "_");
-            return URI.create("string:///" + safe);
-        }
-
-        @Override
-        public CharSequence getCharContent(boolean ignoreEncodingErrors) {
-            return source;
-        }
-    }
 }
