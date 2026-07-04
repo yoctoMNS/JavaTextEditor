@@ -7,6 +7,7 @@ import dev.javatexteditor.analysis.JdkJavadocReader;
 import dev.javatexteditor.analysis.JdkTypeInfo;
 import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
+import dev.javatexteditor.analysis.ReceiverTypeResolver;
 import dev.javatexteditor.buffer.PieceTable;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.refactor.RenameRefactorer;
@@ -101,6 +102,8 @@ public class ModalEditor {
     private final RenameRefactorer renameRefactorer = new RenameRefactorer();
     // symbol-definition-navigation: gd (go to definition) / gr (go to references)
     private final ProjectSymbolResolver projectSymbolResolver = new ProjectSymbolResolver();
+    // symbol-definition-navigation: "instanceVar.member" のレシーバ型推定（軽量ヒューリスティック）
+    private final ReceiverTypeResolver receiverTypeResolver = new ReceiverTypeResolver();
     // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
     private List<CompileDiagnostic> localDiagnostics = List.of();
     // ファイル名検索 / ファイル内容grep（\f / \g）
@@ -2913,20 +2916,17 @@ public class ModalEditor {
         // 自プロジェクト内のフィールド・定数・メソッド・クラス宣言を最優先で検索する
         // （jdk-source 疑似バッファ内では対象外。ネイティブトレース等の既存フローに任せる）
         if (!inJdkSourceBuffer) {
+            // カーソルが "レシーバ.member" 上にある場合、まずレシーバの型を手掛かりに絞り込む
+            // （型が分かれば同名の無関係なメンバーへの誤ジャンプを避けられる）。
+            String[] qualified = classAndMethodAtCursor();
+            if (qualified != null && tryResolveQualifiedMember(qualified[0], qualified[1], bufferTextSnapshot)) {
+                return;
+            }
+
             Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
                 getProjectRoot(), currentFilePath, bufferTextSnapshot, word);
             if (loc.isPresent()) {
-                ProjectSymbolResolver.SymbolLocation l = loc.get();
-                if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
-                    cursorRow = l.lineNumber();
-                    cursorCol = 0;
-                } else {
-                    loadFromFile(l.filePath());
-                    cursorRow = l.lineNumber();
-                    cursorCol = 0;
-                }
-                setStatusMessage("→ " + word + " (" + l.kind() + ")  "
-                    + l.filePath() + ":" + (l.lineNumber() + 1));
+                jumpToSymbolLocation(loc.get(), word);
                 return;
             }
         }
@@ -2982,39 +2982,8 @@ public class ModalEditor {
 
         // カーソルが "ClassName.methodName" の methodName 上にある場合: native トレースを試みる
         String[] classAndMethod = classAndMethodAtCursor();
-        if (classAndMethod != null) {
-            String className = classAndMethod[0];
-            String methodName = classAndMethod[1];
-            List<String> classCandidates = jdkIndex.lookup(className);
-            if (!classCandidates.isEmpty()) {
-                String fqn = pickBestFqn(classCandidates);
-                Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
-                if (cls.isPresent()) {
-                    OpenjdkSourceTracer.TracingResult result = sourceTracer.trace(cls.get(), methodName);
-                    if (result.isNative()) {
-                        if (result.sourceFile().isPresent() && result.snippet().isPresent()) {
-                            // C/C++ ソースを疑似バッファで表示
-                            openJdkSourceBuffer(
-                                "*jdk-source:" + className + "." + methodName + "*",
-                                "[native] " + result.jniMangledName() + "\n"
-                                    + "Source: " + result.sourceFile().get() + "\n\n"
-                                    + result.snippet().get(),
-                                true
-                            );
-                        } else {
-                            setStatusMessage(result.toStatusLine());
-                        }
-                        return;
-                    }
-                    // non-native: ソースにジャンプ（メソッド宣言 → フィールド宣言の順で探す）
-                    Optional<String> src = sourceTracer.readJavaSource(cls.get());
-                    if (src.isPresent()) {
-                        openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
-                        jumpToMember(methodName);
-                        return;
-                    }
-                }
-            }
+        if (classAndMethod != null && tryJdkMember(classAndMethod[0], classAndMethod[1])) {
+            return;
         }
 
         List<String> candidates = jdkIndex.lookup(word);
@@ -3042,6 +3011,97 @@ public class ModalEditor {
         } else {
             setStatusMessage(best + " (cannot load)" + extra);
         }
+    }
+
+    /**
+     * カーソルが "receiver.member" 上にある場合、receiver の型を手掛かりに member の宣言を検索する。
+     * (a) receiver 自身が自プロジェクトのクラス名（static呼び出し）として解決できればそのクラスの
+     *     ファイルに限定して member を検索する。
+     * (b) それで見つからなければ receiver をローカル変数/引数/フィールドとみなし、
+     *     {@link ReceiverTypeResolver} で宣言型を推定する。推定できた型が自プロジェクトのクラスなら
+     *     そのクラスのファイルに限定して member を検索し、JDKのクラスなら既存の
+     *     {@link #tryJdkMember(String, String)} に委譲する。
+     * 解決できた場合 true（ジャンプ済み）、できなければ false（呼び出し側は名前だけの検索にフォールバックする）。
+     */
+    private boolean tryResolveQualifiedMember(String receiver, String member, String bufferTextSnapshot) {
+        Optional<ProjectSymbolResolver.SymbolLocation> asStatic = projectSymbolResolver.resolveMemberInType(
+            getProjectRoot(), currentFilePath, bufferTextSnapshot, receiver, member);
+        if (asStatic.isPresent()) {
+            jumpToSymbolLocation(asStatic.get(), member);
+            return true;
+        }
+
+        Optional<String> type = receiverTypeResolver.resolveType(getLines(), cursorRow, receiver);
+        if (type.isEmpty()) {
+            return false;
+        }
+        String typeName = type.get();
+
+        Optional<ProjectSymbolResolver.SymbolLocation> viaType = projectSymbolResolver.resolveMemberInType(
+            getProjectRoot(), currentFilePath, bufferTextSnapshot, typeName, member);
+        if (viaType.isPresent()) {
+            jumpToSymbolLocation(viaType.get(), member);
+            return true;
+        }
+
+        if (jdkIndex != null && jdkIndex.isReady() && tryJdkMember(typeName, member)) {
+            return true;
+        }
+        return false;
+    }
+
+    /** ProjectSymbolResolver.SymbolLocation へジャンプし、ステータスバーに結果を表示する。 */
+    private void jumpToSymbolLocation(ProjectSymbolResolver.SymbolLocation l, String word) {
+        if (currentFilePath != null && l.filePath().equals(currentFilePath)) {
+            cursorRow = l.lineNumber();
+            cursorCol = 0;
+        } else {
+            loadFromFile(l.filePath());
+            cursorRow = l.lineNumber();
+            cursorCol = 0;
+        }
+        setStatusMessage("→ " + word + " (" + l.kind() + ")  "
+            + l.filePath() + ":" + (l.lineNumber() + 1));
+    }
+
+    /**
+     * className が JDK のクラスとして解決できる場合に限り、そのクラスにおける methodName
+     * （メソッドまたはフィールド）の宣言へジャンプ（native ならトレース結果を表示）する。
+     * className が JDK クラスとして解決できない場合は false を返す（呼び出し側は次の手段を試す）。
+     */
+    private boolean tryJdkMember(String className, String methodName) {
+        List<String> classCandidates = jdkIndex.lookup(className);
+        if (classCandidates.isEmpty()) {
+            return false;
+        }
+        String fqn = pickBestFqn(classCandidates);
+        Optional<Class<?>> cls = jdkIndex.loadClass(fqn);
+        if (cls.isEmpty()) {
+            return false;
+        }
+        OpenjdkSourceTracer.TracingResult result = sourceTracer.trace(cls.get(), methodName);
+        if (result.isNative()) {
+            if (result.sourceFile().isPresent() && result.snippet().isPresent()) {
+                openJdkSourceBuffer(
+                    "*jdk-source:" + className + "." + methodName + "*",
+                    "[native] " + result.jniMangledName() + "\n"
+                        + "Source: " + result.sourceFile().get() + "\n\n"
+                        + result.snippet().get(),
+                    true
+                );
+            } else {
+                setStatusMessage(result.toStatusLine());
+            }
+            return true;
+        }
+        // non-native: ソースにジャンプ（メソッド宣言 → フィールド宣言の順で探す）
+        Optional<String> src = sourceTracer.readJavaSource(cls.get());
+        if (src.isPresent()) {
+            openJdkSourceBuffer("*jdk-source:" + fqn + "*", src.get());
+            jumpToMember(methodName);
+            return true;
+        }
+        return false;
     }
 
     /** FQN 候補リストから java.lang > java.util > その他 の優先順で1件選ぶ。 */
