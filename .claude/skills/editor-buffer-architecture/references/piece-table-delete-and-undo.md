@@ -64,7 +64,7 @@ public void delete(int offset, int length) {
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-public class UndoableePieceTable extends PieceTable {
+public class UndoablePieceTable extends PieceTable {
 
     // 編集前のピースリストのスナップショットを積んでいくスタック
     private final Deque<List<Piece>> undoStack = new ArrayDeque<>();

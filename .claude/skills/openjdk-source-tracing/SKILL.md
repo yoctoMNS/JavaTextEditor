@@ -1,3 +1,8 @@
+---
+name: openjdk-source-tracing
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、JNIグルーコードに加えHotSpot JVM本体（src/hotspot/share）のC/C++ソースをlib/openjdk-native/に取得し、gr（参照検索）やfindCSymbol（定義ジャンプ）の検索対象に含める際に使用する。「JVM_GC等のHotSpot関数の定義へジャンプしたい」「scripts/setup.sh・setup.batの取得対象を変えたい」「nativeソースの検索範囲」といった相談の前に必ず参照すること。.bat編集やサブプロセス出力読み取りの文字化け対策はwindows-batch-and-subprocessスキルも併読すること。"
+---
+
 # Skill ⑫: openjdk-source-tracing
 
 ## 概要
@@ -63,6 +68,10 @@ hotspot追加**前**に一度セットアップ済みの環境では常に真に
 `$NATIVE_DIR/hotspot` に `.cpp` ファイルが存在するかも判定条件に加えた
 （`sh`/`bat` 両方）。既存環境で hotspot だけを追加したい場合は、
 このチェックにより自動的に再クローン・追加が走る。
+
+> 💡 以下3節のバグ修正から抽出した恒久ルール（.batのASCII専用・ブロック内丸括弧禁止・native.encodingでのサブプロセス出力読み取り）は
+> `.claude/skills/windows-batch-and-subprocess/SKILL.md` に集約済み。**.batファイルの編集やサブプロセスI/Oの実装時はまずそちらを参照**し、
+> 本節は調査経緯の記録として読むこと。
 
 ## バグ修正: Windows で setup.bat を実行すると文字化け＋終了コード255になる
 

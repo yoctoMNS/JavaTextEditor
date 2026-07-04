@@ -1,3 +1,8 @@
+---
+name: telescope-picker
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、telescope.nvim風ファジーファインダー（SPC+f=ファイル検索/SPC+/=ライブgrep/SPC+b=バッファ一覧・3ペインオーバーレイ）を設計・実装する際に使用する。「ファジー検索を追加したい」「FuzzyMatcherのスコアリング」「TELESCOPEモードのキー処理・モード遷移」といった相談、またFilePicker/GrepPicker/BufferPickerを触る作業に着手する前に、必ず最初に参照すること。"
+---
+
 # telescope-picker スキル
 
 ## このスキルが解決すること

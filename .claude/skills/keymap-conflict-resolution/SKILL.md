@@ -1,3 +1,8 @@
+---
+name: keymap-conflict-resolution
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、Vim式モーダルキーとEmacs式カーソル移動（Ctrl+F/B/N/P）が共存するキーバインドを追加・変更する際に使用する。「新しいキーバインドを追加したい」「このキーは空いているか」「Ctrl+N等の競合をどう解決したか」「KeymapRegistry/KeyBindingの仕組み」といった相談、またキーバインドの追加・変更・プラグインからのアクション登録に着手する前に、必ず最初に参照すること。確定済みキーの再割り当てを避けるための一次資料。"
+---
+
 # Skill: keymap-conflict-resolution
 
 ## 概要
@@ -28,7 +33,7 @@ case 'l' -> moveCursor(0, 1);
 ## KeyBinding レコード設計
 
 ```java
-package dev.vimacs.editor;
+package dev.javatexteditor.editor;
 
 /**
  * 1つのキーバインドを表す不変レコード。
@@ -57,7 +62,7 @@ public record KeyBinding(
 ## KeymapRegistry 設計
 
 ```java
-package dev.vimacs.editor;
+package dev.javatexteditor.editor;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -193,10 +198,10 @@ INSERT / VISUAL / VISUAL_LINE モードも移行する。
 
 | ファイル | 役割 |
 |---|---|
-| `src/dev/vimacs/editor/KeyBinding.java` | キーバインドを表すレコード |
-| `src/dev/vimacs/editor/KeymapRegistry.java` | モード別キーマップ管理 |
-| `src/dev/vimacs/editor/EditorAction.java` | アクション名と Runnable の対応（オプション） |
-| `test/dev/vimacs/editor/KeymapRegistryTest.java` | 登録・上書き・競合検出テスト |
+| `src/dev/javatexteditor/editor/KeyBinding.java` | キーバインドを表すレコード |
+| `src/dev/javatexteditor/editor/KeymapRegistry.java` | モード別キーマップ管理 |
+| `src/dev/javatexteditor/editor/EditorAction.java` | アクション名と Runnable の対応（オプション） |
+| `test/dev/javatexteditor/editor/KeymapRegistryTest.java` | 登録・上書き・競合検出テスト |
 
 ---
 
