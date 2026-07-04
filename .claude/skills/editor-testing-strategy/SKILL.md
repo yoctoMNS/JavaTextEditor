@@ -1,3 +1,8 @@
+---
+name: editor-testing-strategy
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、自作テストハーネス（mainメソッド形式・JUnit等の外部フレームワーク不使用）でテストを設計・追加・実行する際に使用する。「新しいテストクラスを追加したい」「境界値テストに何を含めるべきか」「大規模ファイルのパフォーマンステストの閾値をどう決めるか」「テストがO(n²)で遅い」といった相談、また*Test.javaという名前のクラスを新規作成する作業に着手する前に、必ず最初に参照すること。"
+---
+
 # editor-testing-strategy
 
 ## 概要
@@ -8,7 +13,7 @@ JUnit等の外部フレームワークは使用しない。
 ## テストクラス構成
 
 ```
-test/dev/vimacs/
+test/dev/javatexteditor/
 ├── buffer/
 │   ├── PieceTableTest.java          # 既存: 正常系・基本境界値 (15テスト)
 │   ├── PieceTableEdgeCaseTest.java  # 新規: 空バッファ・多数操作・境界削除 (46テスト)
@@ -26,6 +31,8 @@ test/dev/vimacs/
 └── ui/
     └── EditorCanvasTest.java        # 既存: GUI描画 (22テスト)
 ```
+
+> ⚠️ 上記の構成は本Skill完了時点（⑦）のスナップショット。その後のSkillでテストクラスは増え続けており（2026-07-04時点で29クラス）、最新の一覧は `find test -name "*Test.java"` で確認すること。命名規約 `*Test.java` に従えば `scripts/test.sh` が自動検出する。
 
 ## テストハーネス規約
 

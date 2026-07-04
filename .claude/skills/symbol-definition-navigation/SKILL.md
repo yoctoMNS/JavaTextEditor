@@ -1,3 +1,8 @@
+---
+name: symbol-definition-navigation
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、Shift+K（クラス・メソッド・フィールドの定義へジャンプ）/Shift+J（一つ前の位置へ戻る）/gr（参照一覧）を設計・実装・修正する際に使用する。「定義へジャンプしたい」「変数名.メンバー名から宣言を探す（レシーバ型解決）」「参照検索」といった相談、またProjectSymbolResolver/ReceiverTypeResolverやlookupJdkDoc周辺を触る作業に着手する前に、必ず最初に参照すること。⑩jdk-api-navigationのKキー記述を上書きする最新仕様。"
+---
+
 # Skill: symbol-definition-navigation
 
 ## 概要

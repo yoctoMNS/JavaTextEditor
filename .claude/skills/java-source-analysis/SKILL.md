@@ -1,3 +1,8 @@
+---
+name: java-source-analysis
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、JDK標準のCompiler Tree API（com.sun.source.tree.*）でJavaソースのASTを解析し、import索引・シンボル索引を構築する際に使用する。「Javaソースを解析したい」「import文を読み取りたい」「クラス/メソッド/フィールドの一覧が欲しい」「構文エラーがあっても部分解析したい（graceful degradation）」といった相談、またSourceAnalyzer/SourceIndex/SymbolEntryを触る作業に着手する前に、必ず最初に参照すること。⑨〜⑯の解析系Skillの共通基盤。"
+---
+
 # Skill: java-source-analysis
 
 ## 概要
@@ -9,7 +14,7 @@ parse-only モードで動作するため型解決は行わず、構文エラー
 ## 実装済みクラス
 
 ```
-src/dev/vimacs/analysis/
+src/dev/javatexteditor/analysis/
 ├── AnalysisException.java   checked exception
 ├── ImportEntry.java         import 文1件 (record)
 ├── SourceAnalyzer.java      Compiler Tree API 呼び出し本体
@@ -88,7 +93,7 @@ private static URI toUri(String filePath) {
 ## テスト
 
 ```
-test/dev/vimacs/analysis/SourceAnalyzerTest.java
+test/dev/javatexteditor/analysis/SourceAnalyzerTest.java
 ```
 
 49 テスト全 PASS（import 収集・static/wildcard 区別・シンボル収集・行番号・構文エラー耐性・空ソース・ファイル解析・バッファ解析・ネスト除外）
