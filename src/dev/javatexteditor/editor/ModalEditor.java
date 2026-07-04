@@ -3259,32 +3259,11 @@ public class ModalEditor {
 
     // ---- Getter / Setter 自動生成 ----
 
-    /**
-     * カーソル行のフィールド宣言を解析する。
-     * 例: "    private int hp;" -> ["int", "hp"]
-     * 解析失敗時は null を返す。
-     */
+    /** カーソル行のフィールド宣言を解析する（純粋ロジックは GetterSetterGenerator 側）。 */
     private String[] parseFieldAtCursor() {
         String[] lines = getLines();
-        if (cursorRow >= lines.length) return null;
-        String line = lines[cursorRow].trim();
-        // 末尾のセミコロンを除去
-        if (!line.endsWith(";")) return null;
-        line = line.substring(0, line.length() - 1).trim();
-        // アクセス修飾子・static・final 等のトークンを除去
-        String[] tokens = line.split("\\s+");
-        // 型名とフィールド名は末尾2トークン
-        if (tokens.length < 2) return null;
-        String fieldName = tokens[tokens.length - 1];
-        String typeName  = tokens[tokens.length - 2];
-        // '=' による初期化があれば除去（例: "int x = 0"）
-        int eqIdx = typeName.indexOf('=');
-        if (eqIdx >= 0) return null; // 複雑な初期化式は対象外
-        int fnEq = fieldName.indexOf('=');
-        if (fnEq >= 0) fieldName = fieldName.substring(0, fnEq).trim();
-        // 配列型（int[] や int[][]）はそのまま許容
-        if (!fieldName.matches("[a-zA-Z_$][a-zA-Z0-9_$]*")) return null;
-        return new String[]{typeName, fieldName};
+        String line = cursorRow < lines.length ? lines[cursorRow] : "";
+        return GetterSetterGenerator.parseFieldDeclaration(line);
     }
 
     private String capitalize(String s) {
@@ -3299,10 +3278,8 @@ public class ModalEditor {
         String type = field[0];
         String name = field[1];
         String prefix = type.equals("boolean") ? "is" : "get";
-        String indent = detectIndent();
-        String method = "\n" + indent + "public " + type + " " + prefix + capitalize(name) + "() {\n"
-                      + indent + indent + "return " + name + ";\n"
-                      + indent + "}\n";
+        String method = GetterSetterGenerator.buildGetter(type, name,
+                GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(method);
         statusMessage = prefix + capitalize(name) + "() を生成しました";
         syncCanvas();
@@ -3314,10 +3291,8 @@ public class ModalEditor {
         if (field == null) { statusMessage = "Setter: フィールド宣言が見つかりません"; syncCanvas(); return; }
         String type = field[0];
         String name = field[1];
-        String indent = detectIndent();
-        String method = "\n" + indent + "public void set" + capitalize(name) + "(" + type + " " + name + ") {\n"
-                      + indent + indent + "this." + name + " = " + name + ";\n"
-                      + indent + "}\n";
+        String method = GetterSetterGenerator.buildSetter(type, name,
+                GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(method);
         statusMessage = "set" + capitalize(name) + "() を生成しました";
         syncCanvas();
@@ -3330,13 +3305,8 @@ public class ModalEditor {
         String type = field[0];
         String name = field[1];
         String prefix = type.equals("boolean") ? "is" : "get";
-        String indent = detectIndent();
-        String methods = "\n" + indent + "public " + type + " " + prefix + capitalize(name) + "() {\n"
-                       + indent + indent + "return " + name + ";\n"
-                       + indent + "}\n"
-                       + "\n" + indent + "public void set" + capitalize(name) + "(" + type + " " + name + ") {\n"
-                       + indent + indent + "this." + name + " = " + name + ";\n"
-                       + indent + "}\n";
+        String methods = GetterSetterGenerator.buildGetterAndSetter(type, name,
+                GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(methods);
         statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() を生成しました";
         syncCanvas();
@@ -3472,16 +3442,6 @@ public class ModalEditor {
         }
         cursorRow = row;
         cursorCol = Math.max(0, col - 1);
-    }
-
-    /** ファイル内の最初のコードインデント（スペースかタブ）を検出する。 */
-    private String detectIndent() {
-        for (String line : getLines()) {
-            if (line.startsWith("\t")) return "\t";
-            if (line.startsWith("    ")) return "    ";
-            if (line.startsWith("  ")) return "  ";
-        }
-        return "    ";
     }
 
     /** カーソル位置の Java 識別子（単語）を返す。識別子がなければ空文字列。 */
