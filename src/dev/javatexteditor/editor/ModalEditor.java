@@ -1061,6 +1061,16 @@ public class ModalEditor {
         commandBuffer.append("cd ").append(parentPart).append(name).append("/");
     }
 
+    /** バッファを差し替える際に、旧バッファ由来の検索・結果リスト状態を破棄する。
+     *  （grep結果 / ファイル名検索結果 / テキスト内検索マッチ）。
+     *  注意: inJdkSourceBuffer / cdSelectionActive はここでは触らない（呼び出し元ごとに扱いが異なるため）。 */
+    private void resetSearchAndResultState() {
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+    }
+
     /**
      * 複数候補が見つかった場合、telescope オーバーレイではなく既存の
      * *grep* や jdk-source と同様の「疑似バッファ」としてエディタ画面上に候補一覧を表示する。
@@ -1086,10 +1096,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 1;
         cursorCol = 0;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         commandBuffer.setLength(0);
         mode = Mode.NORMAL;
         statusMessage = "cd候補: " + candidates.size() + "件 — Enter で選択、q でキャンセル";
@@ -1125,10 +1132,7 @@ public class ModalEditor {
         currentFilePath = cdSavedFilePath;
         cursorRow = cdSavedCursorRow;
         cursorCol = cdSavedCursorCol;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         cdSelectionActive = false;
         cdSavedBufferText = null;
         cdSavedFilePath = null;
@@ -1617,10 +1621,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 0;
         cursorCol = 0;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         statusMessage = "[新規バッファ]";
     }
 
@@ -1635,10 +1636,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 0;
         cursorCol = 0;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         statusMessage = "チュートリアルを開きました — :q で終了、Ctrl+U で元のバッファに戻れます";
     }
 
@@ -1650,10 +1648,7 @@ public class ModalEditor {
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
-            grepResults = null;
-            fileNameResults = null;
-            searchMatches = List.of();
-            currentMatchIdx = -1;
+            resetSearchAndResultState();
             statusMessage = "\"" + path + "\" [新規ファイル]";
             return;
         }
@@ -1664,10 +1659,7 @@ public class ModalEditor {
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
-            grepResults = null;
-            fileNameResults = null;
-            searchMatches = List.of();
-            currentMatchIdx = -1;
+            resetSearchAndResultState();
             statusMessage = "\"" + path + "\" opened";
             if (onFileOpened != null) {
                 String name = Path.of(path).getFileName().toString();
@@ -1703,10 +1695,7 @@ public class ModalEditor {
         currentFilePath = snap.filePath();
         cursorRow = snap.row();
         cursorCol = snap.col();
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[新規バッファ]";
         statusMessage = label + " (" + (idx + 1) + "/" + bufferHistory.size() + ")";
     }
@@ -2897,10 +2886,7 @@ public class ModalEditor {
         cursorCol = origin.col();
         inJdkSourceBuffer = origin.filePath() != null && origin.filePath().startsWith("*jdk-source:");
         jdkSourceIsNative = inJdkSourceBuffer && looksLikeNativeJdkSource(origin.filePath(), origin.text());
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         String label = (origin.filePath() != null) ? "\"" + origin.filePath() + "\"" : "[新規バッファ]";
         setStatusMessage("← back to " + label + " line " + (origin.row() + 1));
     }
