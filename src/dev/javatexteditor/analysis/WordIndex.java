@@ -1,5 +1,6 @@
 package dev.javatexteditor.analysis;
 
+import dev.javatexteditor.search.FileNameSearcher;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.MalformedInputException;
@@ -33,8 +34,7 @@ public final class WordIndex {
     private static final Pattern WORD = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     // ディレクトリ探索・ファイル名検索など他機能と同じスキップ対象（project-wide-search 系と共通の慣例）
-    private static final Set<String> SKIP_DIRS =
-        Set.of(".git", "build", "target", ".gradle", "node_modules", ".idea", ".vscode");
+    private static final Set<String> SKIP_DIRS = FileNameSearcher.SKIP_DIRS;  // 実体は search 側の1定義
 
     // バイナリ・巨大ファイルの走査に時間を取られないための上限
     private static final long MAX_FILE_SIZE_BYTES = 2L * 1024 * 1024; // 2MB

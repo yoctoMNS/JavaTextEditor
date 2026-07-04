@@ -19,7 +19,9 @@ import java.util.regex.PatternSyntaxException;
  */
 public class FileNameSearcher {
 
-    private static final Set<String> SKIP_DIRS =
+    /** ファイル走査系機能で共通に使う、慣例的なスキップ対象ディレクトリ名。
+     *  注意: ProjectSearcher(grep) は意図的に .git/build/target のみをスキップしており、この集合は使わない。 */
+    public static final Set<String> SKIP_DIRS =
         Set.of(".git", "build", "target", ".gradle", "node_modules", ".idea", ".vscode");
 
     /**
