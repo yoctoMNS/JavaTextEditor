@@ -248,6 +248,7 @@ public class CompileAnalyzerTest {
         if (fail > 0) {
             System.exit(1);
         }
+        System.exit(0);   // EditorCanvas の Swing Timer が AWT スレッドを生かし続けるため明示終了する
     }
 
     static BufferedImage renderCanvas(dev.javatexteditor.ui.EditorCanvas canvas, int width, int height) {
