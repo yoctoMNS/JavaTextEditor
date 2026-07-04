@@ -213,31 +213,8 @@ public class Main {
 
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
         Runnable trigger = () -> {
-            String source = editor.getText();
-            String snapshotPath = editor.getCurrentFilePath();
             editor.setStatusMessage("auto-import: 解析中...");
-            Thread.ofVirtual().start(() -> {
-                try {
-                    // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
-                    JDK_INDEX.awaitReady();
-                    // ファイルが保存済みの場合は実パスを URI に渡す（public class 名不一致エラーを防ぐ）
-                    List<CompileDiagnostic> diags = (snapshotPath != null)
-                        ? COMPILE_ANALYZER.analyzeWithPath(snapshotPath, source)
-                        : COMPILE_ANALYZER.analyze(source);
-                    SwingUtilities.invokeLater(() -> {
-                        canvas.setDiagnostics(diags);
-                        editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
-                        editor.handleAutoImport(diags);
-                    });
-                } catch (AnalysisException e) {
-                    SwingUtilities.invokeLater(() -> {
-                        canvas.setDiagnostics(List.of());
-                        editor.setStatusMessage("auto-import: 解析失敗");
-                    });
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            });
+            runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
         };
         // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替えてからコンパイル解析を実行する
         editor.setOnReturnToNormal(() -> {
@@ -247,28 +224,41 @@ public class Main {
         editor.setOnSave(trigger);
         // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
         editor.setOnOrganizeImports(() -> {
-            String filePath = editor.getCurrentFilePath();
-            String source   = editor.getText();
             editor.setStatusMessage("import 整理中...");
-            Thread.ofVirtual().start(() -> {
-                try {
-                    JDK_INDEX.awaitReady();
-                    List<CompileDiagnostic> diags = COMPILE_ANALYZER.analyze(source);
-                    SwingUtilities.invokeLater(() -> {
-                        canvas.setDiagnostics(diags);
-                        // 未使用削除は handleAutoImport の全候補処理完了後に実行
-                        editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
-                        editor.handleAutoImport(diags);
-                    });
-                } catch (AnalysisException e) {
-                    SwingUtilities.invokeLater(() -> {
-                        canvas.setDiagnostics(List.of());
-                        editor.setStatusMessage("E: コンパイル解析失敗");
-                    });
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            });
+            runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗");
+        });
+    }
+
+    /** バックグラウンド仮想スレッドでコンパイル解析し、EDT で診断反映と auto-import を行う。
+     *  @param useRealPathIfSaved true のとき、保存済みファイルなら analyzeWithPath を使う
+     *                            （INSERT→NORMAL / 保存トリガ用。public class 名不一致エラーを防ぐ）。
+     *                            false のとき常に analyze を使う（Ctrl+Shift+O 用。現行挙動を維持）。
+     *  @param failureMessage 解析失敗時にステータス行へ出す文言 */
+    private static void runCompileAnalysis(ModalEditor editor, EditorCanvas canvas,
+            boolean useRealPathIfSaved, String failureMessage) {
+        String source = editor.getText();
+        String snapshotPath = editor.getCurrentFilePath();
+        Thread.ofVirtual().start(() -> {
+            try {
+                // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
+                JDK_INDEX.awaitReady();
+                List<CompileDiagnostic> diags = (useRealPathIfSaved && snapshotPath != null)
+                    ? COMPILE_ANALYZER.analyzeWithPath(snapshotPath, source)
+                    : COMPILE_ANALYZER.analyze(source);
+                SwingUtilities.invokeLater(() -> {
+                    canvas.setDiagnostics(diags);
+                    // 未使用削除は handleAutoImport の全候補処理完了後に実行
+                    editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
+                    editor.handleAutoImport(diags);
+                });
+            } catch (AnalysisException e) {
+                SwingUtilities.invokeLater(() -> {
+                    canvas.setDiagnostics(List.of());
+                    editor.setStatusMessage(failureMessage);
+                });
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         });
     }
 
