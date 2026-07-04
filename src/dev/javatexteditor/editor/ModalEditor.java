@@ -8,7 +8,6 @@ import dev.javatexteditor.analysis.JdkTypeInfo;
 import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
-import dev.javatexteditor.buffer.PieceTable;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
@@ -50,6 +49,12 @@ public class ModalEditor {
     private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
     private enum FileSearchType { NAME, GREP }
 
+    /** ソフトタブのインデント幅（スペース数）。 */
+    private static final int TAB_WIDTH = 4;
+    private static final String INDENT_UNIT = " ".repeat(TAB_WIDTH);
+    /** 補完ポップアップに出す最大候補数（Ctrl+Space / Alt+/ 共通）。 */
+    private static final int COMPLETION_MAX_RESULTS = 10;
+
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
     private final KeymapRegistry keymap = new KeymapRegistry();
@@ -67,7 +72,8 @@ public class ModalEditor {
     private int anchorRow = 0;
     private int anchorCol = 0;
     private String yankRegister = "";
-    private String yankType = "char"; // "char" or "line"
+    private enum YankType { CHAR, LINE }
+    private YankType yankType = YankType.CHAR;
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
     private final StringBuilder commandBuffer = new StringBuilder();
     private String currentFilePath = null;
@@ -667,18 +673,13 @@ public class ModalEditor {
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
-            completionIndex.query(prefix, 10);
+            completionIndex.query(prefix, COMPLETION_MAX_RESULTS);
         if (items.isEmpty()) {
             dismissCompletion();
             setStatusMessage("補完候補なし: " + prefix);
             return;
         }
-        completionPrefix  = prefix;
-        completionItems   = items;
-        completionSelectedIdx = 0;
-        completionActive  = true;
-        completionIsWordMode = false;
-        syncCompletionCanvas();
+        activateCompletion(prefix, items, false);
     }
 
     /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
@@ -698,12 +699,7 @@ public class ModalEditor {
             setStatusMessage("補完候補なし: " + prefix);
             return;
         }
-        completionPrefix  = prefix;
-        completionItems   = items;
-        completionSelectedIdx = 0;
-        completionActive  = true;
-        completionIsWordMode = true;
-        syncCompletionCanvas();
+        activateCompletion(prefix, items, true);
     }
 
     /**
@@ -717,12 +713,23 @@ public class ModalEditor {
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
         java.util.Set<String> bufferWords = dev.javatexteditor.analysis.WordIndex.extractWords(buffer.getText());
         bufferWords.remove(prefix);
-        java.util.List<String> words = wordIndex.query(prefix, 10, bufferWords);
+        java.util.List<String> words = wordIndex.query(prefix, COMPLETION_MAX_RESULTS, bufferWords);
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = new java.util.ArrayList<>(words.size());
         for (String w : words) {
             items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));
         }
         return items;
+    }
+
+    /** 補完候補リストを有効化して canvas に反映する（4つのトリガ/再クエリ経路の共通末尾処理）。 */
+    private void activateCompletion(String prefix,
+            java.util.List<dev.javatexteditor.analysis.CompletionItem> items, boolean wordMode) {
+        completionPrefix      = prefix;
+        completionItems       = items;
+        completionSelectedIdx = 0;
+        completionActive      = true;
+        completionIsWordMode  = wordMode;
+        syncCompletionCanvas();
     }
 
     /** 補完ポップアップを閉じる。 */
@@ -753,16 +760,13 @@ public class ModalEditor {
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
-            completionIndex.query(prefix, 10);
+            completionIndex.query(prefix, COMPLETION_MAX_RESULTS);
         if (items.isEmpty()) {
             if (completionActive) dismissCompletion();
             return;
         }
-        completionPrefix      = prefix;
-        completionItems       = items;
-        completionSelectedIdx = 0;
-        completionActive      = true;
-        syncCompletionCanvas();
+        // このメソッドは冒頭の completionIsWordMode ガードにより wordMode=false の文脈でしか到達しない
+        activateCompletion(prefix, items, false);
     }
 
     private void recheckWordCompletion() {
@@ -780,11 +784,8 @@ public class ModalEditor {
             dismissCompletion();
             return;
         }
-        completionPrefix      = prefix;
-        completionItems       = items;
-        completionSelectedIdx = 0;
-        completionActive      = true;
-        syncCompletionCanvas();
+        // このメソッドに到達する時点で completionIsWordMode == true（recheckCompletion 経由）
+        activateCompletion(prefix, items, true);
     }
 
     /** 現在選択中の補完候補をバッファに適用する。 */
@@ -854,8 +855,8 @@ public class ModalEditor {
         if (cursorCol < line.length() && CLOSING_PAIRS.contains(line.charAt(cursorCol))) {
             cursorCol++;
         } else {
-            buffer.insert(offsetOfCursor(), "    ");
-            cursorCol += 4;
+            buffer.insert(offsetOfCursor(), INDENT_UNIT);
+            cursorCol += TAB_WIDTH;
         }
     }
 
@@ -891,7 +892,7 @@ public class ModalEditor {
         String currentLine = cursorRow < lines.length ? lines[cursorRow] : "";
         // 現在行がインデントのみ（空白だけ）の場合、インデントを1レベル下げてから } を挿入
         if (!currentLine.isEmpty() && currentLine.chars().allMatch(c -> c == ' ' || c == '\t')) {
-            int removeLen = Math.min(4, cursorCol);
+            int removeLen = Math.min(TAB_WIDTH, cursorCol);
             if (removeLen > 0) {
                 int lineStart = offsetAt(cursorRow, 0);
                 buffer.delete(lineStart, removeLen);
@@ -917,7 +918,7 @@ public class ModalEditor {
         // カーソル直前の非空白文字が '{' なら追加インデント
         String beforeCursor = currentLine.substring(0, Math.min(cursorCol, currentLine.length())).stripTrailing();
         if (!beforeCursor.isEmpty() && beforeCursor.charAt(beforeCursor.length() - 1) == '{') {
-            indent += "    ";
+            indent += INDENT_UNIT;
         }
 
         buffer.insert(offsetOfCursor(), "\n" + indent);
@@ -1062,6 +1063,16 @@ public class ModalEditor {
         commandBuffer.append("cd ").append(parentPart).append(name).append("/");
     }
 
+    /** バッファを差し替える際に、旧バッファ由来の検索・結果リスト状態を破棄する。
+     *  （grep結果 / ファイル名検索結果 / テキスト内検索マッチ）。
+     *  注意: inJdkSourceBuffer / cdSelectionActive はここでは触らない（呼び出し元ごとに扱いが異なるため）。 */
+    private void resetSearchAndResultState() {
+        grepResults = null;
+        fileNameResults = null;
+        searchMatches = List.of();
+        currentMatchIdx = -1;
+    }
+
     /**
      * 複数候補が見つかった場合、telescope オーバーレイではなく既存の
      * *grep* や jdk-source と同様の「疑似バッファ」としてエディタ画面上に候補一覧を表示する。
@@ -1087,10 +1098,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 1;
         cursorCol = 0;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         commandBuffer.setLength(0);
         mode = Mode.NORMAL;
         statusMessage = "cd候補: " + candidates.size() + "件 — Enter で選択、q でキャンセル";
@@ -1126,10 +1134,7 @@ public class ModalEditor {
         currentFilePath = cdSavedFilePath;
         cursorRow = cdSavedCursorRow;
         cursorCol = cdSavedCursorCol;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         cdSelectionActive = false;
         cdSavedBufferText = null;
         cdSavedFilePath = null;
@@ -1618,10 +1623,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 0;
         cursorCol = 0;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         statusMessage = "[新規バッファ]";
     }
 
@@ -1636,10 +1638,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 0;
         cursorCol = 0;
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         statusMessage = "チュートリアルを開きました — :q で終了、Ctrl+U で元のバッファに戻れます";
     }
 
@@ -1651,10 +1650,7 @@ public class ModalEditor {
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
-            grepResults = null;
-            fileNameResults = null;
-            searchMatches = List.of();
-            currentMatchIdx = -1;
+            resetSearchAndResultState();
             statusMessage = "\"" + path + "\" [新規ファイル]";
             return;
         }
@@ -1665,10 +1661,7 @@ public class ModalEditor {
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
-            grepResults = null;
-            fileNameResults = null;
-            searchMatches = List.of();
-            currentMatchIdx = -1;
+            resetSearchAndResultState();
             statusMessage = "\"" + path + "\" opened";
             if (onFileOpened != null) {
                 String name = Path.of(path).getFileName().toString();
@@ -1704,10 +1697,7 @@ public class ModalEditor {
         currentFilePath = snap.filePath();
         cursorRow = snap.row();
         cursorCol = snap.col();
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[新規バッファ]";
         statusMessage = label + " (" + (idx + 1) + "/" + bufferHistory.size() + ")";
     }
@@ -1855,7 +1845,7 @@ public class ModalEditor {
             case "scroll.half.up"   -> scrollPage(false, true);
             case "yank" -> {
                 yankRegister = getSelectedText();
-                yankType = "char";
+                yankType = YankType.CHAR;
                 // Vim 仕様: y 後はカーソルを選択開始位置に戻す
                 int startOffset = Math.min(offsetAt(anchorRow, anchorCol), offsetOfCursor());
                 moveCursorToOffset(startOffset);
@@ -1863,7 +1853,7 @@ public class ModalEditor {
             }
             case "delete" -> {
                 yankRegister = getSelectedText();
-                yankType = "char";
+                yankType = YankType.CHAR;
                 deleteSelected();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
@@ -1897,7 +1887,7 @@ public class ModalEditor {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
                 yankRegister = buildLineRangeText(r1, r2);
-                yankType = "line";
+                yankType = YankType.LINE;
                 cursorRow = r1;
                 cursorCol = 0;
                 mode = Mode.NORMAL;
@@ -1906,7 +1896,7 @@ public class ModalEditor {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
                 yankRegister = buildLineRangeText(r1, r2);
-                yankType = "line";
+                yankType = YankType.LINE;
                 deleteLineRange(r1, r2);
                 mode = Mode.NORMAL;
             }
@@ -2024,7 +2014,7 @@ public class ModalEditor {
         String[] lines = getLines();
         if (cursorRow >= lines.length) return;
         yankRegister = lines[cursorRow] + "\n";
-        yankType = "line";
+        yankType = YankType.LINE;
     }
 
     /** 現在行を削除してヤンクレジスタに保存する */
@@ -2088,7 +2078,7 @@ public class ModalEditor {
 
     private void pasteAfter() {
         if (yankRegister.isEmpty()) return;
-        if ("line".equals(yankType)) {
+        if (yankType == YankType.LINE) {
             pasteLineAfter();
         } else {
             pasteCharAfter();
@@ -2097,7 +2087,7 @@ public class ModalEditor {
 
     private void pasteBefore() {
         if (yankRegister.isEmpty()) return;
-        if ("line".equals(yankType)) {
+        if (yankType == YankType.LINE) {
             pasteLineBefore();
         } else {
             pasteCharBefore();
@@ -2619,7 +2609,7 @@ public class ModalEditor {
     public List<int[]> getSearchMatches() { return searchMatches; }
     public int getCurrentMatchIdx()       { return currentMatchIdx; }
     public String getYankRegister()    { return yankRegister; }
-    public String getYankType()        { return yankType; }
+    public String getYankType()        { return yankType == YankType.LINE ? "line" : "char"; }
 
     // プラグイン向けバッファ操作
     public int getLineCount() {
@@ -2898,10 +2888,7 @@ public class ModalEditor {
         cursorCol = origin.col();
         inJdkSourceBuffer = origin.filePath() != null && origin.filePath().startsWith("*jdk-source:");
         jdkSourceIsNative = inJdkSourceBuffer && looksLikeNativeJdkSource(origin.filePath(), origin.text());
-        grepResults = null;
-        fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        resetSearchAndResultState();
         String label = (origin.filePath() != null) ? "\"" + origin.filePath() + "\"" : "[新規バッファ]";
         setStatusMessage("← back to " + label + " line " + (origin.row() + 1));
     }
@@ -3272,32 +3259,11 @@ public class ModalEditor {
 
     // ---- Getter / Setter 自動生成 ----
 
-    /**
-     * カーソル行のフィールド宣言を解析する。
-     * 例: "    private int hp;" -> ["int", "hp"]
-     * 解析失敗時は null を返す。
-     */
+    /** カーソル行のフィールド宣言を解析する（純粋ロジックは GetterSetterGenerator 側）。 */
     private String[] parseFieldAtCursor() {
         String[] lines = getLines();
-        if (cursorRow >= lines.length) return null;
-        String line = lines[cursorRow].trim();
-        // 末尾のセミコロンを除去
-        if (!line.endsWith(";")) return null;
-        line = line.substring(0, line.length() - 1).trim();
-        // アクセス修飾子・static・final 等のトークンを除去
-        String[] tokens = line.split("\\s+");
-        // 型名とフィールド名は末尾2トークン
-        if (tokens.length < 2) return null;
-        String fieldName = tokens[tokens.length - 1];
-        String typeName  = tokens[tokens.length - 2];
-        // '=' による初期化があれば除去（例: "int x = 0"）
-        int eqIdx = typeName.indexOf('=');
-        if (eqIdx >= 0) return null; // 複雑な初期化式は対象外
-        int fnEq = fieldName.indexOf('=');
-        if (fnEq >= 0) fieldName = fieldName.substring(0, fnEq).trim();
-        // 配列型（int[] や int[][]）はそのまま許容
-        if (!fieldName.matches("[a-zA-Z_$][a-zA-Z0-9_$]*")) return null;
-        return new String[]{typeName, fieldName};
+        String line = cursorRow < lines.length ? lines[cursorRow] : "";
+        return GetterSetterGenerator.parseFieldDeclaration(line);
     }
 
     private String capitalize(String s) {
@@ -3312,10 +3278,8 @@ public class ModalEditor {
         String type = field[0];
         String name = field[1];
         String prefix = type.equals("boolean") ? "is" : "get";
-        String indent = detectIndent();
-        String method = "\n" + indent + "public " + type + " " + prefix + capitalize(name) + "() {\n"
-                      + indent + indent + "return " + name + ";\n"
-                      + indent + "}\n";
+        String method = GetterSetterGenerator.buildGetter(type, name,
+                GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(method);
         statusMessage = prefix + capitalize(name) + "() を生成しました";
         syncCanvas();
@@ -3327,10 +3291,8 @@ public class ModalEditor {
         if (field == null) { statusMessage = "Setter: フィールド宣言が見つかりません"; syncCanvas(); return; }
         String type = field[0];
         String name = field[1];
-        String indent = detectIndent();
-        String method = "\n" + indent + "public void set" + capitalize(name) + "(" + type + " " + name + ") {\n"
-                      + indent + indent + "this." + name + " = " + name + ";\n"
-                      + indent + "}\n";
+        String method = GetterSetterGenerator.buildSetter(type, name,
+                GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(method);
         statusMessage = "set" + capitalize(name) + "() を生成しました";
         syncCanvas();
@@ -3343,13 +3305,8 @@ public class ModalEditor {
         String type = field[0];
         String name = field[1];
         String prefix = type.equals("boolean") ? "is" : "get";
-        String indent = detectIndent();
-        String methods = "\n" + indent + "public " + type + " " + prefix + capitalize(name) + "() {\n"
-                       + indent + indent + "return " + name + ";\n"
-                       + indent + "}\n"
-                       + "\n" + indent + "public void set" + capitalize(name) + "(" + type + " " + name + ") {\n"
-                       + indent + indent + "this." + name + " = " + name + ";\n"
-                       + indent + "}\n";
+        String methods = GetterSetterGenerator.buildGetterAndSetter(type, name,
+                GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(methods);
         statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() を生成しました";
         syncCanvas();
@@ -3485,16 +3442,6 @@ public class ModalEditor {
         }
         cursorRow = row;
         cursorCol = Math.max(0, col - 1);
-    }
-
-    /** ファイル内の最初のコードインデント（スペースかタブ）を検出する。 */
-    private String detectIndent() {
-        for (String line : getLines()) {
-            if (line.startsWith("\t")) return "\t";
-            if (line.startsWith("    ")) return "    ";
-            if (line.startsWith("  ")) return "  ";
-        }
-        return "    ";
     }
 
     /** カーソル位置の Java 識別子（単語）を返す。識別子がなければ空文字列。 */

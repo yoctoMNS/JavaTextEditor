@@ -145,20 +145,9 @@ public class AutoImportHandler {
      * @return 削除したなら true、対象が見つからなかったなら false
      */
     public boolean removeImport(String fqn, PieceTable buffer) {
-        String importLine = "import " + fqn + ";";
-        String source = buffer.getText();
-        String[] lines = source.split("\n", -1);
-
-        int offset = 0;
-        for (String line : lines) {
-            if (line.stripLeading().equals(importLine)) {
-                buffer.delete(offset, line.length() + 1); // +1 for '\n'
-                ensureBlankLineAfterImports(buffer);
-                return true;
-            }
-            offset += line.length() + 1;
-        }
-        return false;
+        boolean removed = deleteImportLine(fqn, buffer);
+        if (removed) ensureBlankLineAfterImports(buffer);
+        return removed;
     }
 
     /**
@@ -207,24 +196,29 @@ public class AutoImportHandler {
         List<String> unused = findUnusedImports(buffer.getText());
         List<String> removed = new ArrayList<>();
         for (String fqn : unused) {
-            String importLine = "import " + fqn + ";";
-            String source = buffer.getText();
-            String[] lines = source.split("\n", -1);
-            int offset = 0;
-            for (String line : lines) {
-                if (line.stripLeading().equals(importLine)) {
-                    buffer.delete(offset, line.length() + 1);
-                    removed.add(fqn);
-                    break;
-                }
-                offset += line.length() + 1;
-            }
+            if (deleteImportLine(fqn, buffer)) removed.add(fqn);
         }
         ensureBlankLineAfterImports(buffer);
         return List.copyOf(removed);
     }
 
     // ----- private helpers -----
+
+    /** buffer から "import <fqn>;" に一致する最初の行を削除する。
+     *  @return 削除したら true、見つからなければ false */
+    private static boolean deleteImportLine(String fqn, PieceTable buffer) {
+        String importLine = "import " + fqn + ";";
+        String[] lines = buffer.getText().split("\n", -1);
+        int offset = 0;
+        for (String line : lines) {
+            if (line.stripLeading().equals(importLine)) {
+                buffer.delete(offset, line.length() + 1); // +1 for '\n'
+                return true;
+            }
+            offset += line.length() + 1;
+        }
+        return false;
+    }
 
     /**
      * import ブロックの直後に宣言文が続く場合、間に1行の空行を確保する。

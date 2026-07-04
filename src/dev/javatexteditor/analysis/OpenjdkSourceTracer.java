@@ -401,19 +401,9 @@ public class OpenjdkSourceTracer {
 
     /** lib/openjdk-native/ ディレクトリを探す（findBundledSrcZip と同じ探索ロジック）。 */
     private static Optional<Path> findNativeSrcDir() {
-        try {
-            var url = OpenjdkSourceTracer.class.getProtectionDomain().getCodeSource().getLocation();
-            if (url != null) {
-                Path codeLocation = Paths.get(url.toURI());
-                Path dir = Files.isDirectory(codeLocation) ? codeLocation : codeLocation.getParent();
-                for (int i = 0; i < 4; i++) {
-                    if (dir == null) break;
-                    Path candidate = dir.resolve("lib/openjdk-native");
-                    if (Files.isDirectory(candidate)) return Optional.of(candidate);
-                    dir = dir.getParent();
-                }
-            }
-        } catch (Exception ignored) {}
+        Optional<Path> found = CodeSourceLocator.findUpward(
+            OpenjdkSourceTracer.class, "lib/openjdk-native", 4, Files::isDirectory);
+        if (found.isPresent()) return found;
         Path fromCwd = Paths.get("lib", "openjdk-native");
         if (Files.isDirectory(fromCwd)) return Optional.of(fromCwd.toAbsolutePath());
         return Optional.empty();
@@ -424,20 +414,9 @@ public class OpenjdkSourceTracer {
      * 実行形態（クラスパス直接 / jar）に関わらず動作する。
      */
     private static Optional<Path> findBundledSrcZip() {
-        try {
-            // クラスファイルの URL から場所を特定
-            var url = OpenjdkSourceTracer.class.getProtectionDomain().getCodeSource().getLocation();
-            if (url == null) return Optional.empty();
-            Path codeLocation = Paths.get(url.toURI());
-            // build/ や .jar が起点 → 親を遡って lib/src.zip を探す
-            Path dir = Files.isDirectory(codeLocation) ? codeLocation : codeLocation.getParent();
-            for (int i = 0; i < 4; i++) {
-                if (dir == null) break;
-                Path candidate = dir.resolve("lib/src.zip");
-                if (Files.exists(candidate)) return Optional.of(candidate);
-                dir = dir.getParent();
-            }
-        } catch (Exception ignored) {}
+        Optional<Path> found = CodeSourceLocator.findUpward(
+            OpenjdkSourceTracer.class, "lib/src.zip", 4, Files::exists);
+        if (found.isPresent()) return found;
         // カレントディレクトリからも試す
         Path fromCwd = Paths.get("lib", "src.zip");
         if (Files.exists(fromCwd)) return Optional.of(fromCwd.toAbsolutePath());
