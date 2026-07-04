@@ -49,6 +49,12 @@ public class ModalEditor {
     private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
     private enum FileSearchType { NAME, GREP }
 
+    /** ソフトタブのインデント幅（スペース数）。 */
+    private static final int TAB_WIDTH = 4;
+    private static final String INDENT_UNIT = " ".repeat(TAB_WIDTH);
+    /** 補完ポップアップに出す最大候補数（Ctrl+Space / Alt+/ 共通）。 */
+    private static final int COMPLETION_MAX_RESULTS = 10;
+
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
     private final KeymapRegistry keymap = new KeymapRegistry();
@@ -666,7 +672,7 @@ public class ModalEditor {
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
-            completionIndex.query(prefix, 10);
+            completionIndex.query(prefix, COMPLETION_MAX_RESULTS);
         if (items.isEmpty()) {
             dismissCompletion();
             setStatusMessage("補完候補なし: " + prefix);
@@ -706,7 +712,7 @@ public class ModalEditor {
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
         java.util.Set<String> bufferWords = dev.javatexteditor.analysis.WordIndex.extractWords(buffer.getText());
         bufferWords.remove(prefix);
-        java.util.List<String> words = wordIndex.query(prefix, 10, bufferWords);
+        java.util.List<String> words = wordIndex.query(prefix, COMPLETION_MAX_RESULTS, bufferWords);
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = new java.util.ArrayList<>(words.size());
         for (String w : words) {
             items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));
@@ -753,7 +759,7 @@ public class ModalEditor {
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
-            completionIndex.query(prefix, 10);
+            completionIndex.query(prefix, COMPLETION_MAX_RESULTS);
         if (items.isEmpty()) {
             if (completionActive) dismissCompletion();
             return;
@@ -848,8 +854,8 @@ public class ModalEditor {
         if (cursorCol < line.length() && CLOSING_PAIRS.contains(line.charAt(cursorCol))) {
             cursorCol++;
         } else {
-            buffer.insert(offsetOfCursor(), "    ");
-            cursorCol += 4;
+            buffer.insert(offsetOfCursor(), INDENT_UNIT);
+            cursorCol += TAB_WIDTH;
         }
     }
 
@@ -885,7 +891,7 @@ public class ModalEditor {
         String currentLine = cursorRow < lines.length ? lines[cursorRow] : "";
         // 現在行がインデントのみ（空白だけ）の場合、インデントを1レベル下げてから } を挿入
         if (!currentLine.isEmpty() && currentLine.chars().allMatch(c -> c == ' ' || c == '\t')) {
-            int removeLen = Math.min(4, cursorCol);
+            int removeLen = Math.min(TAB_WIDTH, cursorCol);
             if (removeLen > 0) {
                 int lineStart = offsetAt(cursorRow, 0);
                 buffer.delete(lineStart, removeLen);
@@ -911,7 +917,7 @@ public class ModalEditor {
         // カーソル直前の非空白文字が '{' なら追加インデント
         String beforeCursor = currentLine.substring(0, Math.min(cursorCol, currentLine.length())).stripTrailing();
         if (!beforeCursor.isEmpty() && beforeCursor.charAt(beforeCursor.length() - 1) == '{') {
-            indent += "    ";
+            indent += INDENT_UNIT;
         }
 
         buffer.insert(offsetOfCursor(), "\n" + indent);
