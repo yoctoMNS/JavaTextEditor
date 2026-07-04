@@ -8,7 +8,6 @@ import dev.javatexteditor.analysis.JdkTypeInfo;
 import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
-import dev.javatexteditor.buffer.PieceTable;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
