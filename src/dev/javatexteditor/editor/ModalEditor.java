@@ -672,12 +672,7 @@ public class ModalEditor {
             setStatusMessage("補完候補なし: " + prefix);
             return;
         }
-        completionPrefix  = prefix;
-        completionItems   = items;
-        completionSelectedIdx = 0;
-        completionActive  = true;
-        completionIsWordMode = false;
-        syncCompletionCanvas();
+        activateCompletion(prefix, items, false);
     }
 
     /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
@@ -697,12 +692,7 @@ public class ModalEditor {
             setStatusMessage("補完候補なし: " + prefix);
             return;
         }
-        completionPrefix  = prefix;
-        completionItems   = items;
-        completionSelectedIdx = 0;
-        completionActive  = true;
-        completionIsWordMode = true;
-        syncCompletionCanvas();
+        activateCompletion(prefix, items, true);
     }
 
     /**
@@ -722,6 +712,17 @@ public class ModalEditor {
             items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));
         }
         return items;
+    }
+
+    /** 補完候補リストを有効化して canvas に反映する（4つのトリガ/再クエリ経路の共通末尾処理）。 */
+    private void activateCompletion(String prefix,
+            java.util.List<dev.javatexteditor.analysis.CompletionItem> items, boolean wordMode) {
+        completionPrefix      = prefix;
+        completionItems       = items;
+        completionSelectedIdx = 0;
+        completionActive      = true;
+        completionIsWordMode  = wordMode;
+        syncCompletionCanvas();
     }
 
     /** 補完ポップアップを閉じる。 */
@@ -757,11 +758,8 @@ public class ModalEditor {
             if (completionActive) dismissCompletion();
             return;
         }
-        completionPrefix      = prefix;
-        completionItems       = items;
-        completionSelectedIdx = 0;
-        completionActive      = true;
-        syncCompletionCanvas();
+        // このメソッドは冒頭の completionIsWordMode ガードにより wordMode=false の文脈でしか到達しない
+        activateCompletion(prefix, items, false);
     }
 
     private void recheckWordCompletion() {
@@ -779,11 +777,8 @@ public class ModalEditor {
             dismissCompletion();
             return;
         }
-        completionPrefix      = prefix;
-        completionItems       = items;
-        completionSelectedIdx = 0;
-        completionActive      = true;
-        syncCompletionCanvas();
+        // このメソッドに到達する時点で completionIsWordMode == true（recheckCompletion 経由）
+        activateCompletion(prefix, items, true);
     }
 
     /** 現在選択中の補完候補をバッファに適用する。 */
