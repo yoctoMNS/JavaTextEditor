@@ -673,19 +673,8 @@ public class Main {
     }
 
     private static Path resolveScriptDir() {
-        try {
-            var url = Main.class.getProtectionDomain().getCodeSource().getLocation();
-            if (url != null) {
-                Path code = Paths.get(url.toURI());
-                Path dir = Files.isDirectory(code) ? code : code.getParent();
-                for (int i = 0; i < 4; i++) {
-                    if (dir == null) break;
-                    Path candidate = dir.resolve("scripts");
-                    if (Files.isDirectory(candidate)) return candidate;
-                    dir = dir.getParent();
-                }
-            }
-        } catch (Exception ignored) {}
-        return Path.of("scripts");
+        return dev.javatexteditor.analysis.CodeSourceLocator
+                .findUpward(Main.class, "scripts", 4, Files::isDirectory)
+                .orElse(Path.of("scripts"));
     }
 }
