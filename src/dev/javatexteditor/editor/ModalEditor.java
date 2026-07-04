@@ -72,7 +72,8 @@ public class ModalEditor {
     private int anchorRow = 0;
     private int anchorCol = 0;
     private String yankRegister = "";
-    private String yankType = "char"; // "char" or "line"
+    private enum YankType { CHAR, LINE }
+    private YankType yankType = YankType.CHAR;
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
     private final StringBuilder commandBuffer = new StringBuilder();
     private String currentFilePath = null;
@@ -1844,7 +1845,7 @@ public class ModalEditor {
             case "scroll.half.up"   -> scrollPage(false, true);
             case "yank" -> {
                 yankRegister = getSelectedText();
-                yankType = "char";
+                yankType = YankType.CHAR;
                 // Vim 仕様: y 後はカーソルを選択開始位置に戻す
                 int startOffset = Math.min(offsetAt(anchorRow, anchorCol), offsetOfCursor());
                 moveCursorToOffset(startOffset);
@@ -1852,7 +1853,7 @@ public class ModalEditor {
             }
             case "delete" -> {
                 yankRegister = getSelectedText();
-                yankType = "char";
+                yankType = YankType.CHAR;
                 deleteSelected();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
@@ -1886,7 +1887,7 @@ public class ModalEditor {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
                 yankRegister = buildLineRangeText(r1, r2);
-                yankType = "line";
+                yankType = YankType.LINE;
                 cursorRow = r1;
                 cursorCol = 0;
                 mode = Mode.NORMAL;
@@ -1895,7 +1896,7 @@ public class ModalEditor {
                 int r1 = Math.min(anchorRow, cursorRow);
                 int r2 = Math.max(anchorRow, cursorRow);
                 yankRegister = buildLineRangeText(r1, r2);
-                yankType = "line";
+                yankType = YankType.LINE;
                 deleteLineRange(r1, r2);
                 mode = Mode.NORMAL;
             }
@@ -2013,7 +2014,7 @@ public class ModalEditor {
         String[] lines = getLines();
         if (cursorRow >= lines.length) return;
         yankRegister = lines[cursorRow] + "\n";
-        yankType = "line";
+        yankType = YankType.LINE;
     }
 
     /** 現在行を削除してヤンクレジスタに保存する */
@@ -2077,7 +2078,7 @@ public class ModalEditor {
 
     private void pasteAfter() {
         if (yankRegister.isEmpty()) return;
-        if ("line".equals(yankType)) {
+        if (yankType == YankType.LINE) {
             pasteLineAfter();
         } else {
             pasteCharAfter();
@@ -2086,7 +2087,7 @@ public class ModalEditor {
 
     private void pasteBefore() {
         if (yankRegister.isEmpty()) return;
-        if ("line".equals(yankType)) {
+        if (yankType == YankType.LINE) {
             pasteLineBefore();
         } else {
             pasteCharBefore();
@@ -2608,7 +2609,7 @@ public class ModalEditor {
     public List<int[]> getSearchMatches() { return searchMatches; }
     public int getCurrentMatchIdx()       { return currentMatchIdx; }
     public String getYankRegister()    { return yankRegister; }
-    public String getYankType()        { return yankType; }
+    public String getYankType()        { return yankType == YankType.LINE ? "line" : "char"; }
 
     // プラグイン向けバッファ操作
     public int getLineCount() {
