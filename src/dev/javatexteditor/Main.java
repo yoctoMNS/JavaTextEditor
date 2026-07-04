@@ -174,9 +174,9 @@ public class Main {
 
     /**
      * 指定ディスプレイの物理解像度（OSのHiDPIスケーリングも加味）に応じて、
-     * フォントセルサイズをベースラインから比例拡大する。縮小はしない（下限は等倍）。
+     * ベースラインからの拡大率を算出する。縮小はしない（下限は等倍）。
      */
-    private static int[] computeInitialCellSize(GraphicsConfiguration gc) {
+    private static double computeDisplayScale(GraphicsConfiguration gc) {
         double scaleX;
         try {
             scaleX = gc.getDefaultTransform().getScaleX();
@@ -185,10 +185,29 @@ public class Main {
         }
         double physicalWidthPx = gc.getBounds().width * scaleX;
         double scale = physicalWidthPx / BASELINE_SCREEN_WIDTH_PX;
-        scale = Math.max(1.0, Math.min(2.5, scale));
+        return Math.max(1.0, Math.min(2.5, scale));
+    }
+
+    private static int[] computeInitialCellSize(double scale) {
         int w = (int) Math.round(BitmapFont10x20.BASE_CELL_W * scale);
         int h = (int) Math.round(BitmapFont10x20.BASE_CELL_H * scale);
         return new int[] { w, h };
+    }
+
+    /**
+     * フォントセルサイズと同じ倍率でウィンドウサイズも拡大する。
+     * これをしないと、文字は大きくなるのに表示行数・桁数の見た目上の割合が変わり、
+     * スプラッシュ画面やステータスラインがウィンドウ下端からはみ出す。
+     * 画面の利用可能領域（タスクバー等を除く）を超えないようクランプする。
+     */
+    private static int[] computeInitialWindowSize(GraphicsConfiguration gc, double scale) {
+        int w = (int) Math.round(WINDOW_WIDTH * scale);
+        int h = (int) Math.round(WINDOW_HEIGHT * scale);
+        Rectangle screen = gc.getBounds();
+        java.awt.Insets insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
+        int maxW = screen.width  - insets.left - insets.right;
+        int maxH = screen.height - insets.top  - insets.bottom;
+        return new int[] { Math.min(w, maxW), Math.min(h, maxH) };
     }
 
     private static GraphicsConfiguration detectMouseScreen() {
@@ -422,9 +441,11 @@ public class Main {
         WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
 
         final GraphicsConfiguration targetScreen = detectMouseScreen();
-        int[] cellSize = computeInitialCellSize(targetScreen);
+        double displayScale = computeDisplayScale(targetScreen);
+        int[] cellSize = computeInitialCellSize(displayScale);
         initialCellW = cellSize[0];
         initialCellH = cellSize[1];
+        int[] windowSize = computeInitialWindowSize(targetScreen, displayScale);
         final String text = initialText;
         final String path = initialPath;
         final boolean splash = (initialPath == null);
@@ -432,7 +453,7 @@ public class Main {
         SwingUtilities.invokeLater(() -> {
             JFrame frame = new JFrame(buildTitle(WD_MANAGER.getWorkingDirectory()), targetScreen);
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+            frame.setSize(windowSize[0], windowSize[1]);
             centerOnScreen(frame, targetScreen);
 
             Leaf firstLeaf = createLeaf(text, path);
