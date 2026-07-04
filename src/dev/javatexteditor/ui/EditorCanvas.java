@@ -18,6 +18,9 @@ import java.util.HashMap;
 public class EditorCanvas extends JPanel {
 
     private String text = "";
+    // text の行分割結果のキャッシュ。setText() でのみ再計算し、
+    // paintComponent 内で毎回 text.split() を呼ぶコスト（数十万行規模のファイルで顕著）を避ける。
+    private String[] cachedLines = { "" };
     private int cursorRow = 0;
     private int cursorCol = 0;
     private boolean insertMode = false;
@@ -86,7 +89,15 @@ public class EditorCanvas extends JPanel {
     // ステータスラインのウォーキングパーソンアニメーション
     // -------------------------------------------------------------------------
     private final long  animStartMs = System.currentTimeMillis();
-    private final Timer animTimer   = new Timer(40, e -> repaint());
+    // アニメーションは毎ティック画面全体を repaint() すると、
+    // 4K等の大画面・大規模ファイルで本文全体の再描画（行分割・グリフ描画）が
+    // 25fpsで走ってしまい重くなるため、ステータス行の帯だけを再描画対象にする。
+    private final Timer animTimer   = new Timer(40, e -> repaintStatusLine());
+
+    private void repaintStatusLine() {
+        int lh = (cachedLineHeight > 0) ? cachedLineHeight : 20;
+        repaint(0, Math.max(0, getHeight() - lh - 4), getWidth(), lh + 4);
+    }
 
     public EditorCanvas() {
         animTimer.start();
@@ -118,7 +129,11 @@ public class EditorCanvas extends JPanel {
         }
     }
 
-    public void setText(String text) { this.text = text; repaint(); }
+    public void setText(String text) {
+        this.text = text;
+        this.cachedLines = text.split("\n", -1);
+        repaint();
+    }
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
     public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
     public void setTheme(Theme theme) { this.theme = theme; invalidateGlyphCache(); repaint(); }
@@ -340,6 +355,19 @@ public class EditorCanvas extends JPanel {
         int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
         int scrollOffsetX = scrollCol * charWidth;
 
+        // 再描画範囲がステータス行の帯に収まっている場合（歩行アニメーションのティック）は、
+        // 本文（数十万行規模になりうる）の再描画を丸ごとスキップし、ステータス行だけ塗り直す。
+        Rectangle clip = g2.getClipBounds();
+        boolean statusLineOnly = clip != null && !showSplash && !telescopeActive
+            && !(completionActive && !completionLabels.isEmpty())
+            && clip.y >= getHeight() - lineHeight - 8;
+        if (statusLineOnly) {
+            g2.setColor(theme.background);
+            g2.fillRect(clip.x, clip.y, clip.width, clip.height);
+            drawStatusLine(g2, lineHeight);
+            return;
+        }
+
         // 1. 背景を塗る
         g2.setColor(theme.background);
         g2.fillRect(0, 0, getWidth(), getHeight());
@@ -353,19 +381,19 @@ public class EditorCanvas extends JPanel {
         }
 
         // 1.5 選択ハイライト（VISUALモード時）
+        String[] lines = cachedLines;
         if (visualMode && selAnchorRow >= 0) {
-            drawSelectionHighlight(g2, text.split("\n", -1),
+            drawSelectionHighlight(g2, lines,
                 charWidth, lineHeight, scrollOffsetX, gutterWidth);
         }
 
         // 1.6 検索ハイライト（/pattern、*、# による検索結果）
         if (!searchHighlights.isEmpty()) {
-            drawSearchHighlights(g2, text.split("\n", -1), charWidth, lineHeight, scrollOffsetX, gutterWidth);
+            drawSearchHighlights(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth);
         }
 
         // 2. 表示行範囲（scrollRow 〜 scrollRow+visibleRows）のみ描画する
         g2.setColor(theme.foreground);
-        String[] lines = text.split("\n", -1);
         int visibleRows = computeVisibleRows(lineHeight);
         int lastRow = Math.min(lines.length, scrollRow + visibleRows);
         for (int row = scrollRow; row < lastRow; row++) {
@@ -497,7 +525,7 @@ public class EditorCanvas extends JPanel {
         int popupH = completionLabels.size() * fh + pad * 2;
 
         // カーソル行の文字列でセルオフセットを計算（全角対応）
-        String[] lines = text.split("\n", -1);
+        String[] lines = cachedLines;
         String anchorLine = (completionAnchorRow < lines.length) ? lines[completionAnchorRow] : "";
         int cellOffset = cellsForCol(anchorLine, completionAnchorCol);
 
@@ -619,8 +647,7 @@ public class EditorCanvas extends JPanel {
     /** ガター列に診断マーカー（E / W）を描画する */
     private void drawGutter(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
         int visibleRows = computeVisibleRows(lineHeight);
-        int lastRow = Math.min(
-            text.split("\n", -1).length, scrollRow + visibleRows);
+        int lastRow = Math.min(cachedLines.length, scrollRow + visibleRows);
 
         // ガター背景（テーマ背景より少し暗く）
         g2.setColor(theme.background.darker());
