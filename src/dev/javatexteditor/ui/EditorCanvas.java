@@ -202,6 +202,18 @@ public class EditorCanvas extends JPanel {
     public int getCellW() { return cellW; }
     public int getCellH() { return cellH; }
 
+    /**
+     * 起動時に一度だけ、絶対値でセルサイズを設定する（4K等の高解像度ディスプレイでフォントが
+     * 小さすぎるのを防ぐため）。以後はユーザーが Ctrl+Shift+矢印で自由に変更できる。
+     */
+    public void setInitialCellSize(int w, int h) {
+        cellW = Math.max(5, Math.min(40, w));
+        cellH = Math.max(8, Math.min(80, h));
+        invalidateGlyphCache();
+        cachedCharWidth = cellW;
+        cachedLineHeight = cellH;
+    }
+
     private void invalidateGlyphCache() {
         glyphCacheFg.clear();
         glyphCacheBg.clear();

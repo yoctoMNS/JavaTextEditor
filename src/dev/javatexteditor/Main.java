@@ -8,6 +8,7 @@ import dev.javatexteditor.analysis.ImportSuggester;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.SourceAnalyzer;
 import dev.javatexteditor.editor.ModalEditor;
+import dev.javatexteditor.ui.BitmapFont10x20;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.Theme;
 import java.awt.Color;
@@ -162,6 +163,34 @@ public class Main {
     // 画面操作
     // -------------------------------------------------------------------------
 
+    // 起動時にマウスカーソルのあるディスプレイの解像度から算出する初期フォントセルサイズ
+    // （4K等の高解像度ディスプレイでデフォルトフォントが小さすぎるのを防ぐ）。
+    // 以後はユーザーが Ctrl+Shift+矢印で自由に変更できる。
+    private static int initialCellW = BitmapFont10x20.BASE_CELL_W;
+    private static int initialCellH = BitmapFont10x20.BASE_CELL_H;
+
+    /** design baseline: フルHD(1920px幅)でBASE_CELL_W/Hがちょうど良い大きさになる想定 */
+    private static final double BASELINE_SCREEN_WIDTH_PX = 1920.0;
+
+    /**
+     * 指定ディスプレイの物理解像度（OSのHiDPIスケーリングも加味）に応じて、
+     * フォントセルサイズをベースラインから比例拡大する。縮小はしない（下限は等倍）。
+     */
+    private static int[] computeInitialCellSize(GraphicsConfiguration gc) {
+        double scaleX;
+        try {
+            scaleX = gc.getDefaultTransform().getScaleX();
+        } catch (Exception e) {
+            scaleX = 1.0;
+        }
+        double physicalWidthPx = gc.getBounds().width * scaleX;
+        double scale = physicalWidthPx / BASELINE_SCREEN_WIDTH_PX;
+        scale = Math.max(1.0, Math.min(2.5, scale));
+        int w = (int) Math.round(BitmapFont10x20.BASE_CELL_W * scale);
+        int h = (int) Math.round(BitmapFont10x20.BASE_CELL_H * scale);
+        return new int[] { w, h };
+    }
+
     private static GraphicsConfiguration detectMouseScreen() {
         try {
             Point mouse = MouseInfo.getPointerInfo().getLocation();
@@ -269,6 +298,7 @@ public class Main {
     /** 新しいリーフを生成してコールバックを設定する。 */
     private static Leaf createLeaf(String text, String path) {
         EditorCanvas canvas = new EditorCanvas();
+        canvas.setInitialCellSize(initialCellW, initialCellH);
         canvas.setTheme(Theme.LIGHT_MODE);
         ModalEditor editor = new ModalEditor(text, path, canvas);
         setupCompileAnalysis(editor, canvas);
@@ -392,6 +422,9 @@ public class Main {
         WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
 
         final GraphicsConfiguration targetScreen = detectMouseScreen();
+        int[] cellSize = computeInitialCellSize(targetScreen);
+        initialCellW = cellSize[0];
+        initialCellH = cellSize[1];
         final String text = initialText;
         final String path = initialPath;
         final boolean splash = (initialPath == null);
