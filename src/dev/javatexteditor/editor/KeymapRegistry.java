@@ -224,5 +224,10 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('d', "delete"), "delete");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofCode(KeyEvent.VK_V, KeyEvent.CTRL_DOWN_MASK, "enter.normal"), "enter.normal");
+        // 矩形挿入・変更・置換（I=左端挿入, A=右端挿入, c=変更, r=文字置換）
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('I', "block.insert.before"), "block.insert.before");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('A', "block.insert.after"),  "block.insert.after");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('c', "block.change"),       "block.change");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('r', "block.replace.pending"), "block.replace.pending");
     }
 }

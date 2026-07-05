@@ -70,6 +70,12 @@ public class ModalEditorTest {
         testVisualBlockYank();
         testVisualBlockDelete();
         testVisualBlockPasteNewLines();
+        testVisualBlockInsertBefore();
+        testVisualBlockInsertAfter();
+        testVisualBlockInsertSkipsShortLineForI();
+        testVisualBlockChange();
+        testVisualBlockReplace();
+        testVisualBlockInsertAbortedByNewline();
 
         // 単語・行・ファイル移動
         testWordForwardNormal();
@@ -684,6 +690,91 @@ public class ModalEditorTest {
         // row1("cd")は列1に挿入 → "cad"。row2は新規生成され、列1まで空白埋め後に挿入 → " c"
         check("新規行が自動生成され末尾行に貼り付く",
             ed.getText().equals("ab\ncad\n c"));
+    }
+
+    static void testVisualBlockInsertBefore() {
+        System.out.println("[VISUAL BLOCK: I で左端に矩形挿入]");
+        ModalEditor ed = new ModalEditor("abc\ndef\nghi");
+        pressCtrl(ed, KeyEvent.VK_V, '\0'); // アンカー=(0,0)
+        pressKey(ed, 'l');                  // カーソル=(0,1)
+        pressKey(ed, 'j');
+        pressKey(ed, 'j');                  // カーソル=(2,1)
+        pressKey(ed, 'I');
+        check("I でINSERTモードに", ed.isInsertMode());
+        pressKey(ed, 'X');
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        check("全行の左端に複製挿入される", ed.getText().equals("Xabc\nXdef\nXghi"));
+    }
+
+    static void testVisualBlockInsertAfter() {
+        System.out.println("[VISUAL BLOCK: A で右端に矩形挿入]");
+        ModalEditor ed = new ModalEditor("abc\ndef\nghi");
+        pressCtrl(ed, KeyEvent.VK_V, '\0'); // アンカー=(0,0)
+        pressKey(ed, 'l');                  // カーソル=(0,1)
+        pressKey(ed, 'j');
+        pressKey(ed, 'j');                  // カーソル=(2,1)
+        pressKey(ed, 'A');
+        check("A でINSERTモードに", ed.isInsertMode());
+        pressKey(ed, 'Y');
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        check("全行の右端(選択列+1)に複製挿入される", ed.getText().equals("abYc\ndeYf\nghYi"));
+    }
+
+    static void testVisualBlockInsertSkipsShortLineForI() {
+        System.out.println("[VISUAL BLOCK: I は列に届かない短い行をスキップする]");
+        // row1("x")は列2に届かないため、Iでは複製の対象から外れる（Aと違いパディングしない）
+        ModalEditor ed = new ModalEditor("abcde\nx\nfghij");
+        ed.setCursor(0, 2);
+        pressCtrl(ed, KeyEvent.VK_V, '\0'); // アンカー=(0,2)
+        ed.setCursor(2, 2);                 // カーソル=(2,2)（短い行を経由せず直接移動）
+        pressKey(ed, 'I');
+        check("I でINSERTモードに", ed.isInsertMode());
+        pressKey(ed, 'Z');
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        check("列が届かない短い行(row1)はスキップされ複製されない",
+            ed.getText().equals("abZcde\nx\nfgZhij"));
+    }
+
+    static void testVisualBlockChange() {
+        System.out.println("[VISUAL BLOCK: c で矩形変更]");
+        ModalEditor ed = new ModalEditor("abc\ndef\nghi");
+        pressCtrl(ed, KeyEvent.VK_V, '\0'); // アンカー=(0,0)
+        pressKey(ed, 'l');                  // カーソル=(0,1)
+        pressKey(ed, 'j');
+        pressKey(ed, 'j');                  // カーソル=(2,1)
+        pressKey(ed, 'c');
+        check("c でINSERTモードに", ed.isInsertMode());
+        check("矩形削除分がヤンクレジスタに保存される", ed.getYankRegister().equals("ab\nde\ngh"));
+        pressKey(ed, 'Q');
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        check("削除後の列位置に全行複製入力される", ed.getText().equals("Qc\nQf\nQi"));
+    }
+
+    static void testVisualBlockReplace() {
+        System.out.println("[VISUAL BLOCK: r で矩形置換]");
+        ModalEditor ed = new ModalEditor("abc\ndef\nghi");
+        pressCtrl(ed, KeyEvent.VK_V, '\0'); // アンカー=(0,0)
+        pressKey(ed, 'l');                  // カーソル=(0,1)
+        pressKey(ed, 'j');
+        pressKey(ed, 'j');                  // カーソル=(2,1)
+        pressKey(ed, 'r');
+        check("r 押下直後はまだ VISUAL BLOCK のまま(次の1文字待ち)", ed.isVisualBlockMode());
+        pressKey(ed, 'Z');
+        check("置換後 NORMAL に戻る", !ed.isVisualBlockMode());
+        check("矩形範囲の各文字が同じ文字に置換される", ed.getText().equals("ZZc\nZZf\nZZi"));
+    }
+
+    static void testVisualBlockInsertAbortedByNewline() {
+        System.out.println("[VISUAL BLOCK: 矩形挿入中にEnterで複製を諦める]");
+        ModalEditor ed = new ModalEditor("abc\ndef\nghi");
+        pressCtrl(ed, KeyEvent.VK_V, '\0'); // アンカー=(0,0)
+        pressKey(ed, 'j');
+        pressKey(ed, 'j');                  // カーソル=(2,0)
+        pressKey(ed, 'I');
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        check("Enterをまたぐと他行への複製をしない", ed.getText().equals("\nabc\ndef\nghi"));
+        check("NORMALに戻る", !ed.isInsertMode() && !ed.isVisualBlockMode());
     }
 
     // -------------------------------------------------------------------------
