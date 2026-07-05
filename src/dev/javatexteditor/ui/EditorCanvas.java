@@ -91,28 +91,83 @@ public class EditorCanvas extends JPanel {
     private final long  animStartMs = System.currentTimeMillis();
     // アニメーションは毎ティック画面全体を repaint() すると、
     // 4K等の大画面・大規模ファイルで本文全体の再描画（行分割・グリフ描画）が
-    // 25fpsで走ってしまい重くなるため、ステータス行の帯だけを再描画対象にする。
-    private final Timer animTimer   = new Timer(40, e -> repaintStatusLine());
+    // 30fpsで走ってしまい重くなるため、ステータス行の帯だけを再描画対象にする。
+    private static final int ANIM_FRAME_INTERVAL_MS = 1000 / 30; // 30fps
+    private final Timer animTimer = new Timer(ANIM_FRAME_INTERVAL_MS, e -> repaintStatusLine());
+    private boolean timerResolutionPinHeld = false;
 
     private void repaintStatusLine() {
         int lh = (cachedLineHeight > 0) ? cachedLineHeight : 20;
         repaint(0, Math.max(0, getHeight() - lh - 4), getWidth(), lh + 4);
     }
 
+    // -------------------------------------------------------------------------
+    // Windows タイマー分解能ピン留め
+    // -------------------------------------------------------------------------
+    // Windows では、いずれかのスレッドが短い Thread.sleep() を実行している間だけ
+    // JVM がシステムタイマー分解能を約1msに引き上げる（HotSpotのos::sleep実装）。
+    // そのため javax.swing.Timer（内部的に Object.wait を使う）は、キー入力や IME 処理で
+    // 短いスリープが発生している間だけ滑らかに動き、アイドル時は既定のタイマー分解能
+    // （数十ms単位）にジッターして「キー入力していないとアニメーションが滑らかにならない」
+    // という症状になっていた（Linux では発生しない。OS依存の既知のJVM挙動）。
+    // 対策として、エディタ画面が表示されている間だけ 1ms スリープを繰り返す
+    // 低優先度デーモンスレッドを立て、タイマー分解能を引き上げたままにする。
+    private static final Object TIMER_RESOLUTION_PIN_LOCK = new Object();
+    private static Thread timerResolutionPinThread = null;
+    private static int timerResolutionPinRefCount = 0;
+
+    private static void acquireTimerResolutionPin() {
+        synchronized (TIMER_RESOLUTION_PIN_LOCK) {
+            if (timerResolutionPinRefCount++ == 0) {
+                timerResolutionPinThread = new Thread(() -> {
+                    try {
+                        while (!Thread.currentThread().isInterrupted()) {
+                            Thread.sleep(1);
+                        }
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                }, "anim-timer-resolution-pin");
+                timerResolutionPinThread.setDaemon(true);
+                timerResolutionPinThread.setPriority(Thread.MIN_PRIORITY);
+                timerResolutionPinThread.start();
+            }
+        }
+    }
+
+    private static void releaseTimerResolutionPin() {
+        synchronized (TIMER_RESOLUTION_PIN_LOCK) {
+            if (--timerResolutionPinRefCount == 0 && timerResolutionPinThread != null) {
+                timerResolutionPinThread.interrupt();
+                timerResolutionPinThread = null;
+            }
+        }
+    }
+
     public EditorCanvas() {
         animTimer.start();
+        acquireTimerResolutionPin();
+        timerResolutionPinHeld = true;
     }
 
     @Override
     public void addNotify() {
         super.addNotify();
         animTimer.start();
+        if (!timerResolutionPinHeld) {
+            acquireTimerResolutionPin();
+            timerResolutionPinHeld = true;
+        }
     }
 
     @Override
     public void removeNotify() {
         super.removeNotify();
         animTimer.stop();
+        if (timerResolutionPinHeld) {
+            releaseTimerResolutionPin();
+            timerResolutionPinHeld = false;
+        }
     }
 
     /**
