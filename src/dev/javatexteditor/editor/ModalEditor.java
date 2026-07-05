@@ -33,6 +33,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -110,6 +116,11 @@ public class ModalEditor {
     private final ProjectSymbolResolver projectSymbolResolver = new ProjectSymbolResolver();
     // symbol-definition-navigation: "instanceVar.member" のレシーバ型推定（軽量ヒューリスティック）
     private final ReceiverTypeResolver receiverTypeResolver = new ReceiverTypeResolver();
+    // Shift+K (jdk.doc) のプロジェクト全体検索がEDTをフリーズさせないための上限時間。
+    // 作業ディレクトリが巨大（既定値がホームディレクトリになりうるため）だと
+    // ProjectSymbolResolver.resolve() の全文grepに時間がかかることがあるため、
+    // タイムアウトした場合は諦めて JDK 側の検索にフォールバックする。
+    private static final long PROJECT_SYMBOL_SEARCH_TIMEOUT_MS = 1500;
     // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
     private List<CompileDiagnostic> localDiagnostics = List.of();
     // ファイル名検索 / ファイル内容grep（\f / \g）
@@ -2893,6 +2904,28 @@ public class ModalEditor {
         setStatusMessage("← back to " + label + " line " + (origin.row() + 1));
     }
 
+    /**
+     * プロジェクト全体検索（{@link ProjectSymbolResolver}経由の全文grep）を
+     * {@link #PROJECT_SYMBOL_SEARCH_TIMEOUT_MS} で打ち切る。
+     * 作業ディレクトリの既定値はホームディレクトリになりうるため、巨大なディレクトリ配下では
+     * 検索に非常に時間がかかることがある。EDT 上で無制限に待つと Shift+K のたびに
+     * エディタ全体がフリーズしたように見えるため、タイムアウトしたら検索を諦めて
+     * （バックグラウンドの検索スレッドは走らせたままにして）呼び出し側の JDK 側フォールバックに委ねる。
+     */
+    private <T> Optional<T> withSearchTimeout(Supplier<Optional<T>> task) {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            Future<Optional<T>> future = executor.submit(task::get);
+            return future.get(PROJECT_SYMBOL_SEARCH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            return Optional.empty();
+        } catch (Exception e) {
+            return Optional.empty();
+        } finally {
+            executor.shutdown();
+        }
+    }
+
     private void lookupJdkDocAndJump(String bufferTextSnapshot) {
         String word = wordAtCursor();
         if (word.isEmpty()) {
@@ -2910,8 +2943,8 @@ public class ModalEditor {
                 return;
             }
 
-            Optional<ProjectSymbolResolver.SymbolLocation> loc = projectSymbolResolver.resolve(
-                getProjectRoot(), currentFilePath, bufferTextSnapshot, word);
+            Optional<ProjectSymbolResolver.SymbolLocation> loc = withSearchTimeout(() ->
+                projectSymbolResolver.resolve(getProjectRoot(), currentFilePath, bufferTextSnapshot, word));
             if (loc.isPresent()) {
                 jumpToSymbolLocation(loc.get(), word);
                 return;
@@ -3011,8 +3044,8 @@ public class ModalEditor {
      * 解決できた場合 true（ジャンプ済み）、できなければ false（呼び出し側は名前だけの検索にフォールバックする）。
      */
     private boolean tryResolveQualifiedMember(String receiver, String member, String bufferTextSnapshot) {
-        Optional<ProjectSymbolResolver.SymbolLocation> asStatic = projectSymbolResolver.resolveMemberInType(
-            getProjectRoot(), currentFilePath, bufferTextSnapshot, receiver, member);
+        Optional<ProjectSymbolResolver.SymbolLocation> asStatic = withSearchTimeout(() ->
+            projectSymbolResolver.resolveMemberInType(getProjectRoot(), currentFilePath, bufferTextSnapshot, receiver, member));
         if (asStatic.isPresent()) {
             jumpToSymbolLocation(asStatic.get(), member);
             return true;
@@ -3024,8 +3057,8 @@ public class ModalEditor {
         }
         String typeName = type.get();
 
-        Optional<ProjectSymbolResolver.SymbolLocation> viaType = projectSymbolResolver.resolveMemberInType(
-            getProjectRoot(), currentFilePath, bufferTextSnapshot, typeName, member);
+        Optional<ProjectSymbolResolver.SymbolLocation> viaType = withSearchTimeout(() ->
+            projectSymbolResolver.resolveMemberInType(getProjectRoot(), currentFilePath, bufferTextSnapshot, typeName, member));
         if (viaType.isPresent()) {
             jumpToSymbolLocation(viaType.get(), member);
             return true;
