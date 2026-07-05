@@ -227,10 +227,17 @@ public class AutoImportHandler {
     // ----- private helpers -----
 
     /**
-     * import ブロックの直後に宣言文が続く場合、間に1行の空行を確保する。
-     * すでに空行がある場合は何もしない。import が存在しない場合も何もしない。
+     * import ブロックの前後の空行を確保する。
+     * package 文と import ブロックの間、および import ブロックと後続の宣言
+     * （クラス宣言等）との間に、それぞれ1行の空行を確保する。
+     * すでに空行がある場合は何もしない。import・package が存在しない場合もその境界については何もしない。
      */
     private void ensureBlankLineAfterImports(PieceTable buffer) {
+        ensureBlankLineAfterImportBlock(buffer);
+        ensureBlankLineBeforeImportBlock(buffer);
+    }
+
+    private void ensureBlankLineAfterImportBlock(PieceTable buffer) {
         String source = buffer.getText();
         String[] lines = source.split("\n", -1);
 
@@ -251,6 +258,27 @@ public class AutoImportHandler {
             }
             buffer.insert(offset, "\n");
         }
+    }
+
+    private void ensureBlankLineBeforeImportBlock(PieceTable buffer) {
+        String source = buffer.getText();
+        String[] lines = source.split("\n", -1);
+
+        int packageLine = -1;
+        int firstImportLine = -1;
+        for (int i = 0; i < lines.length; i++) {
+            String trimmed = lines[i].stripLeading();
+            if (trimmed.startsWith("package ") && packageLine < 0) packageLine = i;
+            else if (trimmed.startsWith("import ") && firstImportLine < 0) firstImportLine = i;
+        }
+        if (packageLine < 0 || firstImportLine < 0) return;
+        if (firstImportLine != packageLine + 1) return; // 既に空行がある、または隣接していない
+
+        int offset = 0;
+        for (int i = 0; i <= packageLine; i++) {
+            offset += lines[i].length() + 1;
+        }
+        buffer.insert(offset, "\n");
     }
 
     private static String simpleName(String fqn) {

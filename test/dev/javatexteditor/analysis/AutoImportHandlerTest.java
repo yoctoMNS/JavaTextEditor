@@ -117,9 +117,8 @@ public class AutoImportHandlerTest {
         assertTrue("applyImport returns true", inserted);
         String result = buf.getText();
         assertTrue("import line present", result.contains("import java.util.List;\n"));
-        // 挿入位置: package 行の次
-        int pkgEnd = src.indexOf('\n') + 1;
-        assertTrue("import after package", result.startsWith("package foo;\nimport java.util.List;"));
+        // 挿入位置: package 行の次。package文とimportブロックの間には空行を1行確保する
+        assertTrue("import after package with blank line", result.startsWith("package foo;\n\nimport java.util.List;"));
     }
 
     private static void testApplyImportAfterExistingImport(AutoImportHandler handler) {
