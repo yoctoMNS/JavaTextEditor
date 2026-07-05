@@ -676,7 +676,9 @@ public class ModalEditor {
 
     /** Ctrl+Space で補完ポップアップを起動する。 */
     private void triggerCompletion() {
-        if (completionIndex == null || !completionIndex.isReady()) {
+        boolean classReady = completionIndex != null && completionIndex.isReady();
+        boolean wordReady = wordIndex != null && wordIndex.isReady();
+        if (!classReady && !wordReady) {
             setStatusMessage("補完インデックス構築中...");
             return;
         }
@@ -685,14 +687,41 @@ public class ModalEditor {
             dismissCompletion();
             return;
         }
-        java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
-            completionIndex.query(prefix, COMPLETION_MAX_RESULTS);
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryMergedCompletion(prefix);
         if (items.isEmpty()) {
             dismissCompletion();
             setStatusMessage("補完候補なし: " + prefix);
             return;
         }
         activateCompletion(prefix, items, false);
+    }
+
+    /**
+     * Ctrl+Space（クラス名 + 単語補完の統合クエリ）の実体。
+     * 作業ディレクトリ配下のファイル/現在バッファの単語（フィールド・メソッド・ローカル変数・
+     * 定数など、WordIndex 由来）を最優先で並べ、その後に JDK クラス名（CompletionIndex、"cls"）を
+     * 重複を除いて追加する。
+     *
+     * かつては CompletionIndex がプロジェクト全ファイルを javac AST 解析してメソッド/フィールドも
+     * 収集していたが、処理が重いため廃止し（CLAUDE.md 参照）、軽量な正規表現ベースの WordIndex に
+     * 一本化した。CompletionIndex は JDK クラス名のみを保持する。
+     */
+    private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryMergedCompletion(String prefix) {
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> merged = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        if (wordIndex != null && wordIndex.isReady()) {
+            for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix)) {
+                if (seen.add(item.label())) merged.add(item);
+            }
+        }
+        if (completionIndex != null && completionIndex.isReady() && merged.size() < COMPLETION_MAX_RESULTS) {
+            for (dev.javatexteditor.analysis.CompletionItem item
+                    : completionIndex.query(prefix, COMPLETION_MAX_RESULTS)) {
+                if (merged.size() >= COMPLETION_MAX_RESULTS) break;
+                if (seen.add(item.label())) merged.add(item);
+            }
+        }
+        return merged;
     }
 
     /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
@@ -766,14 +795,15 @@ public class ModalEditor {
             recheckWordCompletion();
             return;
         }
-        if (completionIndex == null || !completionIndex.isReady()) return;
+        boolean classReady = completionIndex != null && completionIndex.isReady();
+        boolean wordReady = wordIndex != null && wordIndex.isReady();
+        if (!classReady && !wordReady) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
             if (completionActive) dismissCompletion();
             return;
         }
-        java.util.List<dev.javatexteditor.analysis.CompletionItem> items =
-            completionIndex.query(prefix, COMPLETION_MAX_RESULTS);
+        java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryMergedCompletion(prefix);
         if (items.isEmpty()) {
             if (completionActive) dismissCompletion();
             return;

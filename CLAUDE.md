@@ -149,11 +149,17 @@ project-root/
 ## 単語補完（Alt+/）の設計決定事項
 
 - **INSERT モードで `Alt+/` を押すと、作業ディレクトリ配下の単語・クラス名・変数名・定数名・メソッド名を補完できる**（Vim の `i_CTRL-N` 相当）。当初はユーザー要望通り `Ctrl+N` に割り当てようとしたが、INSERT モードの `Ctrl+N` は `.claude/skills/keymap-conflict-resolution/SKILL.md` で既に Emacs 式「カーソル下移動」に確定済みであり、ユーザーに確認したところ「別キーを使う」を選択したため `Alt+/` を新規に割り当てた（`Ctrl+N` のカーソル下移動は維持）。
-- **既存の `CompletionIndex`（Ctrl+Space、javac の AST 解析でクラス/メソッド/フィールド名のみ収集）とは別に `dev.javatexteditor.analysis.WordIndex` を新設した**。`CompletionIndex` は宣言されたシンボルしか拾えず、ローカル変数・定数・Java 以外のファイルの単語は対象外なため、「単語」を要求するこの機能には正規表現ベースの軽量なインデックスが必要だったため。AST解析（javac 呼び出し）が不要な分、`CompletionIndex` よりビルドが高速。
+- **既存の `CompletionIndex`（Ctrl+Space、当時は javac の AST 解析で JDK クラス名 + プロジェクトのクラス/メソッド/フィールド名を収集していた）とは別に `dev.javatexteditor.analysis.WordIndex` を新設した**。`CompletionIndex` は宣言されたシンボルしか拾えず、ローカル変数・定数・Java 以外のファイルの単語は対象外なため、「単語」を要求するこの機能には正規表現ベースの軽量なインデックスが必要だったため。AST解析（javac 呼び出し）が不要な分、`CompletionIndex` よりビルドが高速。（のちに `CompletionIndex` 側のプロジェクト AST 解析は重すぎるため廃止され、Ctrl+Space も本節末尾の「Ctrl+Space 補完を WordIndex に一本化」のとおり `WordIndex` を使うようになった。）
 - **高速化のため TreeSet + `subSet(prefix, prefix+Character.MAX_VALUE)` による O(log n + k) のプレフィックス検索を採用**（k = 一致件数のみを走査。全件を毎回スコアリングする `CompletionIndex.query()` より高速）。ビルドは `Files.walkFileTree` を1回だけバックグラウンド仮想スレッドで実行し、`.git`/`build`/`target`/`node_modules`等の慣例的なスキップ対象ディレクトリと、2MB超のファイル・既知のテキスト拡張子以外のファイルを除外して高速化・バイナリファイル誤読を防いでいる。ビルド完了後の `TreeSet` は不変として扱い、参照の差し替え（`volatile` フィールド）だけでスレッド間可視性を保証するため、通常の読み取りに `synchronized` は不要（ロックフリー）。
 - **現在編集中バッファの単語も候補にマージする**（`WordIndex.extractWords()` をトリガー時にその場で実行）。保存前の未確定な単語（例: 書きかけの変数名）もディスクスキャンでは拾えないため。ただし **カーソル直前の「今まさに入力中の未完成なプレフィックス」自体は必ず除外する**（`ModalEditor.queryWordCompletion()` で `bufferWords.remove(prefix)`）。除かないとカーソル位置のトークンが常に「prefix と完全一致する単語」として候補に混入し、何も意味のある入力をしていなくても補完ポップアップが開いてしまう・デフォルト選択（先頭候補）が入力中の文字列そのものになり選んでも何も変わらない、という無意味な結果になるため。
 - **`completionActive`/`completionItems`/`completionSelectedIdx`/`completionPrefix`（Ctrl+Space のシンボル補完と共用のフィールド）をそのまま流用**し、`completionIsWordMode` フラグだけを追加してどちらのインデックスに対して再クエリするかを切り替えている。ポップアップのナビゲーション（↑↓・Tab/Enter・Esc）・描画（`EditorCanvas.setCompletionState()`）は完全に共通化されており、専用の UI コードは増やしていない。`CompletionItem.kind()` には新しい種別文字列 `"wd"`（2文字。既存の `"cls"/"mth"/"fld"` と同じ描画幅に収まるよう選定）を使う。
 - **プロジェクト全体のスキャンは起動時に1回だけ**（`Main.java` で `WordIndex.build(projectRoot)`）。`CompletionIndex` 同様、`:cd` での作業ディレクトリ変更時に再構築する仕組みは持たない（既存の `CompletionIndex` にもない挙動であり、スコープを広げないため）。
+
+### Ctrl+Space 補完を WordIndex に一本化（メンバー/ローカル変数/定数の重い AST 解析を廃止）
+
+- **`CompletionIndex` は JDK クラス名（`"cls"`）のみを保持するようになった**。以前は `addProjectSymbols()` が `Files.walk(projectRoot)` で全 `.java` ファイルを列挙し `SourceAnalyzer`（javac AST 解析）でメソッド/フィールドまで収集していたが、プロジェクト全ファイルへの AST 解析はファイル数に比例して重く（Shift+K フリーズ修正の節と同種の問題）、既に軽量な正規表現ベースの `WordIndex` と役割が重複していたため廃止した。`CompletionIndex.build(jdkIndex)`/`buildSync(jdkIndex)` は `projectRoot`/`SourceAnalyzer` 引数を取らなくなった。`refreshProjectSymbols()`（元々未使用・「既知の未接続・二重定義」節 3. 参照）も同時に削除した。
+- **Ctrl+Space（`triggerCompletion()`/`recheckCompletion()`）は `queryMergedCompletion()` で `wordIndex`（作業ディレクトリ配下のファイル + 現在バッファの単語。フィールド/メソッド/ローカル変数/定数を含む）を最優先し、その後に `completionIndex`（JDK クラス名のみ）を重複除去のうえ追加するようになった**。ユーザーからの明示的な要望（「Javaクラス API の補完はクラス名のみにし、残りの単語補完候補は作業ディレクトリのファイル群を最優先にする」）に基づく。`Alt+/`（`triggerWordCompletion()`/`recheckWordCompletion()`、`completionIsWordMode == true`）は従来どおり `wordIndex` のみを使う独立した経路のままで変更していない。
+- **`COMPLETION_MAX_RESULTS` の上限は両ソース合算で1つ**: `queryMergedCompletion()` は `wordIndex` 側の結果だけで上限に達した場合、`completionIndex`（クラス名）を問い合わせずに打ち切る。これが「作業ディレクトリのファイル群を最優先」の実装そのもの。
 
 ## Shift+K フリーズ修正（`ProjectSearcher` の巨大ファイル上限）
 
