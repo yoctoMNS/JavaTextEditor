@@ -1638,13 +1638,103 @@ public class ModalEditor {
             return false;
         }
         try {
-            Files.writeString(Path.of(path), buffer.getText());
-            statusMessage = "\"" + path + "\" written";
+            String resolvedPath = resolveSavePath(path);
+            if (resolvedPath == null) {
+                statusMessage = "E: cannot determine save path";
+                return false;
+            }
+            Path targetPath = Path.of(resolvedPath).toAbsolutePath();
+            Files.createDirectories(targetPath.getParent());
+            Files.writeString(targetPath, buffer.getText());
+            statusMessage = "\"" + targetPath + "\" written";
             if (onSave != null) onSave.run();
             return true;
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
             return false;
+        }
+    }
+
+    /**
+     * :w path のパス部分を解決する。
+     * - 相対パス: projectRoot を基準に解決
+     * - ~ で始まる: ホームディレクトリを展開
+     * - s/pattern/replacement/ の形式: currentFilePath のファイル名に正規表現置換を適用
+     * - 絶対パス: そのまま使用
+     */
+    private String resolveSavePath(String pathSpec) {
+        if (pathSpec == null || pathSpec.isEmpty()) {
+            return currentFilePath; // :w だけなら現在のファイルに保存
+        }
+
+        // 正規表現置換の形式: s/pattern/replacement/ または s/pattern/replacement/g など
+        if (pathSpec.startsWith("s/") || pathSpec.startsWith("s\\")) {
+            return applyRegexSubstituteToPath(pathSpec);
+        }
+
+        // ~ を展開
+        String expanded = expandHome(pathSpec);
+
+        // 絶対パスか相対パスか判定
+        Path target = Path.of(expanded);
+        if (target.isAbsolute()) {
+            return target.toString();
+        }
+
+        // 相対パスの場合、projectRoot を基準に解決
+        return getProjectRoot().resolve(expanded).toAbsolutePath().toString();
+    }
+
+    /**
+     * 正規表現置換パターンを currentFilePath に適用する。
+     * 形式: s/pattern/replacement/ または s/pattern/replacement/g
+     * 例: s/^.*\//new_/ → ファイル名をいじる
+     *     s/\.java$/.bak/   → 拡張子を変更
+     */
+    private String applyRegexSubstituteToPath(String pattern) {
+        if (currentFilePath == null || currentFilePath.isEmpty()) {
+            statusMessage = "E: no current file to apply regex to";
+            return null;
+        }
+
+        try {
+            // s/pattern/replacement/flags の形式を解析
+            String delimiter = String.valueOf(pattern.charAt(1)); // / または \
+            String[] parts = pattern.substring(2).split(Pattern.quote(delimiter), 3);
+
+            if (parts.length < 2) {
+                statusMessage = "E: invalid regex substitute syntax";
+                return null;
+            }
+
+            String regexPattern = parts[0];
+            String replacement = parts.length > 1 ? parts[1] : "";
+            String flags = parts.length > 2 ? parts[2] : "";
+
+            // フラグを解析（g = グローバル、デフォルトは最初の1つだけ置換）
+            boolean global = flags.contains("g");
+
+            Path currentPath = Path.of(currentFilePath);
+            String filename = currentPath.getFileName().toString();
+            String parent = currentPath.getParent().toString();
+
+            // 正規表現置換を実行
+            String newFilename;
+            if (global) {
+                newFilename = filename.replaceAll(regexPattern, replacement);
+            } else {
+                newFilename = filename.replaceFirst(regexPattern, replacement);
+            }
+
+            if (newFilename.equals(filename)) {
+                statusMessage = "E: regex did not match filename";
+                return null;
+            }
+
+            return Path.of(parent, newFilename).toString();
+        } catch (Exception ex) {
+            statusMessage = "E: regex error: " + ex.getMessage();
+            return null;
         }
     }
 
