@@ -846,6 +846,8 @@ public class EditorCanvas extends JPanel {
      * テキストエリア中央に概要テキストを表示し、ステータス行直上まで使う。
      */
     private void drawSplashScreen(Graphics2D g2, int charWidth, int lineHeight) {
+        // フォントを明示的に設定してから FontMetrics を取得
+        g2.setFont(SPLASH_FONT);
         FontMetrics fm = g2.getFontMetrics();
         int statusH = lineHeight;
         int areaH   = getHeight() - statusH;  // ステータス行を除いた描画高さ
@@ -916,10 +918,16 @@ public class EditorCanvas extends JPanel {
                 // サブタイトル・説明文：センタリング・前景色
                 boolean isHint = line.contains("キーを押すと");
                 g2.setColor(isHint ? theme.accent : theme.foreground);
-                if (isHint) g2.setFont(SPLASH_FONT.deriveFont(Font.ITALIC));
+                if (isHint) {
+                    g2.setFont(SPLASH_FONT.deriveFont(Font.ITALIC));
+                    fm = g2.getFontMetrics();
+                }
                 int w = fm.stringWidth(line);
                 g2.drawString(line, (areaW - w) / 2, y);
-                if (isHint) g2.setFont(normalFont);
+                if (isHint) {
+                    g2.setFont(normalFont);
+                    fm = g2.getFontMetrics();
+                }
             }
         }
     }
