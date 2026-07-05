@@ -78,6 +78,11 @@ public class EditorCanvas extends JPanel {
     private final Map<Integer, BufferedImage> glyphCacheFg  = new HashMap<>();
     private final Map<Integer, BufferedImage> glyphCacheBg  = new HashMap<>();
 
+    // telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列描画用グリフキャッシュ。
+    // 本文用キャッシュ（glyphCacheFg/Bg）と違い任意の色・セルサイズを扱うためキーにそれらを含む。
+    private record UiGlyphKey(int codePoint, int cellW, int cellH, int rgb) {}
+    private final Map<UiGlyphKey, BufferedImage> uiGlyphCache = new HashMap<>();
+
     // 非ASCII文字描画用フォールバック Swing フォント（セルサイズに合わせて動的生成）
     private Font swingFont = null;
     private int  swingFontCellH = 0;   // swingFont を生成した時の cellH
@@ -290,6 +295,57 @@ public class EditorCanvas extends JPanel {
     private void invalidateGlyphCache() {
         glyphCacheFg.clear();
         glyphCacheBg.clear();
+        uiGlyphCache.clear();
+    }
+
+    private BufferedImage getUiGlyph(int codePoint, int cw, int ch, Color color) {
+        UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
+        return uiGlyphCache.computeIfAbsent(key,
+            k -> BitmapFont10x20.renderGlyph(codePoint, cw, ch, color.getRGB()));
+    }
+
+    /**
+     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を MiscFixed
+     * ビットマップフォントで描画する（本文の drawLineWithFullWidthSupport と同じ配色規則:
+     * ASCIIはビットマップフォント、それ以外（日本語等）は Swing フォールバックフォント）。
+     * y はセル下端（ベースライン）のY座標。
+     */
+    private void drawUiText(Graphics2D g2, String s, int x, int y, int cw, int ch, Color color) {
+        int swingBaselineY = y - BitmapFont10x20.descentPixels(ch);
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            int widthMult = charCellWidth(cp);
+            if (BitmapFont10x20.isSupported(cp)) {
+                g2.drawImage(getUiGlyph(cp, cw, ch, color), x, y - ch, null);
+            } else {
+                Color prev = g2.getColor();
+                g2.setColor(color);
+                g2.drawString(new String(Character.toChars(cp)), x, swingBaselineY);
+                g2.setColor(prev);
+            }
+            x += cw * widthMult;
+            i += Character.charCount(cp);
+        }
+    }
+
+    /** drawUiText() で描画した際のピクセル幅を返す。 */
+    private int uiTextWidth(String s, int cw) {
+        int width = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            width += cw * charCellWidth(cp);
+            i += Character.charCount(cp);
+        }
+        return width;
+    }
+
+    /** uiTextWidth() ベースで maxWidth に収まるよう末尾を "…" で省略する。 */
+    private String clipToUiWidth(String s, int cw, int maxWidth) {
+        if (uiTextWidth(s, cw) <= maxWidth) return s;
+        while (s.length() > 0 && uiTextWidth(s + "…", cw) > maxWidth) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s + "…";
     }
 
     private BufferedImage getGlyphFg(int cp) {
@@ -505,18 +561,16 @@ public class EditorCanvas extends JPanel {
         g2.setColor(theme.accent);
         g2.drawRect(ox, oy, overlayW, overlayH);
 
-        Font overlayFont = new Font(Font.MONOSPACED, Font.PLAIN, Math.max(10, lineHeight - 2));
-        g2.setFont(overlayFont);
-        FontMetrics fm = g2.getFontMetrics(overlayFont);
-        int fh = fm.getHeight();
+        // 本文と同じ MiscFixed ビットマップフォントのセルサイズをそのまま使う
+        int cw = cellW;
+        int fh = lineHeight;
         int pad = 4;
 
         // プロンプト行
         g2.setColor(theme.accent);
         g2.fillRect(ox, oy, overlayW, fh + pad * 2);
-        g2.setColor(theme.background);
         String promptText = telescopeTitle + "  > " + telescopeQuery + "_";
-        g2.drawString(promptText, ox + pad, oy + fh + pad);
+        drawUiText(g2, promptText, ox + pad, oy + fh + pad, cw, fh, theme.background);
 
         int bodyY = oy + fh + pad * 2 + 1;
         int bodyH = overlayH - (fh + pad * 2 + 1);
@@ -532,30 +586,29 @@ public class EditorCanvas extends JPanel {
         int visStart = Math.max(0, telescopeSelectedIdx - maxResultRows + 1);
         if (telescopeSelectedIdx < visStart) visStart = telescopeSelectedIdx;
 
-        g2.setColor(theme.foreground);
         for (int i = visStart; i < telescopeResults.size() && (i - visStart) < maxResultRows; i++) {
             TelescopeItem item = telescopeResults.get(i);
             int ry = bodyY + (i - visStart + 1) * fh;
+            Color rowColor;
             if (i == telescopeSelectedIdx) {
                 g2.setColor(theme.accent);
-                g2.fillRect(ox + 1, ry - fh + 2, resultsW - 2, fh);
-                g2.setColor(theme.background);
+                g2.fillRect(ox + 1, ry - fh, resultsW - 2, fh);
+                rowColor = theme.background;
             } else {
-                g2.setColor(theme.foreground);
+                rowColor = theme.foreground;
             }
-            String label = (i == telescopeSelectedIdx ? "▸ " : "  ") + item.display();
-            String clipped = clipToWidth(label, fm, resultsW - pad * 2);
-            g2.drawString(clipped, ox + pad, ry);
+            String label = (i == telescopeSelectedIdx ? "> " : "  ") + item.display();
+            String clipped = clipToUiWidth(label, cw, resultsW - pad * 2);
+            drawUiText(g2, clipped, ox + pad, ry, cw, fh, rowColor);
         }
 
         // Preview ペイン
-        g2.setColor(theme.foreground);
         String[] previewLines = telescopePreview.split("\n", -1);
         int previewW = overlayW - resultsW;
         int py = bodyY + fh;
         for (int i = 0; i < previewLines.length && (py - bodyY) < bodyH; i++) {
-            String clipped = clipToWidth(previewLines[i], fm, previewW - pad * 2);
-            g2.drawString(clipped, previewX + pad, py);
+            String clipped = clipToUiWidth(previewLines[i], cw, previewW - pad * 2);
+            drawUiText(g2, clipped, previewX + pad, py, cw, fh, theme.foreground);
             py += fh;
         }
     }
@@ -567,17 +620,15 @@ public class EditorCanvas extends JPanel {
     private void drawCompletionPopup(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
         if (completionLabels.isEmpty()) return;
 
-        Font popupFont = new Font(Font.MONOSPACED, Font.PLAIN, Math.max(10, lineHeight - 2));
-        g2.setFont(popupFont);
-        FontMetrics fm = g2.getFontMetrics(popupFont);
-        int fh = fm.getHeight();
+        int cw = cellW;
+        int fh = lineHeight;
         int pad = 4;
-        int kindW = fm.stringWidth("mth") + pad; // kind ラベルの幅
+        int kindW = uiTextWidth("mth", cw) + pad; // kind ラベルの幅
 
         // 最長ラベル幅を計算してポップアップ幅を決定
         int maxLabelW = 0;
         for (String label : completionLabels) {
-            maxLabelW = Math.max(maxLabelW, fm.stringWidth(label));
+            maxLabelW = Math.max(maxLabelW, uiTextWidth(label, cw));
         }
         int popupW = kindW + maxLabelW + pad * 3;
         int popupH = completionLabels.size() * fh + pad * 2;
@@ -612,34 +663,22 @@ public class EditorCanvas extends JPanel {
 
         // 各候補を描画
         for (int i = 0; i < completionLabels.size(); i++) {
-            int iy = popupY + pad + (i + 1) * fh - fm.getDescent();
+            int iy = popupY + pad + (i + 1) * fh;
             int rowTop = popupY + pad + i * fh;
+            String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
 
             if (i == completionSelectedIdx) {
                 g2.setColor(theme.accent);
                 g2.fillRect(popupX + 1, rowTop, popupW - 2, fh);
                 // kind ラベル（選択行）
-                g2.setColor(theme.background);
-                String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
-                g2.drawString(kind, popupX + pad, iy);
-                g2.drawString(completionLabels.get(i), popupX + pad + kindW, iy);
+                drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.background);
+                drawUiText(g2, completionLabels.get(i), popupX + pad + kindW, iy, cw, fh, theme.background);
             } else {
                 // kind ラベルをアクセント色で
-                g2.setColor(theme.accent);
-                String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
-                g2.drawString(kind, popupX + pad, iy);
-                g2.setColor(theme.foreground);
-                g2.drawString(completionLabels.get(i), popupX + pad + kindW, iy);
+                drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.accent);
+                drawUiText(g2, completionLabels.get(i), popupX + pad + kindW, iy, cw, fh, theme.foreground);
             }
         }
-    }
-
-    private static String clipToWidth(String s, FontMetrics fm, int maxWidth) {
-        if (fm.stringWidth(s) <= maxWidth) return s;
-        while (s.length() > 0 && fm.stringWidth(s + "…") > maxWidth) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s + "…";
     }
 
     /**
@@ -956,14 +995,13 @@ public class EditorCanvas extends JPanel {
         int y = getHeight() - 4;
         g2.setColor(theme.accent);
         g2.fillRect(0, y - lineHeight, getWidth(), lineHeight);
-        g2.setColor(theme.background);
         String label = (commandLineText != null) ? commandLineText
                      : visualBlockMode ? "-- VISUAL BLOCK --"
                      : visualLineMode ? "-- VISUAL LINE --"
                      : visualMode     ? "-- VISUAL --"
                      : insertMode     ? "-- INSERT --"
                      :                  "-- NORMAL --";
-        g2.drawString(label, 4, y - 4);
+        drawUiText(g2, label, 4, y, cellW, lineHeight, theme.background);
 
         // 右端に診断件数を表示
         if (!diagnostics.isEmpty()) {
@@ -972,9 +1010,8 @@ public class EditorCanvas extends JPanel {
             long warnCount = diagnostics.stream()
                 .filter(d -> d.kind() == DiagnosticKind.WARNING).count();
             String diagLabel = buildDiagLabel(errCount, warnCount);
-            FontMetrics fm = g2.getFontMetrics();
-            int labelWidth = fm.stringWidth(diagLabel);
-            g2.drawString(diagLabel, getWidth() - labelWidth - 4, y - 4);
+            int labelWidth = uiTextWidth(diagLabel, cellW);
+            drawUiText(g2, diagLabel, getWidth() - labelWidth - 4, y, cellW, lineHeight, theme.background);
         }
 
         // ウォーキングパーソンアニメーション（左→右へ走り抜ける）

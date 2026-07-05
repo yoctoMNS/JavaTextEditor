@@ -249,3 +249,12 @@ int b = pixel & 0xFF;
 
 1. ②（`modal-editing-engine`スキル）との接続は完了済み。キー入力とカーソル描画の対応を変更する際は両スキルを併読すること
 2. スクロール対応・`PieceTable.getTextInRange()`の追加・`JSplitPane`によるウィンドウ分割は`references/future-phases.md`を参照
+
+## telescope・ステータス行・補完ポップアップの文字描画を MiscFixed ビットマップフォントに統一
+
+- **症状**: 本文（`drawLineWithFullWidthSupport`）は `BitmapFont10x20`（MiscFixed）でASCIIを描画していたが、telescopeオーバーレイ・ステータス行・入力補完ポップアップは独自に `new Font(Font.MONOSPACED, ...)` を生成して `g2.drawString()` していたため、同じ画面内でASCII文字のフォントが本文とUI要素とで見た目が異なっていた。
+- **修正**: `EditorCanvas` に汎用ヘルパー `drawUiText(g2, s, x, y, cw, ch, color)` / `uiTextWidth(s, cw)` / `clipToUiWidth(s, cw, maxWidth)` を新設し、`drawTelescopeOverlay()`・`drawCompletionPopup()`・`drawStatusLine()` はすべてこれを使うように統一した。ASCII(0x20-0x7E)は本文と同じ `BitmapFont10x20.renderGlyph()`、それ以外（日本語等）は既存の Swing フォールバックフォントで描画する、という本文描画（`drawLineWithFullWidthSupport`）と同じ配色規則をそのまま踏襲している。
+- **セルサイズの選定**: UI要素は独自のフォントサイズ（`lineHeight - 2`等）を計算するのをやめ、本文と全く同じ `cellW`/`cellH`（Ctrl+Shift+矢印で変更されるセルサイズ）をそのまま使う。これにより「本文と全く同じピクセルフォント」という最も強い意味での統一を実現している。telescopeの行間隔（`fh`）・補完ポップアップの行高さも `lineHeight`（=`cellH`）に統一した。
+- **グリフキャッシュ**: 本文用の `glyphCacheFg`/`glyphCacheBg` は色が `theme.foreground`/`theme.background` 固定の前提でキャッシュしているため流用できない（telescope選択行やkindラベルは `theme.accent` 等、任意の色を使う）。そのため `UiGlyphKey(codePoint, cellW, cellH, rgb)` をキーとする別キャッシュ `uiGlyphCache` を新設し、`invalidateGlyphCache()`（セルサイズ・テーマ変更時）で一緒にクリアするようにした。
+- **telescope選択行マーカーの変更**: 選択行マーカーを `"▸ "`（Unicode矢印、ASCII範囲外でSwingフォールバックが必要）から `"> "`（ASCII）に変更した。これにより選択行のマーカー込みで完全にビットマップフォントのセル幅グリッドに収まり、フォールバックによる幅ズレが起きない。
+- **意図的に対象外としたもの**: スプラッシュ画面（`drawSplashScreen`）は日本語主体の説明文とキーバインド一覧が混在しており、センタリング計算が `FontMetrics` に強く依存しているため今回は変更していない。英語のみのUI要素（telescope・ステータス行・補完ポップアップ）に限定した。
