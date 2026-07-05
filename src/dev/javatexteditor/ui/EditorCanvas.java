@@ -909,21 +909,9 @@ public class EditorCanvas extends JPanel {
                 int w = fm.stringWidth(line);
                 g2.drawString(line, (areaW - w) / 2, y);
             } else if (line.startsWith("  ") && !line.isBlank()) {
-                // キーバインド行：キー部分をアクセントカラーで、説明部分を前景色で
-                int tabIdx = line.indexOf("  ", 2);
-                if (tabIdx > 0) {
-                    String key  = line.substring(0, tabIdx).stripTrailing();
-                    String desc = line.substring(tabIdx);
-                    int keyW = fm.stringWidth(key);
-                    int xKey = keyBlockX;
-                    g2.setColor(theme.accent);
-                    g2.drawString(key, xKey, y);
-                    g2.setColor(theme.foreground);
-                    g2.drawString(desc, xKey + keyW, y);
-                } else {
-                    g2.setColor(theme.foreground);
-                    g2.drawString(line, (areaW - fm.stringWidth(line)) / 2, y);
-                }
+                // キーバインド行：行全体を水平中央から描画
+                g2.setColor(theme.foreground);
+                g2.drawString(line, keyBlockX, y);
             } else if (!line.isBlank()) {
                 // サブタイトル・説明文：センタリング・前景色
                 boolean isHint = line.contains("キーを押すと");
