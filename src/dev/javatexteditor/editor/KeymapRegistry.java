@@ -95,6 +95,8 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('d', "delete.pending"), "delete.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.SHIFT_DOWN_MASK, "jdk.doc"), "jdk.doc");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_J, KeyEvent.SHIFT_DOWN_MASK, "jump.back"), "jump.back");
+        // %: 対応する括弧へジャンプ（(), [], {} のネストをスタック相当で解決）
+        bind(Mode.NORMAL, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
         // 単語移動
         bind(Mode.NORMAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
         bind(Mode.NORMAL, KeyBinding.ofChar('b', "word.backward"), "word.backward");
@@ -199,6 +201,9 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),   "scroll.page.up");
         bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"), "scroll.half.down");
         bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),   "scroll.half.up");
+        bind(Mode.VISUAL, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
+        bind(Mode.VISUAL, KeyBinding.ofChar('>', "indent.right"), "indent.right");
+        bind(Mode.VISUAL, KeyBinding.ofChar('<', "indent.left"),  "indent.left");
 
         // VISUAL LINE モード（行単位選択）
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -214,6 +219,9 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),   "scroll.page.up");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"), "scroll.half.down");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),   "scroll.half.up");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('>', "indent.right"), "indent.right");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('<', "indent.left"),  "indent.left");
 
         // VISUAL BLOCK モード（矩形選択、Ctrl+V）
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -229,5 +237,8 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('A', "block.insert.after"),  "block.insert.after");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('c', "block.change"),       "block.change");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('r', "block.replace.pending"), "block.replace.pending");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('>', "indent.right"), "indent.right");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('<', "indent.left"),  "indent.left");
     }
 }

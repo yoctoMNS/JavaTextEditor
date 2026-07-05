@@ -114,6 +114,46 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
 レジスタ指定（`"a`）・オペレータ組み合わせ（`d3j`/`c2w`）・マーク（`ma`/`'a`）は v6 以降の候補のまま未着手
 （`docs/handover-modal-editor-v5.md` 参照）。実装する場合は本Skillと④を先に更新すること。
 
+## `%`（対応する括弧へジャンプ）・Visual `>`/`<`（インデント）・`gv`（2026-07 追加）
+
+- **`%` は `dev.javatexteditor.editor.MatchPairs`（Swing/ModalEditor 非依存の純粋ロジック）に切り出した**。
+  `findMatch(text, offset)` が深さカウント（スタック相当）でネストを解決し、対応する相手の offset を
+  `OptionalInt` で返す。ペア定義を `Map<Character,Character>` で持たせているため、将来 `matchpairs`
+  オプション相当の追加ペアはこの Map を拡張するだけで済む設計にしてある。
+  **スコープの簡略化**: 本家 Vim は「カーソルが括弧上になければ行内を前方検索する」が、本実装は
+  「カーソルが括弧そのものの上にあるときのみ」動く（無効位置では no-op）。行内前方検索は未実装。
+- **NORMAL/VISUAL/VISUAL_LINE/VISUAL_BLOCK すべてで `%` はカーソル移動のみを行う `jumpToMatchingBracket()`**
+  を共有する。VISUAL 系ではこのメソッドが `cursorRow`/`cursorCol` だけを書き換え `anchorRow`/`anchorCol`
+  には触れないため、「アンカーを保持したままカーソル終点だけ動く」という Visual モーションの既存の
+  慣例（`moveWordForward()` 等）にそのまま乗っている。operator-pending（将来の `d%` 等）を実装する場合も
+  `offsetOfCursor()` + `MatchPairs.findMatch()` の2行をそのまま流用できる。
+- **Visual `>`/`<` は `IndentSettings`（shiftwidth/tabstop/expandtab/shiftround を保持するだけの値クラス）と
+  `Indenter`（1行分の新インデントを計算する static 純粋ロジック）に分離した**。`ModalEditor` は
+  `indentSettings` フィールドを1つ持ち、`getIndentSettings()` で外部（テスト・将来の設定UI）から変更できる。
+  丸め（shiftround）の式は Vim 本家の `shift_line()` と同じ「現在幅を shiftwidth の倍数に切り下げてから
+  shiftwidth*count を加減算する」を採用した（丸めなしの場合は単純加減算）。
+- **charwise VISUAL の `>`/`<` は linewise と同じ行全体に作用する**（`indentLines(r1, r2, left, count)` を
+  VISUAL/VISUAL_LINE で共有）。選択が行の途中から始まっていても対象は選択に含まれる全行。
+- **VISUAL BLOCK の `>`/`<` だけは行全体ではなく矩形の左端列(`c1`)基準の専用ロジック
+  (`indentBlock()`)を使う**。本家 Vim は実は blockwise でも linewise と同じ「行全体シフト」だが、
+  本プロジェクトでは要件により「矩形領域だけをシフトする」という独自仕様を採用した
+  （右シフトは c1 位置に挿入、左シフトは c1 直前の空白を除去）。詳細は
+  `.claude/skills/modal-visual-block-selection/SKILL.md` 参照。
+- **count は `>`/`<` 専用の軽量な数字プレフィックス（`visualCountBuffer`）で実装した**。数字キーが
+  押されるたびにバッファへ蓄積し、`>`/`<` 以外の任意のキーが来た時点で無条件に破棄する
+  （汎用的な `3j` 等のカウント付きモーションは前述の「未実装」節のスコープのままで、今回は広げていない）。
+- **`gv` は Visual モード脱出時の全経路（ESC 早期リターンガード・`enter.normal`・`yank`・`delete`・
+  矩形置換 `r`・`indent.right`/`indent.left`）で `saveLastVisualFromCurrentMode()` を呼んで保存する**。
+  インデント実行後に `gv` で再選択できるようにするため、この保存は「カーソルを整形後の位置
+  （`moveLineStartNonBlank()` 等）へ動かす前」に行う必要がある（先に動かすと選択終端の行番号が
+  失われる。実装時に一度ここで躓いたため、呼び出し順序を変えるときは要注意）。
+
+## テスト（`%`・Visual インデント・`gv`）
+
+- `test/dev/javatexteditor/editor/MatchPairAndIndentTest.java`（18テスト）: `MatchPairs.findMatch()`の
+  ネスト解決・Visual中の`%`拡張・charwise/linewise/blockwiseの`>`/`<`・空行/0未満クランプ・
+  expandtab/shiftround・`gv`の範囲/種別復元。
+
 ## テスト（完了条件）
 
 - 変更後は `./scripts/build.sh && ./scripts/test.sh` で全テスト PASS を確認する。
