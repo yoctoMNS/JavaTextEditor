@@ -168,6 +168,15 @@ public class ModalEditor {
     private int cdSavedCursorRow = 0;
     private int cdSavedCursorCol = 0;
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
+    // :e タブ補完状態（:cd と同じく一時退避→復元パターン）
+    private List<String> edCandidates = List.of(); // 候補ファイル/ディレクトリ名（末尾 "/" はディレクトリのみ）
+    private String edCandidateParentPart = "";
+    private boolean edSelectionActive = false;
+    private String edSavedBufferText = null;
+    private String edSavedFilePath = null;
+    private int edSavedCursorRow = 0;
+    private int edSavedCursorCol = 0;
+    private String edSavedCommandText = "";
     // filer モード状態
     private List<DirEntry> filerEntries = List.of();
     private List<DirEntry> filerFiltered = List.of();
@@ -363,6 +372,16 @@ public class ModalEditor {
         }
         if (cdSelectionActive && keyChar == 'q') {
             cancelCdSelection();
+            return;
+        }
+
+        // *e候補* 疑似バッファ: Enter で選択、q でキャンセルして元バッファへ戻る
+        if (edSelectionActive && keyCode == KeyEvent.VK_ENTER) {
+            applySelectedEditCandidate();
+            return;
+        }
+        if (edSelectionActive && keyChar == 'q') {
+            cancelEditSelection();
             return;
         }
 
@@ -1056,7 +1075,12 @@ public class ModalEditor {
             if (mode == Mode.COMMAND) mode = Mode.NORMAL;
 
         } else if (keyCode == KeyEvent.VK_TAB) {
-            handleCdTabCompletion();
+            String cmd = commandBuffer.toString();
+            if (cmd.equals("cd") || cmd.startsWith("cd ")) {
+                handleCdTabCompletion();
+            } else if (cmd.equals("e") || cmd.startsWith("e ")) {
+                handleEditTabCompletion();
+            }
 
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             commandBuffer.append(keyChar);
@@ -1201,6 +1225,144 @@ public class ModalEditor {
         cdSavedBufferText = null;
         cdSavedFilePath = null;
         cdSavedCommandText = "";
+    }
+
+    // -------------------------------------------------------------------------
+    // :e タブ補完（COMMAND モードで "e " 入力中に TAB を押すと候補を補完する）
+    // -------------------------------------------------------------------------
+
+    /**
+     * commandBuffer が "e" / "e " で始まる場合のみ有効。
+     * ファイルとディレクトリの両方を候補に含める（ディレクトリは末尾に "/" を付ける）。
+     * 候補0件 → 何もしない、1件 → その場で補完、複数件 → *e候補* 疑似バッファで選択させる。
+     */
+    private void handleEditTabCompletion() {
+        String cmd = commandBuffer.toString();
+        String pathStr;
+        if (cmd.equals("e") || cmd.startsWith("e ")) {
+            pathStr = cmd.length() > 1 ? cmd.substring(1).stripLeading() : "";
+        } else {
+            return;
+        }
+
+        String expanded = expandHome(pathStr);
+        int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
+        String parentPart = sepIdx >= 0 ? expanded.substring(0, sepIdx + 1) : "";
+        String prefix = sepIdx >= 0 ? expanded.substring(sepIdx + 1) : expanded;
+
+        Path parentDir;
+        try {
+            parentDir = parentPart.isEmpty()
+                ? getProjectRoot()
+                : getProjectRoot().resolve(parentPart).toAbsolutePath().normalize();
+        } catch (Exception ex) {
+            return;
+        }
+
+        List<String> candidates;
+        try {
+            String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
+            candidates = new ArrayList<>();
+            for (DirEntry e : DirectoryLister.listDirectoryEntries(parentDir)) {
+                String name = e.name();
+                if (name.toLowerCase(Locale.ROOT).startsWith(lowerPrefix)) {
+                    if (e.kind() == DirEntry.Kind.DIRECTORY) {
+                        candidates.add(name + "/");
+                    } else {
+                        candidates.add(name);
+                    }
+                }
+            }
+        } catch (IOException ex) {
+            statusMessage = "E: " + ex.getMessage();
+            return;
+        }
+
+        if (candidates.isEmpty()) {
+            return;
+        }
+        if (candidates.size() == 1) {
+            applyEditCandidate(parentPart, candidates.get(0));
+            return;
+        }
+        openEditCandidateBuffer(cmd, parentPart, candidates);
+    }
+
+    private void applyEditCandidate(String parentPart, String name) {
+        commandBuffer.setLength(0);
+        commandBuffer.append("e ").append(parentPart).append(name);
+    }
+
+    private void openEditCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
+        edSavedBufferText = buffer.getText();
+        edSavedFilePath = currentFilePath;
+        edSavedCursorRow = cursorRow;
+        edSavedCursorCol = cursorCol;
+        edSavedCommandText = originalCmd;
+        edCandidates = candidates;
+        edCandidateParentPart = parentPart;
+        edSelectionActive = true;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("*e候補* ").append(parentPart.isEmpty() ? "." : parentPart)
+          .append(" — ").append(candidates.size()).append("件\n");
+        for (String name : candidates) {
+            sb.append(name).append("\n");
+        }
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        cursorRow = 1;
+        cursorCol = 0;
+        resetSearchAndResultState();
+        commandBuffer.setLength(0);
+        mode = Mode.NORMAL;
+        statusMessage = "e候補: " + candidates.size() + "件 — Enter で選択、q でキャンセル";
+    }
+
+    private void applySelectedEditCandidate() {
+        int idx = cursorRow - 1;
+        if (idx < 0 || idx >= edCandidates.size()) {
+            statusMessage = "E: no candidate at this line";
+            return;
+        }
+        String name = edCandidates.get(idx);
+        String parentPart = edCandidateParentPart;
+        restoreEditSavedBuffer();
+        String fullPath = parentPart + name;
+
+        if (name.endsWith("/")) {
+            mode = Mode.COMMAND;
+            applyEditCandidate(parentPart, name);
+            statusMessage = "";
+        } else {
+            mode = Mode.COMMAND;
+            commandBuffer.setLength(0);
+            commandBuffer.append("e ").append(fullPath);
+            executeCommand(commandBuffer.toString());
+            commandBuffer.setLength(0);
+            if (mode == Mode.COMMAND) mode = Mode.NORMAL;
+        }
+    }
+
+    private void cancelEditSelection() {
+        String savedCmd = edSavedCommandText;
+        restoreEditSavedBuffer();
+        mode = Mode.COMMAND;
+        commandBuffer.setLength(0);
+        commandBuffer.append(savedCmd);
+        statusMessage = "";
+    }
+
+    private void restoreEditSavedBuffer() {
+        buffer = new UndoablePieceTable(edSavedBufferText != null ? edSavedBufferText : "");
+        currentFilePath = edSavedFilePath;
+        cursorRow = edSavedCursorRow;
+        cursorCol = edSavedCursorCol;
+        resetSearchAndResultState();
+        edSelectionActive = false;
+        edSavedBufferText = null;
+        edSavedFilePath = null;
+        edSavedCommandText = "";
     }
 
     // -------------------------------------------------------------------------
@@ -2987,6 +3149,9 @@ public class ModalEditor {
     public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completionItems; }
     public boolean isCdSelectionActive()  { return cdSelectionActive; }
     public List<String> getCdCandidates() { return cdCandidates; }
+    public boolean isEditSelectionActive() { return edSelectionActive; }
+    public List<String> getEditCandidates() { return edCandidates; }
+    public void setBuffer(UndoablePieceTable newBuffer) { this.buffer = newBuffer; }
     public int getFilerSelectedIdx()      { return filerSelectedIdx; }
     public List<DirEntry> getFilerFiltered() { return filerFiltered; }
     public boolean isFilerSearchMode()    { return filerSearchMode; }
