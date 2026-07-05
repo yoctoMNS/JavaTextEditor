@@ -52,7 +52,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -78,7 +78,7 @@ public class ModalEditor {
     private int anchorRow = 0;
     private int anchorCol = 0;
     private String yankRegister = "";
-    private enum YankType { CHAR, LINE }
+    private enum YankType { CHAR, LINE, BLOCK }
     private YankType yankType = YankType.CHAR;
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
     private final StringBuilder commandBuffer = new StringBuilder();
@@ -293,18 +293,20 @@ public class ModalEditor {
         if (canvas != null && canvas.isShowSplash()) {
             canvas.setShowSplash(false);
         }
-        if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE) && keyCode == KeyEvent.VK_ESCAPE) {
+        if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE || mode == Mode.VISUAL_BLOCK)
+                && keyCode == KeyEvent.VK_ESCAPE) {
             mode = Mode.NORMAL;
             pendingSequence = "";
             syncCanvas();
             return;
         }
         switch (mode) {
-            case INSERT      -> processInsertKey(keyCode, keyChar, modifiers);
-            case COMMAND     -> processCommandKey(keyCode, keyChar);
-            case NORMAL      -> processNormalKey(keyCode, keyChar, modifiers);
-            case VISUAL      -> processVisualKey(keyCode, keyChar, modifiers);
-            case VISUAL_LINE -> processVisualLineKey(keyCode, keyChar, modifiers);
+            case INSERT       -> processInsertKey(keyCode, keyChar, modifiers);
+            case COMMAND      -> processCommandKey(keyCode, keyChar);
+            case NORMAL       -> processNormalKey(keyCode, keyChar, modifiers);
+            case VISUAL       -> processVisualKey(keyCode, keyChar, modifiers);
+            case VISUAL_LINE  -> processVisualLineKey(keyCode, keyChar, modifiers);
+            case VISUAL_BLOCK -> processVisualBlockKey(keyCode, keyChar, modifiers);
             case SEARCH        -> processSearchKey(keyCode, keyChar);
             case FILESEARCH    -> processFileSearchKey(keyCode, keyChar);
             case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
@@ -496,6 +498,11 @@ public class ModalEditor {
             case "enter.visual.line" -> {
                 anchorRow = cursorRow;
                 mode = Mode.VISUAL_LINE;
+            }
+            case "enter.visual.block" -> {
+                anchorRow = cursorRow;
+                anchorCol = cursorCol;
+                mode = Mode.VISUAL_BLOCK;
             }
             case "delete.char" -> deleteCharAtCursor();
             case "paste.after" -> pasteAfter();
@@ -2073,6 +2080,107 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
+    // VISUAL BLOCKモード処理（矩形選択）
+    // -------------------------------------------------------------------------
+
+    private void processVisualBlockKey(int keyCode, char keyChar, int modifiers) {
+        String action = keymap.resolve(KeymapRegistry.Mode.VISUAL_BLOCK, keyCode, keyChar, modifiers);
+        if (action == null) return;
+
+        Runnable custom = keymap.getCustomAction(action);
+        if (custom != null) { custom.run(); return; }
+
+        switch (action) {
+            case "enter.normal" -> mode = Mode.NORMAL;
+            case "cursor.left"  -> moveCursor(0, -1);
+            case "cursor.right" -> moveCursor(0, 1);
+            case "cursor.down"  -> moveCursor(1, 0);
+            case "cursor.up"    -> moveCursor(-1, 0);
+            case "yank" -> {
+                yankRegister = buildBlockText();
+                yankType = YankType.BLOCK;
+                cursorRow = Math.min(anchorRow, cursorRow);
+                cursorCol = Math.min(anchorCol, cursorCol);
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
+            case "delete" -> {
+                yankRegister = buildBlockText();
+                yankType = YankType.BLOCK;
+                deleteBlock();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
+        }
+    }
+
+    /** 矩形選択範囲（列は文字インデックス、両端含む）の各行テキストを "\n" 区切りで返す */
+    private String buildBlockText() {
+        int r1 = Math.min(anchorRow, cursorRow);
+        int r2 = Math.max(anchorRow, cursorRow);
+        int c1 = Math.min(anchorCol, cursorCol);
+        int c2 = Math.max(anchorCol, cursorCol);
+        String[] lines = getLines();
+        StringBuilder sb = new StringBuilder();
+        for (int row = r1; row <= r2; row++) {
+            String line = row < lines.length ? lines[row] : "";
+            int start = Math.min(c1, line.length());
+            int end = Math.min(c2 + 1, line.length());
+            if (row > r1) sb.append('\n');
+            if (start < end) sb.append(line, start, end);
+        }
+        return sb.toString();
+    }
+
+    /** 矩形選択範囲を各行から削除する（行は消えない。短い行は無変更） */
+    private void deleteBlock() {
+        int r1 = Math.min(anchorRow, cursorRow);
+        int r2 = Math.max(anchorRow, cursorRow);
+        int c1 = Math.min(anchorCol, cursorCol);
+        int c2 = Math.max(anchorCol, cursorCol);
+        for (int row = r1; row <= r2; row++) {
+            String[] lines = getLines();
+            if (row >= lines.length) continue;
+            String line = lines[row];
+            int start = Math.min(c1, line.length());
+            int end = Math.min(c2 + 1, line.length());
+            if (start < end) {
+                buffer.delete(offsetAt(row, start), end - start);
+            }
+        }
+        cursorRow = r1;
+        cursorCol = c1;
+    }
+
+    /**
+     * 矩形ヤンクを cursorRow/insertCol から貼り付ける。
+     * 行数が足りない場合は末尾に新規行を自動生成し、列が足りない行は空白で埋める。
+     */
+    private void pasteBlock(int insertCol) {
+        String[] segs = yankRegister.split("\n", -1);
+        int startRow = cursorRow;
+        for (int i = 0; i < segs.length; i++) {
+            int targetRow = startRow + i;
+            String[] lines = getLines();
+            while (targetRow >= lines.length) {
+                buffer.insert(buffer.length(), "\n");
+                lines = getLines();
+            }
+            String line = lines[targetRow];
+            if (line.length() < insertCol) {
+                buffer.insert(offsetAt(targetRow, line.length()),
+                        " ".repeat(insertCol - line.length()));
+            }
+            if (!segs[i].isEmpty()) {
+                buffer.insert(offsetAt(targetRow, insertCol), segs[i]);
+            }
+        }
+        cursorRow = startRow;
+        cursorCol = insertCol;
+        clampCursorForNormal();
+    }
+
+    // -------------------------------------------------------------------------
     // カーソル移動
     // -------------------------------------------------------------------------
 
@@ -2249,6 +2357,8 @@ public class ModalEditor {
         if (yankRegister.isEmpty()) return;
         if (yankType == YankType.LINE) {
             pasteLineAfter();
+        } else if (yankType == YankType.BLOCK) {
+            pasteBlock(cursorCol + 1);
         } else {
             pasteCharAfter();
         }
@@ -2258,6 +2368,8 @@ public class ModalEditor {
         if (yankRegister.isEmpty()) return;
         if (yankType == YankType.LINE) {
             pasteLineBefore();
+        } else if (yankType == YankType.BLOCK) {
+            pasteBlock(cursorCol);
         } else {
             pasteCharBefore();
         }
@@ -2666,12 +2778,14 @@ public class ModalEditor {
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
 
-            boolean isVisual     = (mode == Mode.VISUAL);
-            boolean isVisualLine = (mode == Mode.VISUAL_LINE);
-            canvas.setVisualMode(isVisual || isVisualLine);
+            boolean isVisual      = (mode == Mode.VISUAL);
+            boolean isVisualLine  = (mode == Mode.VISUAL_LINE);
+            boolean isVisualBlock = (mode == Mode.VISUAL_BLOCK);
+            canvas.setVisualMode(isVisual || isVisualLine || isVisualBlock);
             canvas.setVisualLineMode(isVisualLine);
+            canvas.setVisualBlockMode(isVisualBlock);
 
-            if (isVisual) {
+            if (isVisual || isVisualBlock) {
                 canvas.setSelection(anchorRow, anchorCol, cursorRow, cursorCol);
             } else if (isVisualLine) {
                 canvas.setSelection(anchorRow, 0, cursorRow, 0);
@@ -2744,6 +2858,7 @@ public class ModalEditor {
     public boolean isCommandMode()     { return mode == Mode.COMMAND; }
     public boolean isVisualMode()      { return mode == Mode.VISUAL; }
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
+    public boolean isVisualBlockMode() { return mode == Mode.VISUAL_BLOCK; }
     public boolean isSearchMode()         { return mode == Mode.SEARCH; }
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
