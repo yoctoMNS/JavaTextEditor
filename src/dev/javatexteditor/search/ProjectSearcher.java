@@ -32,8 +32,19 @@ public class ProjectSearcher {
     private static final long MAX_FILE_SIZE_BYTES = 2L * 1024 * 1024; // 2MB
 
     /**
+     * grep のデフォルトスキップ対象ディレクトリ。{@link FileNameSearcher#SKIP_DIRS} と共通。
+     * 以前は「意図的に .git/build/target のみをスキップする」設計だったが、作業ディレクトリの
+     * 既定値がホームディレクトリになりうるため、node_modules 等（数万ファイル規模になりうる）を
+     * 素通しすると Shift+K/gr/:grep が容易にタイムアウトする問題が実測で確認された。
+     * ユーザーからの明示的な要望（gR / :grep! / \g! / \f! の「全ファイル走査」指定）に応じて
+     * デフォルトはこのスキップ対象を適用し、bang（!）付きの呼び出しでのみスキップを無効化する。
+     */
+    private static final java.util.Set<String> DEFAULT_SKIP_DIRS = FileNameSearcher.SKIP_DIRS;
+
+    /**
      * baseDir 配下のテキストファイルを再帰的に走査し、
      * pattern に一致する行を SearchResult のリストで返す。
+     * {@link #DEFAULT_SKIP_DIRS} を適用する（{@code node_modules}等をスキップ）。
      *
      * @param baseDir  検索の起点ディレクトリ
      * @param pattern  java.util.regex.Pattern 形式の正規表現
@@ -41,6 +52,21 @@ public class ProjectSearcher {
      * @throws PatternSyntaxException 正規表現が不正な場合
      */
     public List<SearchResult> search(Path baseDir, String pattern) {
+        return search(baseDir, pattern, false);
+    }
+
+    /**
+     * baseDir 配下のテキストファイルを再帰的に走査し、
+     * pattern に一致する行を SearchResult のリストで返す。
+     *
+     * @param baseDir  検索の起点ディレクトリ
+     * @param pattern  java.util.regex.Pattern 形式の正規表現
+     * @param fullScan true の場合 {@link #DEFAULT_SKIP_DIRS} を無視し、全ファイルを走査する
+     *                 （gR / :grep! / \g! / \f! 等「bang」付き呼び出し用）
+     * @return 一致結果のリスト（発見順）
+     * @throws PatternSyntaxException 正規表現が不正な場合
+     */
+    public List<SearchResult> search(Path baseDir, String pattern, boolean fullScan) {
         Pattern regex = Pattern.compile(pattern);
         List<SearchResult> results = new ArrayList<>();
 
@@ -66,9 +92,11 @@ public class ProjectSearcher {
 
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    // .git ディレクトリはスキップして高速化
+                    if (fullScan) {
+                        return FileVisitResult.CONTINUE;
+                    }
                     String name = dir.getFileName() == null ? "" : dir.getFileName().toString();
-                    if (name.equals(".git") || name.equals("build") || name.equals("target")) {
+                    if (DEFAULT_SKIP_DIRS.contains(name)) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;

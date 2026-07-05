@@ -20,12 +20,12 @@ import java.util.regex.PatternSyntaxException;
 public class FileNameSearcher {
 
     /** ファイル走査系機能で共通に使う、慣例的なスキップ対象ディレクトリ名。
-     *  注意: ProjectSearcher(grep) は意図的に .git/build/target のみをスキップしており、この集合は使わない。 */
+     *  ProjectSearcher(grep) もデフォルトではこの集合を使う（bang付き呼び出し時のみ無視する）。 */
     public static final Set<String> SKIP_DIRS =
         Set.of(".git", "build", "target", ".gradle", "node_modules", ".idea", ".vscode");
 
     /**
-     * baseDir 配下のファイルをファイル名パターンで検索する。
+     * baseDir 配下のファイルをファイル名パターンで検索する。{@link #SKIP_DIRS} を適用する。
      *
      * @param baseDir  検索の起点ディレクトリ
      * @param pattern  java.util.regex.Pattern 形式の正規表現（大文字小文字無視）
@@ -33,6 +33,19 @@ public class FileNameSearcher {
      * @throws PatternSyntaxException 正規表現が不正な場合
      */
     public List<Path> search(Path baseDir, String pattern) throws PatternSyntaxException {
+        return search(baseDir, pattern, false);
+    }
+
+    /**
+     * baseDir 配下のファイルをファイル名パターンで検索する。
+     *
+     * @param baseDir  検索の起点ディレクトリ
+     * @param pattern  java.util.regex.Pattern 形式の正規表現（大文字小文字無視）
+     * @param fullScan true の場合 {@link #SKIP_DIRS} を無視し、全ファイルを走査する（\f! 用）
+     * @return baseDir からの相対パスのリスト（発見順）
+     * @throws PatternSyntaxException 正規表現が不正な場合
+     */
+    public List<Path> search(Path baseDir, String pattern, boolean fullScan) throws PatternSyntaxException {
         Pattern p = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);
         List<Path> results = new ArrayList<>();
 
@@ -44,6 +57,9 @@ public class FileNameSearcher {
             Files.walkFileTree(baseDir, new SimpleFileVisitor<Path>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    if (fullScan) {
+                        return FileVisitResult.CONTINUE;
+                    }
                     String name = dir.getFileName() == null ? "" : dir.getFileName().toString();
                     if (SKIP_DIRS.contains(name)) {
                         return FileVisitResult.SKIP_SUBTREE;
