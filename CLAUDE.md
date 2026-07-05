@@ -162,6 +162,14 @@ project-root/
 - **Ctrl+Space（`triggerCompletion()`/`recheckCompletion()`）は `queryMergedCompletion()` で `wordIndex`（作業ディレクトリ配下のファイル + 現在バッファの単語。フィールド/メソッド/ローカル変数/定数を含む）を最優先し、その後に `completionIndex`（JDK クラス名のみ）を重複除去のうえ追加するようになった**。ユーザーからの明示的な要望（「Javaクラス API の補完はクラス名のみにし、残りの単語補完候補は作業ディレクトリのファイル群を最優先にする」）に基づく。`Alt+/`（`triggerWordCompletion()`/`recheckWordCompletion()`、`completionIsWordMode == true`）は従来どおり `wordIndex` のみを使う独立した経路のままで変更していない。
 - **`COMPLETION_MAX_RESULTS` の上限は両ソース合算で1つ**: `queryMergedCompletion()` は `wordIndex` 側の結果だけで上限に達した場合、`completionIndex`（クラス名）を問い合わせずに打ち切る。これが「作業ディレクトリのファイル群を最優先」の実装そのもの。
 
+## `dev.javatexteditor.completion2` パッケージ（未接続の独立コンポーネント）
+
+- **経緯**: 「Vimの `i_CTRL-N` 相当の単語補完を `CompletionCandidate`/`CompletionSession`/`CompletionEngine`/`TokenScanner`/`EditorKeyHandler`/`CompletionController`/`CompletionPopupModel` という指定クラス構成で実装してほしい」という依頼があったが、既に本エディタの `Alt+/` 単語補完は `WordIndex`/`CompletionIndex`/`ModalEditor`/`EditorCanvas` を使う設計として完成済み（上記「単語補完（Alt+/）の設計決定事項」節）であり、指定構成は既存実装と矛盾する。CLAUDE.mdの方針（既存設計と矛盾する実装は着手前に確認）に従い確認を試みたが、確認手段が使えない状況だったため、既存の本番経路（`ModalEditor`/`EditorCanvas`/`WordIndex`/`CompletionIndex`、Alt+/ キーの実際の割り当て）には一切手を入れず、`src/dev/javatexteditor/completion2/` に独立パッケージとして指定クラス構成をそのまま実装する形で対応した。
+- **本番未接続**: `Main.java`・`ModalEditor.java`・`EditorCanvas.java`・`KeymapRegistry` からは一切参照されない。`Alt+/` キーは本番エディタでは従来どおり `ModalEditor`/`WordIndex` 側が処理する（本パッケージのキー割り当てとは独立に動作し、競合しない）。
+- **中身**: `CompletionCandidate`（record）・`TokenScanner`（`[A-Za-z0-9_$]+` トークン走査）・`CompletionEngine`（プレフィックス前方一致・カーソル近接優先の候補計算、Swing非依存の純粋ロジック）・`CompletionSession`（1回の補完セッションの状態・巡回、Swing非依存）・`CompletionPopupModel`（`AbstractListModel` ベースのUI側モデル）・`CompletionController`（`JTextComponent`/`Document`/`UndoManager`と結線しCompoundEditで1候補入れ替え=1Undo単位にする統合層）・`EditorKeyHandler`（Alt+/・Shift+Alt+/・Esc・Enter/Tabのキー変換のみを担う薄いアダプタ）。ロジック層（Candidate/TokenScanner/Engine/Session）とUI層（Controller/KeyHandler/PopupModel）を分離しており、将来Swing以外に差し替える場合はUI層のみ置き換えればよい設計。
+- **テスト**: `test/dev/javatexteditor/completion2/CompletionEngineTest.java`（15/15、本プロジェクトの自作mainハーネス方式）。`CompletionPopupDemo.java` は `VisualPreview.java` と同様の手動デモ（`*Test.java` 命名ではないため `test.sh` からは自動実行されない。ディスプレイのある環境でのみ手動実行する想定）。
+- **今後の判断待ち**: 本パッケージを実際に本番経路へ接続するか、既存の `WordIndex` ベース実装を置き換えるか、あるいは削除するかはユーザーの判断待ち。次にこのパッケージに触れる開発者は、まずユーザーに方針を確認してから進めること。
+
 ## Shift+K フリーズ修正（`ProjectSearcher` の巨大ファイル上限）
 
 - **症状**: NORMAL モードで `Shift+K`（`jdk.doc`。定義ジャンプ）を押すとエディタがフリーズすることがあった。
