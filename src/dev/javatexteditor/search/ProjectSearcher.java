@@ -24,6 +24,13 @@ public class ProjectSearcher {
     /** バイナリ判定: NUL バイトを含む場合はバイナリとみなしてスキップ */
     private static final int NUL = 0;
 
+    /** 巨大ファイル（ログ・ダンプ等）の全文読み込みに時間を取られないための上限。
+     *  WordIndex と同じ 2MB を採用（analysis/WordIndex.java 参照）。
+     *  この上限がないと、K（jdk.doc）/ gr / :grep はプロジェクトルート配下を
+     *  同期的（EDT上）に全文検索するため、巨大ファイルが1つあるだけで
+     *  UI がフリーズしたように見える不具合があった。 */
+    private static final long MAX_FILE_SIZE_BYTES = 2L * 1024 * 1024; // 2MB
+
     /**
      * baseDir 配下のテキストファイルを再帰的に走査し、
      * pattern に一致する行を SearchResult のリストで返す。
@@ -45,7 +52,9 @@ public class ProjectSearcher {
             Files.walkFileTree(baseDir, new SimpleFileVisitor<Path>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    searchFile(file, regex, baseDir, results);
+                    if (attrs.size() <= MAX_FILE_SIZE_BYTES) {
+                        searchFile(file, regex, baseDir, results);
+                    }
                     return FileVisitResult.CONTINUE;
                 }
 

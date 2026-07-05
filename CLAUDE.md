@@ -155,6 +155,14 @@ project-root/
 - **`completionActive`/`completionItems`/`completionSelectedIdx`/`completionPrefix`（Ctrl+Space のシンボル補完と共用のフィールド）をそのまま流用**し、`completionIsWordMode` フラグだけを追加してどちらのインデックスに対して再クエリするかを切り替えている。ポップアップのナビゲーション（↑↓・Tab/Enter・Esc）・描画（`EditorCanvas.setCompletionState()`）は完全に共通化されており、専用の UI コードは増やしていない。`CompletionItem.kind()` には新しい種別文字列 `"wd"`（2文字。既存の `"cls"/"mth"/"fld"` と同じ描画幅に収まるよう選定）を使う。
 - **プロジェクト全体のスキャンは起動時に1回だけ**（`Main.java` で `WordIndex.build(projectRoot)`）。`CompletionIndex` 同様、`:cd` での作業ディレクトリ変更時に再構築する仕組みは持たない（既存の `CompletionIndex` にもない挙動であり、スコープを広げないため）。
 
+## Shift+K フリーズ修正（`ProjectSearcher` の巨大ファイル上限）
+
+- **症状**: NORMAL モードで `Shift+K`（`jdk.doc`。定義ジャンプ）を押すとエディタがフリーズすることがあった。
+- **原因**: `Shift+K` → `ModalEditor.lookupJdkDoc()` → `ProjectSymbolResolver.resolve()` は `dev.javatexteditor.search.ProjectSearcher.search()` で作業ディレクトリ配下を**同期的（EDT上）に**全文grepする。作業ディレクトリの既定値はヒントが無ければユーザーのホームディレクトリ（`WorkingDirectoryManager` 参照）になり得るため、ファイルを開かずに `K` を押すと巨大なホームディレクトリ全体を対象に検索が走る。`ProjectSearcher` には `WordIndex`（Alt+/ の単語補完索引。`.claude/skills` の単語補完節参照）が既に持っている「2MB超のファイルは読み飛ばす」上限が無く、巨大なログ/ダンプ/メディアファイル1つを読み込むだけで数十秒〜フリーズしたように見える遅延が発生していた。
+- **修正**: `ProjectSearcher.search()` の `visitFile` に `attrs.size() <= MAX_FILE_SIZE_BYTES`（2MB、`WordIndex` と同じ値）のガードを追加し、巨大ファイルの全文読み込みを回避するようにした（`src/dev/javatexteditor/search/ProjectSearcher.java`）。
+- **意図的に変更しなかった点**: `ProjectSearcher` はディレクトリスキップ対象を `.git`/`build`/`target` のみに限定しており（`FileNameSearcher.SKIP_DIRS`/`WordIndex` が使う `node_modules`/`.idea` 等は対象外）、これはコード内コメントに「意図的」と明記された既存の設計判断のため今回は変更していない。ディレクトリスキップ範囲を広げる場合は別途ユーザーに確認すること。
+- **未対応の残課題**: ファイル数自体が非常に多いディレクトリ（例: ホームディレクトリ配下に数十万ファイル）では、2MB上限を入れても合計時間はなお長くなりうる。根本的に解消するには `Shift+K` の検索処理自体をバックグラウンドスレッド化する必要があるが、現状 `lookupJdkDoc()` は同期呼び出し前提（カーソル移動を呼び出し直後に判定する設計）のため、今回のスコープでは見送った。
+
 ## 作業時の方針
 
 - 何かを実装・設計する前に、関連する`.claude/skills/`配下のSKILL.mdを必ず確認すること。
