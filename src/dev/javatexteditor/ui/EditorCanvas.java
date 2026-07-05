@@ -882,6 +882,15 @@ public class EditorCanvas extends JPanel {
         int totalH = lines.length * lineHeight + 8; // タイトルのフォントサイズ差分
         int startY = Math.max(lineHeight, (areaH - totalH) / 2) + lineHeight;
 
+        // キーバインド行のブロック全体を水平中央揃えするため、最大幅を先に求める
+        int maxKeyLineW = 0;
+        for (String line : lines) {
+            if (line.startsWith("  ") && !line.isBlank()) {
+                maxKeyLineW = Math.max(maxKeyLineW, fm.stringWidth(line));
+            }
+        }
+        int keyBlockX = (areaW - maxKeyLineW) / 2;
+
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             int y = startY + i * lineHeight;
@@ -906,7 +915,7 @@ public class EditorCanvas extends JPanel {
                     String key  = line.substring(0, tabIdx).stripTrailing();
                     String desc = line.substring(tabIdx);
                     int keyW = fm.stringWidth(key);
-                    int xKey = (areaW / 2) - 140;
+                    int xKey = keyBlockX;
                     g2.setColor(theme.accent);
                     g2.drawString(key, xKey, y);
                     g2.setColor(theme.foreground);
