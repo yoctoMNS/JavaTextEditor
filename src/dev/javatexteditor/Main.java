@@ -424,9 +424,8 @@ public class Main {
         WD_MANAGER = new WorkingDirectoryManager(initialHint);
         Path projectRoot = WD_MANAGER.getWorkingDirectory();
 
-        // 補完インデックスをバックグラウンドで構築
-        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(
-            JDK_INDEX, projectRoot, SOURCE_ANALYZER);
+        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築
+        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(JDK_INDEX);
         // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
         WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
 

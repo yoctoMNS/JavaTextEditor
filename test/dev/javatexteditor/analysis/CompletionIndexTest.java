@@ -1,6 +1,5 @@
 package dev.javatexteditor.analysis;
 
-import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -17,13 +16,9 @@ public class CompletionIndexTest {
 
         // JdkClassIndex を先に同期構築
         JdkClassIndex jdkIndex = JdkClassIndex.buildSync();
-        SourceAnalyzer analyzer = new SourceAnalyzer();
-
-        // プロジェクトディレクトリ（src/）を補完対象に含める
-        Path projectRoot = Path.of("src");
 
         long start = System.currentTimeMillis();
-        CompletionIndex ci = CompletionIndex.buildSync(jdkIndex, projectRoot, analyzer);
+        CompletionIndex ci = CompletionIndex.buildSync(jdkIndex);
         long elapsed = System.currentTimeMillis() - start;
 
         testBuildTime(elapsed);
@@ -34,8 +29,6 @@ public class CompletionIndexTest {
         testQueryEmpty(ci);
         testQueryMaxResults(ci);
         testQueryNoMatch(ci);
-        testQueryProjectClass(ci);
-        testQueryProjectMethod(ci);
         testKindField(ci);
 
         // allSimpleNames テスト
@@ -102,32 +95,11 @@ public class CompletionIndexTest {
         assertTrue("マッチしないプレフィックスは空リスト", results.isEmpty());
     }
 
-    private static void testQueryProjectClass(CompletionIndex ci) {
-        // このプロジェクト自身の "PieceTable" クラスが返るはず
-        List<CompletionItem> results = ci.query("PieceTable", 10);
-        assertTrue("プロジェクトクラス 'PieceTable' が補完候補に含まれる", !results.isEmpty());
-        boolean found = results.stream().anyMatch(it -> it.label().equals("PieceTable"));
-        assertTrue("'PieceTable' という label が返る", found);
-        // kind は "cls" のはず
-        CompletionItem item = results.stream()
-            .filter(it -> it.label().equals("PieceTable")).findFirst().orElseThrow();
-        assertEquals("PieceTable の kind は 'cls'", "cls", item.kind());
-    }
-
-    private static void testQueryProjectMethod(CompletionIndex ci) {
-        // SourceAnalyzer が analyzeFile() というメソッドを持つはず
-        List<CompletionItem> results = ci.query("analyzeFile", 10);
-        assertTrue("プロジェクトメソッド 'analyzeFile' が補完候補に含まれる", !results.isEmpty());
-        boolean found = results.stream().anyMatch(it -> it.label().equals("analyzeFile"));
-        assertTrue("'analyzeFile' という label が返る", found);
-    }
-
     private static void testKindField(CompletionIndex ci) {
-        // kind の値が "cls"/"mth"/"fld" のいずれかであることを確認
+        // CompletionIndex は JDK クラス名のみを扱うため、kind は常に "cls"
         List<CompletionItem> results = ci.query("List", 10);
         for (CompletionItem it : results) {
-            assertTrue("kind は cls/mth/fld のいずれか",
-                it.kind().equals("cls") || it.kind().equals("mth") || it.kind().equals("fld"));
+            assertEquals("kind は常に 'cls'", "cls", it.kind());
         }
     }
 

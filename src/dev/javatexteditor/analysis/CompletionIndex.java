@@ -1,21 +1,21 @@
 package dev.javatexteditor.analysis;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Stream;
 
 /**
- * クラス名・メソッド名・フィールド名の入力補完インデックス。
+ * JDK クラス名の入力補完インデックス。
  *
  * TreeMap による昇順ソートを利用し、subMap(prefix, prefix+"￿") で
  * O(log n) のプレフィックス検索を実現する。
+ *
+ * かつてはプロジェクト内のメソッド/フィールド名も SourceAnalyzer（javac AST 解析）で
+ * インデックスしていたが、プロジェクト全ファイルへの AST 解析は処理が重いため廃止した。
+ * メソッド/フィールド/ローカル変数/定数などの候補は WordIndex（正規表現ベース・軽量）に一本化し、
+ * このクラスは JDK クラス名（"cls"）のみを扱う。
  *
  * インデックス構築はバックグラウンド仮想スレッドで行う。
  * 構築完了前に query() を呼んだ場合は空リストを返す。
@@ -31,12 +31,9 @@ public class CompletionIndex {
     /**
      * バックグラウンドでインデックスを構築し、構築中のインスタンスを即座に返す。
      *
-     * @param jdkIndex    JDK クラスインデックス（build() 完了済みでなくてもよい）
-     * @param projectRoot プロジェクトルートディレクトリ（null のときスキップ）
-     * @param analyzer    SourceAnalyzer インスタンス
+     * @param jdkIndex JDK クラスインデックス（build() 完了済みでなくてもよい）
      */
-    public static CompletionIndex build(JdkClassIndex jdkIndex, Path projectRoot,
-                                        SourceAnalyzer analyzer) {
+    public static CompletionIndex build(JdkClassIndex jdkIndex) {
         CompletionIndex ci = new CompletionIndex();
         Thread.ofVirtual().start(() -> {
             // JDK インデックスが完了するまで待つ
@@ -48,17 +45,13 @@ public class CompletionIndex {
                 return;
             }
             ci.addJdkClasses(jdkIndex);
-            if (projectRoot != null) {
-                ci.addProjectSymbols(projectRoot, analyzer);
-            }
             ci.ready.set(true);
         });
         return ci;
     }
 
     /** テスト用: 同期的に構築して返す。 */
-    public static CompletionIndex buildSync(JdkClassIndex jdkIndex, Path projectRoot,
-                                            SourceAnalyzer analyzer) {
+    public static CompletionIndex buildSync(JdkClassIndex jdkIndex) {
         CompletionIndex ci = new CompletionIndex();
         try {
             jdkIndex.awaitReady();
@@ -68,9 +61,6 @@ public class CompletionIndex {
             return ci;
         }
         ci.addJdkClasses(jdkIndex);
-        if (projectRoot != null) {
-            ci.addProjectSymbols(projectRoot, analyzer);
-        }
         ci.ready.set(true);
         return ci;
     }
@@ -115,14 +105,6 @@ public class CompletionIndex {
         return Collections.unmodifiableList(result);
     }
 
-    /**
-     * プロジェクト内の全 .java ファイルを再スキャンしてインデックスを更新する。
-     * 保存時にバックグラウンドで呼ぶことを想定。
-     */
-    public void refreshProjectSymbols(Path projectRoot, SourceAnalyzer analyzer) {
-        Thread.ofVirtual().start(() -> addProjectSymbols(projectRoot, analyzer));
-    }
-
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
@@ -131,34 +113,5 @@ public class CompletionIndex {
         for (String name : jdkIndex.allSimpleNames()) {
             index.putIfAbsent(name, new CompletionItem(name, "cls"));
         }
-    }
-
-    private void addProjectSymbols(Path projectRoot, SourceAnalyzer analyzer) {
-        try (Stream<Path> files = Files.walk(projectRoot)) {
-            files.filter(p -> p.toString().endsWith(".java"))
-                 .forEach(p -> indexFile(p, analyzer));
-        } catch (IOException | UncheckedIOException ignored) {
-            // Files.walk はアクセス不可なディレクトリ（Windowsのジャンクション等）に遭遇すると
-            // 走査中に UncheckedIOException を投げる。IOException だけでは捕捉できないため両方catchする。
-        }
-    }
-
-    private void indexFile(Path path, SourceAnalyzer analyzer) {
-        try {
-            SourceIndex si = analyzer.analyzeFile(path);
-            for (SymbolEntry sym : si.symbols()) {
-                String kind = switch (sym.kind()) {
-                    case CLASS, INTERFACE, ENUM -> "cls";
-                    case METHOD, CONSTRUCTOR    -> "mth";
-                    case FIELD                  -> "fld";
-                };
-                // クラス名は優先度が高いため putIfAbsent ではなく上書き条件付きで登録
-                String label = sym.name();
-                CompletionItem existing = index.get(label);
-                if (existing == null || (kind.equals("cls") && !existing.kind().equals("cls"))) {
-                    index.put(label, new CompletionItem(label, kind));
-                }
-            }
-        } catch (AnalysisException ignored) {}
     }
 }
