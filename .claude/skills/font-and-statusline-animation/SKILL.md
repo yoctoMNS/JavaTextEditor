@@ -300,6 +300,14 @@ static int testFrameCalculation() {
 | 高DPIディスプレイ | Swingの`Graphics2D`はHiDPI対応が`JFrame`の設定次第 | `System.setProperty("sun.java2d.uiScale", "2")` 等はJava 21で有効 |
 | ビットマップフォントのUnicode対応 | 方針Bでは全漢字をカバーするデータ量が膨大（数MB〜数十MB） | ASCII/Latin + 頻出漢字に絞るか、方針Aとのハイブリッドにする |
 
+## 実装済みの修正: キー入力時だけ滑らかになる不具合（Windows タイマー分解能）
+
+- **症状**: `EditorCanvas` のウォーキングパーソンアニメーションが、キー入力（IME処理含む）をしていない間はカクついて見え、キー入力中だけ滑らかになる。
+- **原因**: Windows では、いずれかのスレッドが短い `Thread.sleep()` を実行している間だけ、JVM（HotSpotの`os::sleep`実装）がシステムタイマー分解能を約1msに引き上げる。`javax.swing.Timer`は内部で`Object.wait()`を使っており、キー入力やIME処理で短いスリープが断続的に発生している間だけタイマー精度が上がって滑らかになり、アイドル時は既定のタイマー分解能（環境によっては数十ms単位、かつ電源プランによってはタイマー・コアレッシング）にジッターしていた。Linuxではこの問題は再現しない（`java.util.Timer`系のOS依存の既知のJVM挙動）。実機で `javax.swing.Timer` 単体の発火間隔を計測しても、Linux環境ではキー入力の有無に関わらず一定間隔（33ms付近）で安定しており、この診断を裏付けている。
+- **修正**: `EditorCanvas` に「タイマー分解能ピン留めスレッド」を追加した（`acquireTimerResolutionPin()`/`releaseTimerResolutionPin()`）。エディタ画面が最低1つ表示されている間（`addNotify()`〜`removeNotify()`のライフサイクルに連動、複数ペイン分割時も参照カウントで1本だけ起動）、`Thread.sleep(1)`を繰り返す最低優先度のデーモンスレッドを立て、システムタイマー分解能を引き上げたままにする。これはJava製デスクトップ/ゲームアプリで広く使われる既知の回避策で、ネイティブライブラリや外部依存を追加せずJava SE標準APIのみで完結する。
+- **fps修正**: 併せてタイマー間隔を `40ms`（25fps）から `1000/30 = 33ms`（30fps）に変更した（`ANIM_FRAME_INTERVAL_MS`定数）。
+- **意図的に採用しなかった案**: JNIで`timeBeginPeriod`を直接呼ぶ案は「依存ライブラリ・ビルドツールを使わない」というCLAUDE.mdの制約に反するため見送った。ネイティブコード無しでも同じ効果が得られるスリープスレッド方式を採用した。
+
 ---
 
 ## このスキルを使うタイミング
