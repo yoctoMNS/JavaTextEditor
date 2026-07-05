@@ -81,6 +81,18 @@ public class ModalEditor {
     private enum YankType { CHAR, LINE, BLOCK }
     private YankType yankType = YankType.CHAR;
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
+    // Visual '>'/'<' 用の count 前置き入力（例: "3>" は shiftwidth*3）。数字キー以外が来たら破棄する。
+    private String visualCountBuffer = "";
+    private final IndentSettings indentSettings = new IndentSettings();
+    // gv: 直前の Visual 選択（種別・アンカー・カーソル）を記憶する。'>'/'<' 実行後も
+    // 更新済みの範囲で保存されるため、'>gv' のような再選択運用がそのまま機能する。
+    private enum VisualKind { CHAR, LINE, BLOCK }
+    private boolean lastVisualValid = false;
+    private VisualKind lastVisualKind = VisualKind.CHAR;
+    private int lastVisualAnchorRow = 0;
+    private int lastVisualAnchorCol = 0;
+    private int lastVisualCursorRow = 0;
+    private int lastVisualCursorCol = 0;
     // VISUAL BLOCK: I/A/c による矩形挿入（INSERTモード中に1行だけ入力させ、
     // ESC/Ctrl+]で抜けるときに他の行の同じ列へ複製する）
     private boolean blockInsertActive = false;
@@ -313,6 +325,7 @@ public class ModalEditor {
         }
         if ((mode == Mode.VISUAL || mode == Mode.VISUAL_LINE || mode == Mode.VISUAL_BLOCK)
                 && keyCode == KeyEvent.VK_ESCAPE) {
+            saveLastVisualFromCurrentMode();
             mode = Mode.NORMAL;
             pendingSequence = "";
             syncCanvas();
@@ -409,6 +422,8 @@ public class ModalEditor {
             if (prev == 'g' && keyChar == 'r') { goToReferences(false); return; }
             // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
             if (prev == 'g' && keyChar == 'R') { goToReferences(true); return; }
+            // gv: 直前の Visual 選択（種別・範囲）を再選択する
+            if (prev == 'g' && keyChar == 'v') { restoreLastVisual(); return; }
             if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
                 return;
@@ -578,6 +593,7 @@ public class ModalEditor {
             case "screen.bottom" -> jumpToScreenRow(2);
             case "buffer.prev"   -> switchToRelativeBuffer(-1);
             case "buffer.next"   -> switchToRelativeBuffer(+1);
+            case "motion.match.pair" -> jumpToMatchingBracket();
         }
     }
 
@@ -2170,6 +2186,13 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processVisualKey(int keyCode, char keyChar, int modifiers) {
+        // '>'/'<' の前置き count（例: "3>"）。数字以外が来たら次の action 解決時に破棄される。
+        if (Character.isDigit(keyChar) && (keyChar != '0' || !visualCountBuffer.isEmpty())) {
+            visualCountBuffer += keyChar;
+            return;
+        }
+        int count = consumeVisualCount();
+
         String action = keymap.resolve(KeymapRegistry.Mode.VISUAL, keyCode, keyChar, modifiers);
         if (action == null) return;
 
@@ -2177,7 +2200,7 @@ public class ModalEditor {
         if (custom != null) { custom.run(); return; }
 
         switch (action) {
-            case "enter.normal" -> mode = Mode.NORMAL;
+            case "enter.normal" -> { saveLastVisualFromCurrentMode(); mode = Mode.NORMAL; }
             case "cursor.left"   -> moveCursor(0, -1);
             case "cursor.right"  -> moveCursor(0, 1);
             case "cursor.down"   -> moveCursor(1, 0);
@@ -2189,6 +2212,7 @@ public class ModalEditor {
             case "line.start.nonblank" -> moveLineStartNonBlank();
             case "line.end"            -> moveLineEnd();
             case "file.end"            -> moveFileEnd();
+            case "motion.match.pair"   -> jumpToMatchingBracket();
             case "scroll.page.down" -> scrollPage(true,  false);
             case "scroll.page.up"   -> scrollPage(false, false);
             case "scroll.half.down" -> scrollPage(true,  true);
@@ -2199,12 +2223,27 @@ public class ModalEditor {
                 // Vim 仕様: y 後はカーソルを選択開始位置に戻す
                 int startOffset = Math.min(offsetAt(anchorRow, anchorCol), offsetOfCursor());
                 moveCursorToOffset(startOffset);
+                saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
             }
             case "delete" -> {
                 yankRegister = getSelectedText();
                 yankType = YankType.CHAR;
                 deleteSelected();
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
+            case "indent.right", "indent.left" -> {
+                // charwise Visual でも対象は選択に含まれる全行（linewise と同じ扱い）
+                int r1 = Math.min(anchorRow, cursorRow);
+                int r2 = Math.max(anchorRow, cursorRow);
+                indentLines(r1, r2, action.equals("indent.left"), count);
+                // gv 用に「更新済みの範囲」としてこの時点のアンカー/カーソルを保存してから、
+                // 実際のカーソルは r1 行頭の非空白へ移動する（Vim 準拠）。
+                saveLastVisualFromCurrentMode();
+                cursorRow = r1;
+                moveLineStartNonBlank();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
@@ -2216,6 +2255,12 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processVisualLineKey(int keyCode, char keyChar, int modifiers) {
+        if (Character.isDigit(keyChar) && (keyChar != '0' || !visualCountBuffer.isEmpty())) {
+            visualCountBuffer += keyChar;
+            return;
+        }
+        int count = consumeVisualCount();
+
         String action = keymap.resolve(KeymapRegistry.Mode.VISUAL_LINE, keyCode, keyChar, modifiers);
         if (action == null) return;
 
@@ -2223,12 +2268,13 @@ public class ModalEditor {
         if (custom != null) { custom.run(); return; }
 
         switch (action) {
-            case "enter.normal" -> mode = Mode.NORMAL;
+            case "enter.normal" -> { saveLastVisualFromCurrentMode(); mode = Mode.NORMAL; }
             case "cursor.left"  -> moveCursor(0, -1);
             case "cursor.right" -> moveCursor(0, 1);
             case "cursor.down"  -> moveCursor(1, 0);
             case "cursor.up"    -> moveCursor(-1, 0);
             case "file.end"     -> moveFileEnd();
+            case "motion.match.pair" -> jumpToMatchingBracket();
             case "scroll.page.down" -> scrollPage(true,  false);
             case "scroll.page.up"   -> scrollPage(false, false);
             case "scroll.half.down" -> scrollPage(true,  true);
@@ -2240,6 +2286,7 @@ public class ModalEditor {
                 yankType = YankType.LINE;
                 cursorRow = r1;
                 cursorCol = 0;
+                saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
             }
             case "delete" -> {
@@ -2248,7 +2295,18 @@ public class ModalEditor {
                 yankRegister = buildLineRangeText(r1, r2);
                 yankType = YankType.LINE;
                 deleteLineRange(r1, r2);
+                saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
+            }
+            case "indent.right", "indent.left" -> {
+                int r1 = Math.min(anchorRow, cursorRow);
+                int r2 = Math.max(anchorRow, cursorRow);
+                indentLines(r1, r2, action.equals("indent.left"), count);
+                saveLastVisualFromCurrentMode();
+                cursorRow = r1;
+                moveLineStartNonBlank();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
             }
         }
     }
@@ -2266,10 +2324,17 @@ public class ModalEditor {
             if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
                 replaceBlockChar(keyChar);
             }
+            saveLastVisualFromCurrentMode();
             mode = Mode.NORMAL;
             clampCursorForNormal();
             return;
         }
+
+        if (Character.isDigit(keyChar) && (keyChar != '0' || !visualCountBuffer.isEmpty())) {
+            visualCountBuffer += keyChar;
+            return;
+        }
+        int count = consumeVisualCount();
 
         String action = keymap.resolve(KeymapRegistry.Mode.VISUAL_BLOCK, keyCode, keyChar, modifiers);
         if (action == null) return;
@@ -2278,16 +2343,18 @@ public class ModalEditor {
         if (custom != null) { custom.run(); return; }
 
         switch (action) {
-            case "enter.normal" -> mode = Mode.NORMAL;
+            case "enter.normal" -> { saveLastVisualFromCurrentMode(); mode = Mode.NORMAL; }
             case "cursor.left"  -> moveCursor(0, -1);
             case "cursor.right" -> moveCursor(0, 1);
             case "cursor.down"  -> moveCursor(1, 0);
             case "cursor.up"    -> moveCursor(-1, 0);
+            case "motion.match.pair" -> jumpToMatchingBracket();
             case "yank" -> {
                 yankRegister = buildBlockText();
                 yankType = YankType.BLOCK;
                 cursorRow = Math.min(anchorRow, cursorRow);
                 cursorCol = Math.min(anchorCol, cursorCol);
+                saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
@@ -2295,6 +2362,7 @@ public class ModalEditor {
                 yankRegister = buildBlockText();
                 yankType = YankType.BLOCK;
                 deleteBlock();
+                saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
@@ -2309,6 +2377,17 @@ public class ModalEditor {
                 yankType = YankType.BLOCK;
                 deleteBlock();
                 beginBlockInsert(r1, r2, c1, false);
+            }
+            case "indent.right", "indent.left" -> {
+                int r1 = Math.min(anchorRow, cursorRow);
+                int r2 = Math.max(anchorRow, cursorRow);
+                int c1 = Math.min(anchorCol, cursorCol);
+                indentBlock(r1, r2, c1, action.equals("indent.left"), count);
+                saveLastVisualFromCurrentMode();
+                cursorRow = r1;
+                cursorCol = c1;
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
             }
         }
     }
@@ -2460,6 +2539,135 @@ public class ModalEditor {
         cursorRow = startRow;
         cursorCol = insertCol;
         clampCursorForNormal();
+    }
+
+    // -------------------------------------------------------------------------
+    // %（対応する括弧へジャンプ）
+    // -------------------------------------------------------------------------
+
+    /**
+     * カーソル位置が括弧（開き/閉じ）の上にある場合、対応する相手へカーソルを移動する。
+     * 括弧の上になければ何もしない（Vim 本家は行内を前方検索して最初の括弧を探すが、
+     * 本実装ではスコープを絞り「カーソルが括弧上にあるときのみ」に限定している。
+     * 「既知の差分」セクション参照）。
+     *
+     * NORMAL では単純にカーソル移動、VISUAL/VISUAL_LINE/VISUAL_BLOCK ではアンカーを
+     * 保持したまま呼び出し元がこのメソッドを呼ぶだけで選択範囲が更新される
+     * （cursorRow/cursorCol を書き換えるのみで、anchorRow/anchorCol には触れないため）。
+     * operator-pending（将来の d% 等）から使う場合も、offsetOfCursor() と
+     * MatchPairs.findMatch() の組み合わせだけで「移動先 offset」を計算できるため、
+     * このメソッドをそのまま流用するか、同じ2行をオペレータ側から呼べばよい。
+     */
+    private void jumpToMatchingBracket() {
+        int offset = offsetOfCursor();
+        MatchPairs.findMatch(buffer.getText(), offset).ifPresent(this::moveCursorToOffset);
+    }
+
+    // -------------------------------------------------------------------------
+    // Visual '>' / '<' インデントシフト
+    // -------------------------------------------------------------------------
+
+    /** visualCountBuffer を読み取って count（未指定なら1）を返し、バッファをリセットする。 */
+    private int consumeVisualCount() {
+        if (visualCountBuffer.isEmpty()) return 1;
+        int count = Integer.parseInt(visualCountBuffer);
+        visualCountBuffer = "";
+        return count;
+    }
+
+    /** r1〜r2行（両端含む）を行頭から count*shiftwidth 分シフトする（charwise/linewise 共通）。 */
+    private void indentLines(int r1, int r2, boolean left, int count) {
+        for (int row = r1; row <= r2; row++) {
+            String[] lines = getLines();
+            if (row >= lines.length) continue;
+            String line = lines[row];
+            String shifted = Indenter.shiftLine(line, count, left, indentSettings);
+            if (!shifted.equals(line)) {
+                int lineStart = offsetAt(row, 0);
+                buffer.delete(lineStart, line.length());
+                buffer.insert(lineStart, shifted);
+            }
+        }
+    }
+
+    /**
+     * VISUAL BLOCK 専用のインデントシフト。行全体ではなく、矩形の左端列(c1)だけを
+     * 基準にシフトする（CLAUDE.md の方針どおり、この挙動は本家Vimの「blockwiseでも
+     * linewiseと同じく行全体をシフトする」挙動とは異なる、本プロジェクト独自の
+     * 明示的な仕様。詳細は「既知の差分」参照）。
+     * 右シフトは c1 位置に count*shiftwidth 分のインデントを挿入する。
+     * 左シフトは c1 の直前にある空白文字を count*shiftwidth 分だけ取り除く。
+     */
+    private void indentBlock(int r1, int r2, int c1, boolean left, int count) {
+        int deltaWidth = indentSettings.getShiftwidth() * count;
+        for (int row = r1; row <= r2; row++) {
+            String[] lines = getLines();
+            if (row >= lines.length) continue;
+            String line = lines[row];
+            if (left) {
+                int col = Math.min(c1, line.length());
+                int removedWidth = 0;
+                int start = col;
+                while (start > 0 && removedWidth < deltaWidth) {
+                    char ch = line.charAt(start - 1);
+                    if (ch != ' ' && ch != '\t') break;
+                    removedWidth += (ch == '\t') ? indentSettings.getTabstop() : 1;
+                    start--;
+                }
+                if (start < col) {
+                    buffer.delete(offsetAt(row, start), col - start);
+                }
+            } else {
+                if (line.isBlank()) continue; // 空行は右シフトで変更しない
+                if (line.length() < c1) continue; // ブロック開始列に届かない行は対象外
+                String ins = Indenter.buildIndent(deltaWidth, indentSettings);
+                buffer.insert(offsetAt(row, c1), ins);
+            }
+        }
+    }
+
+    /** テスト・将来の設定UIから shiftwidth/tabstop/expandtab/shiftround を変更するための入口。 */
+    public IndentSettings getIndentSettings() {
+        return indentSettings;
+    }
+
+    // -------------------------------------------------------------------------
+    // gv（直前の Visual 選択の再選択）
+    // -------------------------------------------------------------------------
+
+    /** 現在の Visual 系モードのアンカー・カーソル・種別を「直前の Visual 選択」として保存する。 */
+    private void saveLastVisualFromCurrentMode() {
+        VisualKind kind = switch (mode) {
+            case VISUAL -> VisualKind.CHAR;
+            case VISUAL_LINE -> VisualKind.LINE;
+            case VISUAL_BLOCK -> VisualKind.BLOCK;
+            default -> null;
+        };
+        if (kind == null) return;
+        lastVisualValid = true;
+        lastVisualKind = kind;
+        lastVisualAnchorRow = anchorRow;
+        lastVisualAnchorCol = anchorCol;
+        lastVisualCursorRow = cursorRow;
+        lastVisualCursorCol = cursorCol;
+    }
+
+    /** gv: 直前の Visual 選択（範囲・種別）を復元する。未保存なら何もしない。 */
+    private void restoreLastVisual() {
+        if (!lastVisualValid) return;
+        String[] lines = getLines();
+        int maxRow = Math.max(0, lines.length - 1);
+        anchorRow = Math.min(lastVisualAnchorRow, maxRow);
+        cursorRow = Math.min(lastVisualCursorRow, maxRow);
+        int anchorLineLen = anchorRow < lines.length ? lines[anchorRow].length() : 0;
+        int cursorLineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        anchorCol = Math.min(lastVisualAnchorCol, Math.max(0, anchorLineLen - 1));
+        cursorCol = Math.min(lastVisualCursorCol, Math.max(0, cursorLineLen - 1));
+        mode = switch (lastVisualKind) {
+            case CHAR -> Mode.VISUAL;
+            case LINE -> Mode.VISUAL_LINE;
+            case BLOCK -> Mode.VISUAL_BLOCK;
+        };
     }
 
     // -------------------------------------------------------------------------
