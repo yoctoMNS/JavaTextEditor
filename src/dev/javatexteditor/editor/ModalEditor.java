@@ -376,7 +376,9 @@ public class ModalEditor {
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
-            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_R, 'r')) { goToReferences(); return; }
+            if (prev == 'g' && keyChar == 'r') { goToReferences(false); return; }
+            // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
+            if (prev == 'g' && keyChar == 'R') { goToReferences(true); return; }
             if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
                 return;
@@ -1198,13 +1200,18 @@ public class ModalEditor {
                 fileSearchBuffer.deleteCharAt(fileSearchBuffer.length() - 1);
             }
         } else if (keyCode == KeyEvent.VK_ENTER) {
-            String pattern = fileSearchBuffer.toString();
+            String input = fileSearchBuffer.toString();
             mode = Mode.NORMAL;
-            if (!pattern.isEmpty()) {
-                if (fileSearchType == FileSearchType.NAME) {
-                    executeFileNameSearch(pattern);
-                } else {
-                    executeGrep(pattern);
+            if (!input.isEmpty()) {
+                // 先頭が '!' なら bang 指定（\f! / \g!）: デフォルトスキップ対象を無視して全ファイル検索
+                boolean fullScan = input.startsWith("!");
+                String pattern = fullScan ? input.substring(1) : input;
+                if (!pattern.isEmpty()) {
+                    if (fileSearchType == FileSearchType.NAME) {
+                        executeFileNameSearch(pattern, fullScan);
+                    } else {
+                        executeGrep(pattern, getProjectRoot(), fullScan);
+                    }
                 }
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
@@ -1359,15 +1366,22 @@ public class ModalEditor {
         if (canvas != null) canvas.setTelescopeState(false, "", "", List.of(), 0, "");
     }
 
+    private void executeFileNameSearch(String pattern) {
+        executeFileNameSearch(pattern, false);
+    }
+
     /**
      * \f: ファイル名パターンで baseDir 配下を検索し、結果を疑似バッファに表示する。
      * 大文字小文字を区別しない正規表現として扱う。
+     *
+     * @param fullScan true の場合 {@link FileNameSearcher#SKIP_DIRS}（node_modules等）を
+     *                 無視して全ファイルを対象にする（\f! の「bang」指定用）。
      */
-    private void executeFileNameSearch(String pattern) {
+    private void executeFileNameSearch(String pattern, boolean fullScan) {
         Path baseDir = getProjectRoot();
         List<Path> results;
         try {
-            results = fileNameSearcher.search(baseDir, pattern);
+            results = fileNameSearcher.search(baseDir, pattern, fullScan);
         } catch (java.util.regex.PatternSyntaxException e) {
             statusMessage = "E: bad pattern: " + e.getDescription();
             return;
@@ -1378,8 +1392,10 @@ public class ModalEditor {
             return;
         }
 
+        String bangLabel = fullScan ? "!" : "";
         StringBuilder sb = new StringBuilder();
-        sb.append("*file-search* /").append(pattern).append("/ — ").append(results.size()).append(" match(es)\n");
+        sb.append("*file-search").append(bangLabel).append("* /").append(pattern).append("/ — ")
+            .append(results.size()).append(" match(es)\n");
         List<String> paths = new ArrayList<>();
         for (Path p : results) {
             String rel = p.toString().replace('\\', '/');
@@ -1392,7 +1408,7 @@ public class ModalEditor {
         grepResults = null;
         cursorRow = 0;
         cursorCol = 0;
-        statusMessage = "file-search: " + results.size() + " match(es) — Enter to open";
+        statusMessage = "file-search" + bangLabel + ": " + results.size() + " match(es) — Enter to open";
     }
 
     /**
@@ -1576,6 +1592,10 @@ public class ModalEditor {
             loadFromFile(path);
         } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
             openTutorial();
+        } else if (cmd.startsWith("grep! ")) {
+            // bang付き: node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
+            String pattern = cmd.substring(6).trim();
+            executeGrep(pattern, getProjectRoot(), true);
         } else if (cmd.startsWith("grep ")) {
             String pattern = cmd.substring(5).trim();
             executeGrep(pattern);
@@ -1714,7 +1734,11 @@ public class ModalEditor {
     }
 
     private void executeGrep(String pattern) {
-        executeGrep(pattern, getProjectRoot());
+        executeGrep(pattern, getProjectRoot(), false);
+    }
+
+    private void executeGrep(String pattern, Path baseDir) {
+        executeGrep(pattern, baseDir, false);
     }
 
     /**
@@ -1722,8 +1746,11 @@ public class ModalEditor {
      * {@link ProjectSearcher#search} は作業ディレクトリ配下（既定値がホームディレクトリになりうる）を
      * 同期的に全文走査するため、Shift+K（{@link #withSearchTimeout}参照）と同様に
      * {@link #PROJECT_SYMBOL_SEARCH_TIMEOUT_MS} で打ち切り、EDT が長時間ブロックされるのを防ぐ。
+     *
+     * @param fullScan true の場合 {@link ProjectSearcher#DEFAULT_SKIP_DIRS}（node_modules等）を
+     *                 無視して全ファイルを対象にする（gR / :grep! / \g! の「bang」指定用）。
      */
-    private void executeGrep(String pattern, Path baseDir) {
+    private void executeGrep(String pattern, Path baseDir, boolean fullScan) {
         if (pattern.isEmpty()) {
             statusMessage = "E: no pattern";
             return;
@@ -1734,7 +1761,7 @@ public class ModalEditor {
             statusMessage = "E: bad pattern: " + e.getDescription();
             return;
         }
-        List<SearchResult> results = withTimeout(() -> projectSearcher.search(baseDir, pattern));
+        List<SearchResult> results = withTimeout(() -> projectSearcher.search(baseDir, pattern, fullScan));
         if (results == null) {
             statusMessage = "grep: search timed out（作業ディレクトリが大きすぎる可能性があります）";
             return;
@@ -1745,8 +1772,10 @@ public class ModalEditor {
         }
 
         // 結果をバッファに読み込む
+        String bangLabel = fullScan ? "!" : "";
         StringBuilder sb = new StringBuilder();
-        sb.append("*grep* /").append(pattern).append("/ — ").append(results.size()).append(" match(es)\n");
+        sb.append("*grep").append(bangLabel).append("* /").append(pattern).append("/ — ")
+            .append(results.size()).append(" match(es)\n");
         for (SearchResult r : results) {
             sb.append(r.toDisplayLine()).append("\n");
         }
@@ -1757,7 +1786,7 @@ public class ModalEditor {
         currentFilePath = null;
         cursorRow = 0;
         cursorCol = 0;
-        statusMessage = "grep: " + results.size() + " match(es) — Enter to jump";
+        statusMessage = "grep" + bangLabel + ": " + results.size() + " match(es) — Enter to jump";
     }
 
     /**
@@ -2857,8 +2886,11 @@ public class ModalEditor {
      * jdk-source 疑似バッファ内で native ソース（lib/openjdk-native/）が利用可能な場合は
      * そちらを検索対象にする（呼び出し箇所・ヘッダ宣言を含め C/C++ 側の参照を横断的に探す）。
      * それ以外は通常通りプロジェクト全体を検索する。
+     *
+     * @param fullScan true なら gR（bang付き）: node_modules 等のデフォルトスキップ対象も
+     *                 含め、作業ディレクトリ配下を一切除外せず全ファイルを検索する。
      */
-    private void goToReferences() {
+    private void goToReferences(boolean fullScan) {
         String word = wordAtCursor();
         if (word.isEmpty()) {
             setStatusMessage("No identifier at cursor");
@@ -2866,10 +2898,10 @@ public class ModalEditor {
         }
         String pattern = "\\b" + Pattern.quote(word) + "\\b";
         if (inJdkSourceBuffer && sourceTracer.hasNativeSrcDir()) {
-            executeGrep(pattern, sourceTracer.getNativeSrcDir().get());
+            executeGrep(pattern, sourceTracer.getNativeSrcDir().get(), fullScan);
             return;
         }
-        executeGrep(pattern);
+        executeGrep(pattern, getProjectRoot(), fullScan);
     }
 
     /**
