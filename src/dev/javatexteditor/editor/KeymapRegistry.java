@@ -10,7 +10,7 @@ import java.util.Map;
  * アクション名（String）で処理を指定し、ModalEditor で Runnable に変換する。
  */
 public class KeymapRegistry {
-    public enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE }
+    public enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK }
 
     private final Map<Mode, Map<String, String>> bindings = new HashMap<>();
     private final Map<String, Runnable> customActions = new HashMap<>();
@@ -87,6 +87,7 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK, "redo"), "redo");
         bind(Mode.NORMAL, KeyBinding.ofChar('v', "enter.visual"), "enter.visual");
         bind(Mode.NORMAL, KeyBinding.ofChar('V', "enter.visual.line"), "enter.visual.line");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_V, KeyEvent.CTRL_DOWN_MASK, "enter.visual.block"), "enter.visual.block");
         bind(Mode.NORMAL, KeyBinding.ofChar('x', "delete.char"), "delete.char");
         bind(Mode.NORMAL, KeyBinding.ofChar('p', "paste.after"), "paste.after");
         bind(Mode.NORMAL, KeyBinding.ofChar('P', "paste.before"), "paste.before");
@@ -213,5 +214,20 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK, "scroll.page.up"),   "scroll.page.up");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_D, KeyEvent.CTRL_DOWN_MASK, "scroll.half.down"), "scroll.half.down");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK, "scroll.half.up"),   "scroll.half.up");
+
+        // VISUAL BLOCK モード（矩形選択、Ctrl+V）
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('l', "cursor.right"), "cursor.right");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('j', "cursor.down"), "cursor.down");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('k', "cursor.up"), "cursor.up");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('y', "yank"), "yank");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('d', "delete"), "delete");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofCode(KeyEvent.VK_V, KeyEvent.CTRL_DOWN_MASK, "enter.normal"), "enter.normal");
+        // 矩形挿入・変更・置換（I=左端挿入, A=右端挿入, c=変更, r=文字置換）
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('I', "block.insert.before"), "block.insert.before");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('A', "block.insert.after"),  "block.insert.after");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('c', "block.change"),       "block.change");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('r', "block.replace.pending"), "block.replace.pending");
     }
 }
