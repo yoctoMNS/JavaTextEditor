@@ -1717,17 +1717,26 @@ public class ModalEditor {
         executeGrep(pattern, getProjectRoot());
     }
 
-    /** baseDir 配下を grep して *grep* 疑似バッファに結果を表示する。 */
+    /**
+     * baseDir 配下を grep して *grep* 疑似バッファに結果を表示する。
+     * {@link ProjectSearcher#search} は作業ディレクトリ配下（既定値がホームディレクトリになりうる）を
+     * 同期的に全文走査するため、Shift+K（{@link #withSearchTimeout}参照）と同様に
+     * {@link #PROJECT_SYMBOL_SEARCH_TIMEOUT_MS} で打ち切り、EDT が長時間ブロックされるのを防ぐ。
+     */
     private void executeGrep(String pattern, Path baseDir) {
         if (pattern.isEmpty()) {
             statusMessage = "E: no pattern";
             return;
         }
-        List<SearchResult> results;
         try {
-            results = projectSearcher.search(baseDir, pattern);
+            Pattern.compile(pattern);
         } catch (java.util.regex.PatternSyntaxException e) {
             statusMessage = "E: bad pattern: " + e.getDescription();
+            return;
+        }
+        List<SearchResult> results = withTimeout(() -> projectSearcher.search(baseDir, pattern));
+        if (results == null) {
+            statusMessage = "grep: search timed out（作業ディレクトリが大きすぎる可能性があります）";
             return;
         }
         if (results.isEmpty()) {
@@ -2913,14 +2922,23 @@ public class ModalEditor {
      * （バックグラウンドの検索スレッドは走らせたままにして）呼び出し側の JDK 側フォールバックに委ねる。
      */
     private <T> Optional<T> withSearchTimeout(Supplier<Optional<T>> task) {
+        return Optional.ofNullable(withTimeout(() -> task.get().orElse(null)));
+    }
+
+    /**
+     * プロジェクト全体検索を伴う任意の処理（{@link ProjectSearcher}/{@link ProjectSymbolResolver}経由）を
+     * {@link #PROJECT_SYMBOL_SEARCH_TIMEOUT_MS} で打ち切る、{@link #withSearchTimeout} の汎用版。
+     * タイムアウト・例外時は null を返す（呼び出し側で「検索できなかった」ことを判定する）。
+     */
+    private <T> T withTimeout(Supplier<T> task) {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
-            Future<Optional<T>> future = executor.submit(task::get);
+            Future<T> future = executor.submit(task::get);
             return future.get(PROJECT_SYMBOL_SEARCH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            return Optional.empty();
+            return null;
         } catch (Exception e) {
-            return Optional.empty();
+            return null;
         } finally {
             executor.shutdown();
         }
