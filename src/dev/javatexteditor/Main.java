@@ -249,9 +249,9 @@ public class Main {
     }
 
     /** バックグラウンド仮想スレッドでコンパイル解析し、EDT で診断反映と auto-import を行う。
-     *  @param useRealPathIfSaved true のとき、保存済みファイルなら analyzeWithPath を使う
+     *  @param useRealPathIfSaved true のとき、保存済みファイルなら analyzeWithProject を使う
      *                            （INSERT→NORMAL / 保存トリガ用。public class 名不一致エラーを防ぐ）。
-     *                            false のとき常に analyze を使う（Ctrl+Shift+O 用。現行挙動を維持）。
+     *                            false のとき常に analyzeWithProject を使う（Ctrl+Shift+O 用。複数ファイル対応）。
      *  @param failureMessage 解析失敗時にステータス行へ出す文言 */
     private static void runCompileAnalysis(ModalEditor editor, EditorCanvas canvas,
             boolean useRealPathIfSaved, String failureMessage) {
@@ -261,9 +261,10 @@ public class Main {
             try {
                 // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
                 JDK_INDEX.awaitReady();
+                Path projectRoot = WD_MANAGER.getWorkingDirectory();
                 List<CompileDiagnostic> diags = (useRealPathIfSaved && snapshotPath != null)
-                    ? COMPILE_ANALYZER.analyzeWithPath(snapshotPath, source)
-                    : COMPILE_ANALYZER.analyze(source);
+                    ? COMPILE_ANALYZER.analyzeWithProject(snapshotPath, source, projectRoot)
+                    : COMPILE_ANALYZER.analyzeWithProject("<buffer>", source, projectRoot);
                 SwingUtilities.invokeLater(() -> {
                     canvas.setDiagnostics(diags);
                     // 未使用削除は handleAutoImport の全候補処理完了後に実行

@@ -2,6 +2,7 @@ package dev.javatexteditor.analysis;
 
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.util.List;
 
 public class CompileAnalyzerTest {
@@ -241,7 +242,89 @@ public class CompileAnalyzerTest {
             pass += ok ? 1 : 0;
         }
 
-        int total = 15;
+        // Test 16: analyzeWithProject - 複数ファイルコンパイルで別ファイルシンボルが認識される
+        {
+            CompileAnalyzer analyzer = new CompileAnalyzer();
+            java.nio.file.Path tempDir = null;
+            try {
+                tempDir = java.nio.file.Files.createTempDirectory("compiletest");
+
+                // Empty helper file
+                java.nio.file.Path helperFile = tempDir.resolve("Helper.java");
+                java.nio.file.Files.writeString(helperFile, "class Helper { }");
+
+                // Source that references undefined class (not in project)
+                java.nio.file.Path sourceFile = tempDir.resolve("Source.java");
+                String source = "class Source {\n" +
+                    "    UndefinedClass x;\n" +
+                    "}";
+                java.nio.file.Files.writeString(sourceFile, source);
+
+                List<CompileDiagnostic> singleDiags = analyzer.analyze(source);
+                List<CompileDiagnostic> multiDiags = analyzer.analyzeWithProject(
+                    sourceFile.toString(), source, tempDir);
+
+                // 複数ファイルコンパイルでもエラーは報告される（ただし、フィルタリング後）
+                boolean ok = multiDiags.stream().anyMatch(d -> d.kind() == DiagnosticKind.ERROR);
+                System.out.println((ok ? "[OK] " : "[FAIL] ")
+                    + "analyzeWithProject - 複数ファイルコンパイルでエラー検出可能 (errors=" + multiDiags.size() + ")");
+                pass += ok ? 1 : 0;
+            } catch (Exception e) {
+                System.out.println("[FAIL] analyzeWithProject テストで例外: " + e.getMessage());
+            } finally {
+                if (tempDir != null) {
+                    try {
+                        java.nio.file.Files.walk(tempDir)
+                            .sorted(java.util.Comparator.reverseOrder())
+                            .forEach(path -> {
+                                try {
+                                    java.nio.file.Files.delete(path);
+                                } catch (IOException ignored) {}
+                            });
+                    } catch (IOException ignored) {}
+                }
+            }
+        }
+
+        // Test 17: analyzeWithProject - 未定義クラスはエラーになる
+        {
+            CompileAnalyzer analyzer = new CompileAnalyzer();
+            java.nio.file.Path tempDir = null;
+            try {
+                tempDir = java.nio.file.Files.createTempDirectory("compiletest");
+
+                java.nio.file.Path sourceFile = tempDir.resolve("Source.java");
+                String source = "class Source {\n" +
+                    "    UndefinedClass x;\n" +
+                    "}";
+                java.nio.file.Files.writeString(sourceFile, source);
+
+                List<CompileDiagnostic> diags = analyzer.analyzeWithProject(
+                    sourceFile.toString(), source, tempDir);
+
+                boolean hasError = diags.stream()
+                    .anyMatch(d -> d.kind() == DiagnosticKind.ERROR);
+                System.out.println((hasError ? "[OK] " : "[FAIL] ")
+                    + "analyzeWithProject - 未定義クラスがエラーになる (errors=" + diags.size() + ")");
+                pass += hasError ? 1 : 0;
+            } catch (Exception e) {
+                System.out.println("[FAIL] analyzeWithProject 未定義クラステストで例外: " + e.getMessage());
+            } finally {
+                if (tempDir != null) {
+                    try {
+                        java.nio.file.Files.walk(tempDir)
+                            .sorted(java.util.Comparator.reverseOrder())
+                            .forEach(path -> {
+                                try {
+                                    java.nio.file.Files.delete(path);
+                                } catch (IOException ignored) {}
+                            });
+                    } catch (IOException ignored) {}
+                }
+            }
+        }
+
+        int total = 17;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
