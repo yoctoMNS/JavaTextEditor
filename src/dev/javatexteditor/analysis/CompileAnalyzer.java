@@ -125,7 +125,7 @@ public class CompileAnalyzer {
                 // projectRoot を起点に .java ファイルを再帰的に走査
                 Files.walk(projectRoot)
                     .filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".java"))
-                    .filter(p -> !mainFileObj.getName().equals(p.toString())) // メインファイルは既に追加
+                    .filter(p -> !filePath.equals(p.toString())) // メインファイルは既に追加
                     .forEach(p -> {
                         try {
                             String content = Files.readString(p);
