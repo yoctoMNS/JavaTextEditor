@@ -802,20 +802,39 @@ public class ModalEditor {
     /**
      * wordIndex（作業ディレクトリ全体、バックグラウンドで正規表現ビルド済み）と
      * 現在編集中バッファ（保存前の未確定な単語も拾うため毎回その場で抽出）をマージして検索する。
-     * prefix 自体（カーソル直前の、今まさに入力中の未完成な語）は bufferWords から除く。
-     * 除かないとカーソル位置の識別子トークンが常に「prefix と完全一致する単語」として
-     * 候補に混入し、何も入力していないのに補完候補が出る／選択しても何も変わらない、
-     * という無意味な結果になる。
+     *
+     * 候補の並び順は Vim の i_CTRL-N に合わせる: 現在バッファ内でカーソル位置から前方（末尾方向）
+     * に最も近い出現を先頭にし、末尾まで達したら先頭へ折り返してカーソル手前までを続け
+     * （{@link dev.javatexteditor.analysis.WordIndex#extractWordsByProximity}）、それでも
+     * maxResults 枠が埋まらない場合だけディスク索引（辞書順）から補う。
+     * カーソル位置そのものの語（今まさに入力中の未完成なプレフィックス）は
+     * extractWordsByProximity 側で除外済み。
      */
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
-        java.util.Set<String> bufferWords = dev.javatexteditor.analysis.WordIndex.extractWords(buffer.getText());
-        bufferWords.remove(prefix);
-        java.util.List<String> words = wordIndex.query(prefix, COMPLETION_MAX_RESULTS, bufferWords);
+        int cursorOffset = prefixStartOffset();
+        java.util.List<String> bufferWordsOrdered = dev.javatexteditor.analysis.WordIndex
+            .extractWordsByProximity(buffer.getText(), cursorOffset, prefix);
+        java.util.List<String> words = wordIndex.query(prefix, COMPLETION_MAX_RESULTS, bufferWordsOrdered);
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = new java.util.ArrayList<>(words.size());
         for (String w : words) {
             items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));
         }
         return items;
+    }
+
+    /** 入力中プレフィックス（カーソル直前の識別子）の先頭位置を、バッファ全体でのオフセットとして返す。 */
+    private int prefixStartOffset() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return offsetAt(cursorRow, 0);
+        String line = lines[cursorRow];
+        int col = Math.min(cursorCol, line.length());
+        int start = col;
+        while (start > 0
+               && (Character.isLetterOrDigit(line.charAt(start - 1))
+                   || line.charAt(start - 1) == '_')) {
+            start--;
+        }
+        return offsetAt(cursorRow, start);
     }
 
     /** 補完候補リストを有効化して canvas に反映する（4つのトリガ/再クエリ経路の共通末尾処理）。 */
