@@ -454,8 +454,17 @@ public class EditorCanvas extends JPanel {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        Graphics2D g2 = (Graphics2D) g;
+        try {
+            paintContent((Graphics2D) g);
+        } finally {
+            // Linux(X11)では描画コマンドがクライアント側でバッファされ画面への反映タイミングが
+            // 不定になり、アニメーションが微妙にカクつく（Windowsでは発生しない既知の差異）。
+            // paintComponent の後に明示的にフラッシュしてジッターを抑える。
+            Toolkit.getDefaultToolkit().sync();
+        }
+    }
 
+    private void paintContent(Graphics2D g2) {
         // ビットマップフォントのセルサイズを使用する
         int charWidth  = cellW;
         int lineHeight = cellH;
