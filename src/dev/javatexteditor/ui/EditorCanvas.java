@@ -6,10 +6,8 @@ import dev.javatexteditor.telescope.TelescopeItem;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 import java.awt.*;
-import java.awt.event.MouseEvent;
 import java.awt.im.InputContext;
 import java.awt.image.BufferedImage;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -60,9 +58,6 @@ public class EditorCanvas extends JPanel {
     private List<TelescopeItem> telescopeResults = List.of();
     private int telescopeSelectedIdx = 0;
     private String telescopePreview = "";
-
-    // 作業ディレクトリ（ステータス行には表示しない。ホバー時ツールチップでフルパス表示のみ）
-    private Path workingDirectory = null;
 
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
@@ -204,11 +199,6 @@ public class EditorCanvas extends JPanel {
     public int getScrollCol() { return scrollCol; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
-    public void setWorkingDirectory(Path wd) {
-        this.workingDirectory = wd;
-        setToolTipText(wd != null ? wd.toString() : null);
-        repaint();
-    }
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
     public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
     public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; repaint(); }
@@ -1016,14 +1006,6 @@ public class EditorCanvas extends JPanel {
 
         // ウォーキングパーソンアニメーション（左→右へ走り抜ける）
         drawWalkingPerson(g2, y - lineHeight + 1, lineHeight);
-    }
-
-    @Override
-    public String getToolTipText(MouseEvent e) {
-        if (workingDirectory != null && e.getY() >= getHeight() - cachedLineHeight) {
-            return workingDirectory.toString();
-        }
-        return super.getToolTipText(e);
     }
 
     private void drawWalkingPerson(Graphics2D g2, int statusTopY, int lineHeight) {
