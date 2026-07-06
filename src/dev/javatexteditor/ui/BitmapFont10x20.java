@@ -7,7 +7,7 @@ import java.awt.image.BufferedImage;
  * X11 xfonts-base の 10x20.pcf から自動生成。
  * 各グリフ: 20行 × 2バイト = 40バイト。ビット順: MSBit = 左端ピクセル。
  */
-public final class BitmapFont10x20 {
+public final class BitmapFont10x20 implements FixedBitmapFont {
 
     public static final int BASE_CELL_W = 10;
     public static final int BASE_CELL_H = 20;
@@ -16,6 +16,8 @@ public final class BitmapFont10x20 {
     private static final int GLYPH_BYTES = 40;
     /** グリフ下部に確保された descender 用の行数（20行中4行）。 */
     private static final int BASE_DESCENT = 4;
+
+    public static final BitmapFont10x20 INSTANCE = new BitmapFont10x20();
 
     /**
      * セル高さ cellH における、セル底辺からビットマップフォントの実際の
@@ -633,4 +635,12 @@ public final class BitmapFont10x20 {
     }
 
     private BitmapFont10x20() {}
+
+    @Override public int cellW() { return BASE_CELL_W; }
+    @Override public int cellH() { return BASE_CELL_H; }
+    @Override public BufferedImage renderGlyphI(int codePoint, int cellW, int cellH, int fgRgb) {
+        return renderGlyph(codePoint, cellW, cellH, fgRgb);
+    }
+    @Override public boolean isSupportedI(int codePoint) { return isSupported(codePoint); }
+    @Override public int descentPixelsI(int cellH) { return descentPixels(cellH); }
 }

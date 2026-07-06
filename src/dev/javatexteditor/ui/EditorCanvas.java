@@ -70,6 +70,11 @@ public class EditorCanvas extends JPanel {
     private int cellW = BitmapFont10x20.BASE_CELL_W;
     private int cellH = BitmapFont10x20.BASE_CELL_H;
 
+    // cellW/cellH の横縦比率に最も近いフォントを FixedFontCatalog が自動選択する。
+    // cellW/cellH を変更する箇所（adjustCellWidth/Height, setInitialCellSize）では
+    // 必ず updateBitmapFont() も呼び、選択結果をこのフィールドに反映すること。
+    private FixedBitmapFont bitmapFont = BitmapFont10x20.INSTANCE;
+
     // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
     // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
     private final Map<Integer, BufferedImage> glyphCacheFg  = new HashMap<>();
@@ -264,6 +269,7 @@ public class EditorCanvas extends JPanel {
     /** 文字セル幅を delta px 変更する（範囲: 5〜40）。両ペインから呼ばれる。 */
     public void adjustCellWidth(int delta) {
         cellW = Math.max(5, Math.min(40, cellW + delta));
+        updateBitmapFont();
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         repaint();
@@ -272,6 +278,7 @@ public class EditorCanvas extends JPanel {
     /** 文字セル高さを delta px 変更する（範囲: 8〜80）。両ペインから呼ばれる。 */
     public void adjustCellHeight(int delta) {
         cellH = Math.max(8, Math.min(80, cellH + delta));
+        updateBitmapFont();
         invalidateGlyphCache();
         cachedLineHeight = cellH;
         repaint();
@@ -287,9 +294,15 @@ public class EditorCanvas extends JPanel {
     public void setInitialCellSize(int w, int h) {
         cellW = Math.max(5, Math.min(40, w));
         cellH = Math.max(8, Math.min(80, h));
+        updateBitmapFont();
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         cachedLineHeight = cellH;
+    }
+
+    /** cellW/cellH の横縦比率に最も近いビットマップフォントを選び直す（FixedFontCatalog参照）。 */
+    private void updateBitmapFont() {
+        bitmapFont = FixedFontCatalog.select(cellW, cellH);
     }
 
     private void invalidateGlyphCache() {
@@ -301,7 +314,7 @@ public class EditorCanvas extends JPanel {
     private BufferedImage getUiGlyph(int codePoint, int cw, int ch, Color color) {
         UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
         return uiGlyphCache.computeIfAbsent(key,
-            k -> BitmapFont10x20.renderGlyph(codePoint, cw, ch, color.getRGB()));
+            k -> bitmapFont.renderGlyphI(codePoint, cw, ch, color.getRGB()));
     }
 
     /**
@@ -311,11 +324,11 @@ public class EditorCanvas extends JPanel {
      * y はセル下端（ベースライン）のY座標。
      */
     private void drawUiText(Graphics2D g2, String s, int x, int y, int cw, int ch, Color color) {
-        int swingBaselineY = y - BitmapFont10x20.descentPixels(ch);
+        int swingBaselineY = y - bitmapFont.descentPixelsI(ch);
         for (int i = 0; i < s.length(); ) {
             int cp = s.codePointAt(i);
             int widthMult = charCellWidth(cp);
-            if (BitmapFont10x20.isSupported(cp)) {
+            if (bitmapFont.isSupportedI(cp)) {
                 g2.drawImage(getUiGlyph(cp, cw, ch, color), x, y - ch, null);
             } else {
                 Color prev = g2.getColor();
@@ -350,12 +363,12 @@ public class EditorCanvas extends JPanel {
 
     private BufferedImage getGlyphFg(int cp) {
         return glyphCacheFg.computeIfAbsent(cp,
-            k -> BitmapFont10x20.renderGlyph(k, cellW, cellH, theme.foreground.getRGB()));
+            k -> bitmapFont.renderGlyphI(k, cellW, cellH, theme.foreground.getRGB()));
     }
 
     private BufferedImage getGlyphBg(int cp) {
         return glyphCacheBg.computeIfAbsent(cp,
-            k -> BitmapFont10x20.renderGlyph(k, cellW, cellH, theme.background.getRGB()));
+            k -> bitmapFont.renderGlyphI(k, cellW, cellH, theme.background.getRGB()));
     }
 
     private Font getSwingFont() {
@@ -700,13 +713,13 @@ public class EditorCanvas extends JPanel {
             int charWidth, int scrollOffsetX, int gutterWidth) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
-        int swingBaselineY = y - BitmapFont10x20.descentPixels(cellH);
+        int swingBaselineY = y - bitmapFont.descentPixelsI(cellH);
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
             int widthMult = charCellWidth(codePoint);
             int charPixelWidth = charWidth * widthMult;
             if (x + charPixelWidth > 0 && x < getWidth()) {
-                if (BitmapFont10x20.isSupported(codePoint)) {
+                if (bitmapFont.isSupportedI(codePoint)) {
                     g2.drawImage(getGlyphFg(codePoint), x, y - cellTopOffset, null);
                 } else {
                     g2.setColor(theme.foreground);
@@ -739,11 +752,11 @@ public class EditorCanvas extends JPanel {
             g2.setColor(theme.foreground);
             g2.fillRect(x, yTop, blockWidth, lineHeight);
             if (codePoint != -1) {
-                if (BitmapFont10x20.isSupported(codePoint)) {
+                if (bitmapFont.isSupportedI(codePoint)) {
                     g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
                 } else {
                     g2.setColor(theme.background);
-                    int swingBaselineY = (screenRow + 1) * lineHeight - BitmapFont10x20.descentPixels(lineHeight);
+                    int swingBaselineY = (screenRow + 1) * lineHeight - bitmapFont.descentPixelsI(lineHeight);
                     g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
                 }
             }
