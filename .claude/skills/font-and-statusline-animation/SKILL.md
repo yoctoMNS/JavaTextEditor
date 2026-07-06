@@ -315,6 +315,13 @@ static int testFrameCalculation() {
 - **ウォーキングパーソンはアクティブなペインにのみ表示する**。本エディタはウィンドウ分割時も単一の `JFrame` の中で複数の `EditorCanvas`（ペイン）を `JSplitPane` で並べる構成であり、`Main.java` はどのペインが操作対象かを `active[0]`（`Leaf`配列）で管理し、`updateBorders()` で枠線の色分けとして可視化している。この既存の「アクティブペイン」概念をそのまま流用し、`EditorCanvas` に `activePane`（既定 `true`）フィールドと `setActivePane(boolean)` を追加、`drawStatusLine()` 内の `drawWalkingPerson()` 呼び出しを `if (activePane)` で囲んだ。`updateBorders()` の全呼び出し箇所（分割・ペイン切替・マウスクリック・ペイン削除）を経由するため、キャラクターの表示切替に専用のイベント配線を追加する必要はなかった。タイマー（`animTimer`）自体は非アクティブなペインでも止めていない — ステータス行の時計表示（次項）を毎秒更新する必要があるため。
 - **ステータスバー右端に現在時刻（24時間表記 `HH:mm:ss`）を表示する**。`java.time.LocalTime.now()` と `DateTimeFormatter.ofPattern("HH:mm:ss")`（`CLOCK_FORMAT` 定数）を使用。既存の診断件数表示（エラー/警告数）は時計表示のさらに左側に位置をずらし、両者が重ならないようにした。時計は非アクティブなペインでも表示され続ける（キャラクターアニメーションのみアクティブペイン限定で、時刻表示は全ペイン共通というのが意図した挙動）。
 
+## 実装済みの修正: Linux(X11)でのアニメーションの微カクつき（2026-07）
+
+- **症状**: Windowsでは滑らかなウォーキングパーソンアニメーションが、Linuxでは`javax.swing.Timer`が正確に33ms間隔（30fps）で発火しているにもかかわらず、わずかにカクついて見えることがあった。
+- **原因**: Linux(X11)ではAWT/SwingがXlib/XCB経由でX serverに描画コマンドを送るが、これは**クライアント側でバッファされる非同期プロトコル**であり、`repaint()`がトリガーする`paintComponent()`の描画内容が実際に画面へフラッシュされるタイミングは、アプリのタイマー周期とは独立してOS・コンポジタ側の都合で決まる。Windowsでは GDI/DWM がこの種の非同期バッファリングをより積極的に吸収・平滑化するため同じ描画パターンでも滑らかに見える。これはSwingアプリ全般でLinux上において知られる定番の既知問題であり、`.claude/skills`の「Windowsタイマー分解能」問題（アイドル時にタイマー精度が落ちる問題、既に対策済み）とは全く別の原因。
+- **修正**: `EditorCanvas.paintComponent(Graphics g)`を、実際の描画処理を`paintContent(Graphics2D g2)`に切り出したうえで`try { paintContent(...) } finally { Toolkit.getDefaultToolkit().sync(); }`で包む形に変更した。`Toolkit.sync()`はX11環境でクライアント側にバッファされた描画コマンドを即座にX serverへフラッシュするためのJava標準APIで、Swingアプリのアニメーションを滑らかにする際の定番の対策。`paintContent()`内部に複数の`return;`（ステータス行のみ再描画・スプラッシュ表示時の早期return等）があるため、単純に末尾へ`sync()`を追記するのではなく、`try/finally`でどの`return`経路を通っても必ず1回呼ばれるようにしている。
+- **他OSへの影響**: WindowsやmacOSでは`Toolkit.sync()`は当該プラットフォームの実装に応じて空処理またはごく軽量な処理になり、副作用はない（既存のWindows向けタイマー分解能ピン留め対策とも独立して共存する）。ヘッドレス環境（本プロジェクトのテスト実行環境）でも例外は発生せず、テストスイートは既存の既知の失敗（`ScrollTest`の2件・`RobotKeyInputTest`のheadlessスキップ）以外は影響を受けなかった。
+
 ## このスキルを使うタイミング
 
 - ステータスラインにアニメーションを追加したい場合 → `drawWalkingCharacter()` の実装を参照
