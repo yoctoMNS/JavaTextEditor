@@ -389,9 +389,11 @@ public class Main {
 
     private static void updateBorders(List<Leaf> leaves, Leaf active) {
         for (Leaf l : leaves) {
-            l.canvas().setBorder(l == active
+            boolean isActive = l == active;
+            l.canvas().setBorder(isActive
                 ? BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2)
                 : BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
+            l.canvas().setActivePane(isActive);
         }
     }
 

@@ -8,6 +8,8 @@ import javax.swing.Timer;
 import java.awt.*;
 import java.awt.im.InputContext;
 import java.awt.image.BufferedImage;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -96,6 +98,14 @@ public class EditorCanvas extends JPanel {
     private static final int ANIM_FRAME_INTERVAL_MS = 1000 / 30; // 30fps
     private final Timer animTimer = new Timer(ANIM_FRAME_INTERVAL_MS, e -> repaintStatusLine());
     private boolean timerResolutionPinHeld = false;
+    // ウィンドウ分割時、ウォーキングパーソンは現在アクティブなペインにのみ表示する。
+    // 非アクティブなペインでも時刻表示は継続するため、drawStatusLine() 側で
+    // このフラグを見て drawWalkingPerson() の呼び出しだけを抑制する。
+    private boolean activePane = true;
+    public void setActivePane(boolean activePane) { this.activePane = activePane; }
+
+    // ステータスライン右端の時刻表示（24時間表記）
+    private static final DateTimeFormatter CLOCK_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private void repaintStatusLine() {
         int lh = (cachedLineHeight > 0) ? cachedLineHeight : 20;
@@ -993,7 +1003,13 @@ public class EditorCanvas extends JPanel {
                      :                  "-- NORMAL --";
         drawUiText(g2, label, 4, y, cellW, lineHeight, theme.background);
 
-        // 右端に診断件数を表示
+        // 右端に現在時刻（24時間表記）を表示
+        String clockLabel = LocalTime.now().format(CLOCK_FORMAT);
+        int clockWidth = uiTextWidth(clockLabel, cellW);
+        int rightX = getWidth() - clockWidth - 4;
+        drawUiText(g2, clockLabel, rightX, y, cellW, lineHeight, theme.background);
+
+        // 診断件数は時刻表示の左隣に表示
         if (!diagnostics.isEmpty()) {
             long errCount  = diagnostics.stream()
                 .filter(d -> d.kind() == DiagnosticKind.ERROR).count();
@@ -1001,11 +1017,15 @@ public class EditorCanvas extends JPanel {
                 .filter(d -> d.kind() == DiagnosticKind.WARNING).count();
             String diagLabel = buildDiagLabel(errCount, warnCount);
             int labelWidth = uiTextWidth(diagLabel, cellW);
-            drawUiText(g2, diagLabel, getWidth() - labelWidth - 4, y, cellW, lineHeight, theme.background);
+            rightX -= labelWidth + cellW; // 時刻表示との間に1文字分の余白
+            drawUiText(g2, diagLabel, rightX, y, cellW, lineHeight, theme.background);
         }
 
-        // ウォーキングパーソンアニメーション（左→右へ走り抜ける）
-        drawWalkingPerson(g2, y - lineHeight + 1, lineHeight);
+        // ウォーキングパーソンアニメーション（左→右へ走り抜ける）。
+        // ウィンドウ分割時は現在アクティブなペインにのみ表示する。
+        if (activePane) {
+            drawWalkingPerson(g2, y - lineHeight + 1, lineHeight);
+        }
     }
 
     private void drawWalkingPerson(Graphics2D g2, int statusTopY, int lineHeight) {
