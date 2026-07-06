@@ -327,7 +327,6 @@ public class Main {
         if (WD_MANAGER != null) {
             Path wd = WD_MANAGER.getWorkingDirectory();
             editor.setProjectRoot(wd);
-            canvas.setWorkingDirectory(wd);
             editor.setChangeWorkingDirectoryCallback(p -> WD_MANAGER.setWorkingDirectory(p));
         }
         return new Leaf(canvas, editor);
@@ -461,7 +460,6 @@ public class Main {
             WD_MANAGER.addChangeListener(wd -> {
                 for (Leaf l : allLeaves(root[0])) {
                     l.editor().setProjectRoot(wd);
-                    l.canvas().setWorkingDirectory(wd);
                 }
                 frame.setTitle(buildTitle(wd));
             });
