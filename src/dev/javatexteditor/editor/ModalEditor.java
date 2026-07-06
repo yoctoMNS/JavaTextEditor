@@ -2,6 +2,7 @@ package dev.javatexteditor.editor;
 
 import dev.javatexteditor.analysis.AutoImportHandler;
 import dev.javatexteditor.analysis.CompileDiagnostic;
+import dev.javatexteditor.analysis.EntryPointIndex;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.JdkJavadocReader;
 import dev.javatexteditor.analysis.JdkTypeInfo;
@@ -1819,6 +1820,8 @@ public class ModalEditor {
             loadFromFile(path);
         } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
             openTutorial();
+        } else if (cmd.equals("main") || cmd.startsWith("main ")) {
+            executeMain(cmd.equals("main") ? "" : cmd.substring(5).trim());
         } else if (cmd.startsWith("grep! ")) {
             // bang付き: node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
             String pattern = cmd.substring(6).trim();
@@ -3925,6 +3928,57 @@ public class ModalEditor {
         cursorRow = loc.lineNumber();
         cursorCol = 0;
         setStatusMessage("→ line " + (loc.lineNumber() + 1) + "  [" + loc.relativePath() + "]  q: close");
+    }
+
+    /**
+     * ":main <target>" コマンド。java/javac コマンドの実際の起動点（launcher entry point）へジャンプする。
+     * ターゲット名と実際のジャンプ先の対応は EntryPointIndex に集約しており、
+     * jar/javadoc/jshell 等への拡張はそちらにエントリを追加するだけでよい。
+     */
+    private void executeMain(String rawArg) {
+        if (rawArg.isEmpty()) {
+            setStatusMessage("E: :main requires a target (supported: "
+                + String.join(", ", EntryPointIndex.supportedTargets()) + ")");
+            return;
+        }
+        Optional<EntryPointIndex.Target> target = EntryPointIndex.lookup(rawArg);
+        if (target.isEmpty()) {
+            setStatusMessage("E: unknown :main target '" + rawArg + "' (supported: "
+                + String.join(", ", EntryPointIndex.supportedTargets()) + ")");
+            return;
+        }
+        switch (target.get()) {
+            case EntryPointIndex.Target.NativeLauncher nl -> jumpToNativeLauncherEntry(nl);
+            case EntryPointIndex.Target.JavaSource js -> jumpToJavaSourceEntry(js);
+        }
+    }
+
+    private void jumpToNativeLauncherEntry(EntryPointIndex.Target.NativeLauncher nl) {
+        if (!sourceTracer.hasNativeSrcDir()) {
+            setStatusMessage("E: native JDK source not available (run scripts/setup.sh)");
+            return;
+        }
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc =
+            sourceTracer.findCSymbolInFile(nl.relativePath(), nl.symbol());
+        if (loc.isEmpty()) {
+            setStatusMessage("E: entry point '" + nl.symbol() + "' not found in " + nl.relativePath());
+            return;
+        }
+        openCSymbolBuffer(loc.get());
+    }
+
+    private void jumpToJavaSourceEntry(EntryPointIndex.Target.JavaSource js) {
+        if (!sourceTracer.hasSrcZip()) {
+            setStatusMessage("E: JDK source (src.zip) not available (run scripts/setup.sh)");
+            return;
+        }
+        Optional<String> src = sourceTracer.readJavaSourceByFqcn(js.moduleName(), js.fqcn());
+        if (src.isEmpty()) {
+            setStatusMessage("E: source for " + js.fqcn() + " not found in src.zip");
+            return;
+        }
+        openJdkSourceBuffer("*jdk-source:" + js.fqcn() + "*", src.get());
+        jumpToMember(js.memberName());
     }
 
     /**

@@ -3,6 +3,8 @@ package dev.javatexteditor.analysis;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * OpenjdkSourceTracer のテスト。
@@ -44,6 +46,15 @@ public class OpenjdkSourceTracingTest {
         testFindCSymbolDoesNotMatchSubstringOfOtherIdentifier();
         testFindCSymbolMatchesRealDefinition();
         testFindCSymbolMatchesHotspotStyleCppDefinition();
+
+        testFindCSymbolInFileMatchesOnlyGivenFile();
+        testFindCSymbolInFileReturnsEmptyForMissingFile();
+        testFindCSymbolInFileReturnsEmptyWithoutNativeSrcDir();
+
+        testReadJavaSourceByFqcnWithModulePrefix();
+        testReadJavaSourceByFqcnWithoutModulePrefix();
+        testReadJavaSourceByFqcnMissingReturnsEmpty();
+        testReadJavaSourceByFqcnWithoutSrcZipReturnsEmpty();
 
         System.out.println("\n結果: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -279,6 +290,110 @@ public class OpenjdkSourceTracingTest {
         Optional<OpenjdkSourceTracer.CSymbolLocation> loc = tracer.findCSymbol("JVM_GC");
         check("'JVM_GC' は jvm.cpp(.hpp含む) の定義に一致する", loc.isPresent(),
             loc.map(l -> l.relativePath() + ":" + l.lineNumber()).orElse("empty"));
+    }
+
+    // --- findCSymbolInFile tests (":main" コマンド用: 1ファイルに限定した検索) ---
+
+    /**
+     * findCSymbol("main") は木全体を走査するため同名の "main(" が複数ファイルにあると曖昧だが、
+     * findCSymbolInFile はファイルを直接指定するので、他ファイルの同名定義を無視できる。
+     */
+    private static void testFindCSymbolInFileMatchesOnlyGivenFile() throws Exception {
+        Path dir = Files.createTempDirectory("entrypoint-native-test");
+        Path launcherDir = dir.resolve("java.base/share/native/launcher");
+        Files.createDirectories(launcherDir);
+        Files.writeString(launcherDir.resolve("main.c"), """
+            int main(int argc, char **argv) {
+                return JLI_Launch(argc, argv);
+            }
+            """);
+        // 無関係な別ファイルにも "main(" が存在する（曖昧さの原因になりうる状況を再現）
+        Path otherDir = dir.resolve("other/tool");
+        Files.createDirectories(otherDir);
+        Files.writeString(otherDir.resolve("main.c"), """
+            int main(int argc, char **argv) {
+                return 1;
+            }
+            """);
+
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc =
+            tracer.findCSymbolInFile("java.base/share/native/launcher/main.c", "main");
+        check("findCSymbolInFile はランチャーの main.c だけを見る",
+            loc.isPresent() && loc.get().relativePath().endsWith("launcher/main.c"),
+            loc.map(OpenjdkSourceTracer.CSymbolLocation::relativePath).orElse("empty"));
+        check("findCSymbolInFile: JLI_Launch を含むスニペットが取れる",
+            loc.isPresent() && loc.get().snippet().contains("JLI_Launch"), "");
+    }
+
+    private static void testFindCSymbolInFileReturnsEmptyForMissingFile() throws Exception {
+        Path dir = Files.createTempDirectory("entrypoint-native-test2");
+        Files.createDirectories(dir.resolve("java.base/share/native/launcher"));
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc =
+            tracer.findCSymbolInFile("java.base/share/native/launcher/main.c", "main");
+        check("存在しないファイルは empty", loc.isEmpty(), "");
+    }
+
+    private static void testFindCSymbolInFileReturnsEmptyWithoutNativeSrcDir() {
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, null);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc =
+            tracer.findCSymbolInFile("java.base/share/native/launcher/main.c", "main");
+        check("nativeSrcDir が無ければ empty (graceful degradation)", loc.isEmpty(), "");
+    }
+
+    // --- readJavaSourceByFqcn tests (":main javac" 用: Class<?> を経由しないソース取得) ---
+
+    private static void testReadJavaSourceByFqcnWithModulePrefix() throws Exception {
+        Path zip = createFakeSrcZip("jdk.compiler/com/sun/tools/javac/Main.java", """
+            package com.sun.tools.javac;
+            public class Main {
+                public static void main(String[] args) {
+                }
+            }
+            """);
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(zip);
+        Optional<String> src = tracer.readJavaSourceByFqcn("jdk.compiler", "com.sun.tools.javac.Main");
+        check("module プレフィックス付きエントリから読める",
+            src.isPresent() && src.get().contains("public static void main"), "");
+    }
+
+    private static void testReadJavaSourceByFqcnWithoutModulePrefix() throws Exception {
+        // module プレフィックス無しでフラットに格納されている src.zip もフォールバックで読めること
+        Path zip = createFakeSrcZip("com/sun/tools/javac/Main.java", """
+            package com.sun.tools.javac;
+            public class Main {
+                public static void main(String[] args) {
+                }
+            }
+            """);
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(zip);
+        Optional<String> src = tracer.readJavaSourceByFqcn("jdk.compiler", "com.sun.tools.javac.Main");
+        check("module プレフィックス無しでもフォールバックで読める",
+            src.isPresent() && src.get().contains("public static void main"), "");
+    }
+
+    private static void testReadJavaSourceByFqcnMissingReturnsEmpty() throws Exception {
+        Path zip = createFakeSrcZip("jdk.compiler/com/sun/tools/javac/Main.java", "package com.sun.tools.javac;\n");
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(zip);
+        Optional<String> src = tracer.readJavaSourceByFqcn("jdk.compiler", "com.sun.tools.javac.NoSuchClass");
+        check("存在しない FQCN は empty", src.isEmpty(), "");
+    }
+
+    private static void testReadJavaSourceByFqcnWithoutSrcZipReturnsEmpty() {
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null);
+        Optional<String> src = tracer.readJavaSourceByFqcn("jdk.compiler", "com.sun.tools.javac.Main");
+        check("src.zip が無ければ empty (graceful degradation)", src.isEmpty(), "");
+    }
+
+    private static Path createFakeSrcZip(String entryName, String content) throws Exception {
+        Path zip = Files.createTempFile("fake-src", ".zip");
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip))) {
+            out.putNextEntry(new ZipEntry(entryName));
+            out.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        return zip;
     }
 
     // --- Helper ---

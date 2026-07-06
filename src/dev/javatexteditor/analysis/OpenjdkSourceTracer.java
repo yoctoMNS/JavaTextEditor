@@ -87,6 +87,45 @@ public class OpenjdkSourceTracer {
         return nativeSrcDir.isPresent();
     }
 
+    /**
+     * nativeSrcDir 配下の特定ファイル（relativePath）1つに限定してシンボル定義を探す。
+     * findCSymbol() と違い木全体を走査しないため、"main" のように同名定義が複数ファイルに
+     * 存在しうるシンボルでも、事前にファイルが分かっている場合（:main コマンド等）は
+     * 曖昧さなく定義行を特定できる。
+     */
+    public Optional<CSymbolLocation> findCSymbolInFile(String relativePath, String symbol) {
+        if (nativeSrcDir.isEmpty() || symbol.isBlank()) return Optional.empty();
+        Path file = nativeSrcDir.get().resolve(relativePath);
+        if (!Files.isRegularFile(file)) return Optional.empty();
+        try {
+            String content = Files.readString(file, StandardCharsets.UTF_8);
+            int lineNo = findDefinitionLine(content, symbol);
+            if (lineNo < 0) return Optional.empty();
+            String rel = nativeSrcDir.get().getParent().relativize(file).toString().replace('\\', '/');
+            return Optional.of(new CSymbolLocation(rel, file, lineNo, extractLines(content, lineNo, 8)));
+        } catch (IOException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * src.zip から module/fqcn.java 形式のパスでソースを取り出す（Class<?> を経由しない版）。
+     * jdk.compiler 等、デフォルトのモジュールグラフでは解決されないモジュールのクラス
+     * （例: com.sun.tools.javac.Main）を、リフレクションで Class を読み込まずに参照するために使う。
+     */
+    public Optional<String> readJavaSourceByFqcn(String moduleName, String fqcn) {
+        if (srcZip.isEmpty()) return Optional.empty();
+        String path = fqcn.replace('.', '/') + ".java";
+        try (ZipFile zip = new ZipFile(srcZip.get().toFile())) {
+            ZipEntry entry = zip.getEntry(moduleName + "/" + path);
+            if (entry == null) entry = zip.getEntry(path);
+            if (entry == null) return Optional.empty();
+            return Optional.of(readEntry(zip, entry));
+        } catch (IOException e) {
+            return Optional.empty();
+        }
+    }
+
     /** lib/openjdk-native/ のパスを返す（grep 検索の起点に使う）。 */
     public Optional<Path> getNativeSrcDir() {
         return nativeSrcDir;
