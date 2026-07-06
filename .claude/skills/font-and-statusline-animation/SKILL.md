@@ -310,6 +310,11 @@ static int testFrameCalculation() {
 
 ---
 
+## 実装済みの追加機能: アクティブペイン限定表示・ステータスバー時計（2026-07）
+
+- **ウォーキングパーソンはアクティブなペインにのみ表示する**。本エディタはウィンドウ分割時も単一の `JFrame` の中で複数の `EditorCanvas`（ペイン）を `JSplitPane` で並べる構成であり、`Main.java` はどのペインが操作対象かを `active[0]`（`Leaf`配列）で管理し、`updateBorders()` で枠線の色分けとして可視化している。この既存の「アクティブペイン」概念をそのまま流用し、`EditorCanvas` に `activePane`（既定 `true`）フィールドと `setActivePane(boolean)` を追加、`drawStatusLine()` 内の `drawWalkingPerson()` 呼び出しを `if (activePane)` で囲んだ。`updateBorders()` の全呼び出し箇所（分割・ペイン切替・マウスクリック・ペイン削除）を経由するため、キャラクターの表示切替に専用のイベント配線を追加する必要はなかった。タイマー（`animTimer`）自体は非アクティブなペインでも止めていない — ステータス行の時計表示（次項）を毎秒更新する必要があるため。
+- **ステータスバー右端に現在時刻（24時間表記 `HH:mm:ss`）を表示する**。`java.time.LocalTime.now()` と `DateTimeFormatter.ofPattern("HH:mm:ss")`（`CLOCK_FORMAT` 定数）を使用。既存の診断件数表示（エラー/警告数）は時計表示のさらに左側に位置をずらし、両者が重ならないようにした。時計は非アクティブなペインでも表示され続ける（キャラクターアニメーションのみアクティブペイン限定で、時刻表示は全ペイン共通というのが意図した挙動）。
+
 ## このスキルを使うタイミング
 
 - ステータスラインにアニメーションを追加したい場合 → `drawWalkingCharacter()` の実装を参照
