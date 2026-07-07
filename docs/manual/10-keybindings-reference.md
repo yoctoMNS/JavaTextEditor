@@ -104,6 +104,7 @@
 | `:oi` `:organize-imports` / `:remove-import <fqn>` | import整理/個別削除 | [Java開発支援](04-java-tooling.md) |
 | `:pwd` / `:cd <path>` | 作業ディレクトリ表示/変更 | [検索・ナビゲーション](03-search-and-navigation.md) |
 | `:main <target>` | launcherエントリポイントへジャンプ | [Java開発支援](04-java-tooling.md) |
+| `:s/pat/repl/[flags]` `:%s...` `:N,Ms...` `:'<,'>s...` | Vim式置換コマンド | [モーダル編集](02-modal-editing.md#置換コマンドs) |
 | `:tutor` `:tutorial` | チュートリアルを開く | [チュートリアル](08-tutorial.md) |
 
 ## VISUAL / VISUAL LINE モード
@@ -116,6 +117,7 @@
 | `Ctrl+F` `Ctrl+B` `Ctrl+D` `Ctrl+U` | スクロール（半ページ含む） |
 | `>` `<` | インデント/デデント |
 | `y` `d` | ヤンク/削除してNORMALへ |
+| `:` | `'<,'>` 付きでCOMMANDへ（`:s` 置換用） |
 | `v` / `V` / `Escape` | 解除してNORMALへ |
 
 ## VISUAL BLOCKモード（`Ctrl+V`）
@@ -124,6 +126,7 @@
 |---|---|
 | `h` `j` `k` `l` `%` | 矩形範囲の拡張 |
 | `y` `d` | 矩形ヤンク/矩形削除 |
+| `:` | `'<,'>` 付きでCOMMANDへ（`:s` は矩形の列ではなく選択行全体が対象） |
 | `I` `A` | 矩形左端/右端+1でINSERT（全行同時入力） |
 | `c` | 矩形削除して `I` 相当でINSERT |
 | `r` | 次の1キーで矩形範囲を一括置換 |

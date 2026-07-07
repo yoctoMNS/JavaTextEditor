@@ -6,6 +6,7 @@ Vimのモーダル編集とEmacsの拡張性の良い所を統合した、Java S
 
 - **モーダル編集**: Vim式のNORMAL/INSERT/COMMAND/VISUAL/VISUAL LINE/VISUAL BLOCKモード
 - **Emacs式カーソル移動**: INSERTモード中でも `Ctrl+F/B/N/P` などで移動可能
+- **Vim式置換コマンド**: `:s`/`:%s`/`:'<,'>s`/`:N,Ms` による正規表現置換（`g`/`i`フラグ、`\1`/`&`置換対応）
 - **高速バッファ**: ピーステーブル方式により大規模ファイル（数十万行）でも高速に挿入・削除
 - **Java開発支援**: コンパイルエラー表示、定義ジャンプ、Javadoc参照、auto-import、プロジェクト全体のリネーム、`java`/`javac` launcher・HotSpotソースへのジャンプ
 - **検索・ナビゲーション**: バッファ内検索、ファイル名/grep検索、telescope風ファジーファインダー、ディレクトリブラウザ（FILER）
