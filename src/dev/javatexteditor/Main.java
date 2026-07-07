@@ -52,6 +52,16 @@ public class Main {
     private static dev.javatexteditor.analysis.WordIndex WORD_INDEX = null;
 
     // -------------------------------------------------------------------------
+    // F10/F11/F12: プロジェクト全体のコンパイル・実行
+    // -------------------------------------------------------------------------
+    private static final dev.javatexteditor.projectbuild.ProjectBuilder PROJECT_BUILDER =
+        new dev.javatexteditor.projectbuild.ProjectBuilder();
+    private static final dev.javatexteditor.projectbuild.MainClassFinder MAIN_CLASS_FINDER =
+        new dev.javatexteditor.projectbuild.MainClassFinder();
+    // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
+    private static Process runningProcess = null;
+
+    // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
     // -------------------------------------------------------------------------
     private static final List<dev.javatexteditor.telescope.BufferPicker.BufferEntry> BUFFER_REGISTRY =
@@ -282,6 +292,107 @@ public class Main {
         });
     }
 
+    /** F10: プロジェクト全体をコンパイルし、*compile* 疑似バッファに結果を表示する。 */
+    private static void triggerCompile(ModalEditor editor, EditorCanvas canvas) {
+        editor.setStatusMessage("F10: コンパイル中...");
+        Path projectRoot = editor.getProjectRoot();
+        Thread.ofVirtual().start(() -> {
+            dev.javatexteditor.projectbuild.BuildResult result = PROJECT_BUILDER.compile(projectRoot);
+            SwingUtilities.invokeLater(() -> {
+                editor.showCompileResult(result);
+                canvas.repaint();
+            });
+        });
+    }
+
+    /** F11: bin/ に .class がなければ拒否し、あれば main クラスを解決して実行する。 */
+    private static void triggerRun(ModalEditor editor, EditorCanvas canvas) {
+        Path projectRoot = editor.getProjectRoot();
+        if (!PROJECT_BUILDER.hasCompiledClasses(projectRoot)) {
+            editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
+            return;
+        }
+        resolveAndRunMainClass(editor, canvas, projectRoot);
+    }
+
+    /** F12: コンパイルしてから（成功した場合のみ）main クラスを解決して実行する。 */
+    private static void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
+        editor.setStatusMessage("F12: コンパイル中...");
+        Path projectRoot = editor.getProjectRoot();
+        Thread.ofVirtual().start(() -> {
+            dev.javatexteditor.projectbuild.BuildResult result = PROJECT_BUILDER.compile(projectRoot);
+            SwingUtilities.invokeLater(() -> {
+                editor.showCompileResult(result);
+                canvas.repaint();
+                if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot);
+            });
+        });
+    }
+
+    /**
+     * main メソッドを持つクラスを索引から探し、1件なら即実行、複数なら telescope-picker で選ばせる
+     * （{@link ModalEditor#setOnRunMainClassSelected} 経由で選択結果が {@link #runJavaClass} に届く）。
+     */
+    private static void resolveAndRunMainClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot) {
+        editor.setStatusMessage("mainクラスを検索中...");
+        Thread.ofVirtual().start(() -> {
+            List<String> mainClasses = MAIN_CLASS_FINDER.findMainClasses(projectRoot);
+            SwingUtilities.invokeLater(() -> {
+                if (mainClasses.isEmpty()) {
+                    editor.setStatusMessage("run: mainメソッドを持つクラスが見つかりません");
+                } else if (mainClasses.size() == 1) {
+                    runJavaClass(editor, canvas, projectRoot, mainClasses.get(0));
+                } else {
+                    editor.enterMainClassPicker(mainClasses);
+                }
+            });
+        });
+    }
+
+    /**
+     * bin/ をクラスパスとして別プロセスで java を起動する。
+     * 実行中プロセスがまだ生きていれば destroy() してから起動し直す（多重実行を避けるため）。
+     * 標準出力/標準エラーはマージして捕捉し、終了後に *run* 疑似バッファへまとめて表示する。
+     */
+    private static void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn) {
+        if (runningProcess != null && runningProcess.isAlive()) {
+            runningProcess.destroy();
+        }
+        Path binDir = projectRoot.resolve(dev.javatexteditor.projectbuild.ProjectBuilder.OUTPUT_DIR_NAME);
+        editor.setStatusMessage("run: " + fqcn + " を実行中...");
+        Thread.ofVirtual().start(() -> {
+            StringBuilder output = new StringBuilder();
+            int exitCode;
+            try {
+                ProcessBuilder pb = new ProcessBuilder("java", "-cp", binDir.toString(), fqcn);
+                pb.redirectErrorStream(true);
+                pb.directory(projectRoot.toFile());
+                Process process = pb.start();
+                runningProcess = process;
+                try (var reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        output.append(line).append('\n');
+                    }
+                }
+                exitCode = process.waitFor();
+            } catch (IOException e) {
+                SwingUtilities.invokeLater(() ->
+                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
+                return;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            int finalExitCode = exitCode;
+            SwingUtilities.invokeLater(() -> {
+                editor.showRunOutput(fqcn, output.toString(), finalExitCode);
+                canvas.repaint();
+            });
+        });
+    }
+
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
     private static void setupSplitCallbacks(
             JFrame frame, PaneNode[] root, Leaf[] active, Leaf leaf) {
@@ -317,6 +428,8 @@ public class Main {
         editor.setBufferListSupplier(Main::getBufferRegistry);
         editor.setOnFileOpened(Main::registerBuffer);
         editor.setOnBufferDelete(Main::unregisterBuffer);
+        editor.setOnRunMainClassSelected(
+            fqcn -> runJavaClass(editor, canvas, editor.getProjectRoot(), fqcn));
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }
@@ -540,6 +653,23 @@ public class Main {
                                     sb.toString(),
                                     "診断情報（行 " + (row + 1) + "）",
                                     iconType);
+                            }
+                            pressedHandled[0] = true;
+                            return true;
+                        }
+
+                        // F10/F11/F12: プロジェクト全体のコンパイル・実行（NORMALモードのみ）
+                        if (e.getKeyCode() == KeyEvent.VK_F10
+                                || e.getKeyCode() == KeyEvent.VK_F11
+                                || e.getKeyCode() == KeyEvent.VK_F12) {
+                            dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
+                            EditorCanvas canvasBuild = active[0].canvas();
+                            if (edBuild.isNormalMode()) {
+                                switch (e.getKeyCode()) {
+                                    case KeyEvent.VK_F10 -> triggerCompile(edBuild, canvasBuild);
+                                    case KeyEvent.VK_F11 -> triggerRun(edBuild, canvasBuild);
+                                    case KeyEvent.VK_F12 -> triggerCompileAndRun(edBuild, canvasBuild);
+                                }
                             }
                             pressedHandled[0] = true;
                             return true;

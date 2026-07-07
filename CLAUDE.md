@@ -106,6 +106,7 @@ project-root/
 | ㉔ | `windows-batch-and-subprocess` | `scripts/*.bat`編集・Javaからのサブプロセス出力読み取りの恒久ルール（ASCII専用・ブロック内丸括弧禁止・`native.encoding`） | ✅ Skill追加（⑫実装時のバグ3連鎖から抽出した開発プロセス知識。機能実装は伴わない） |
 | ㉕ | `modal-visual-block-selection` | Vim矩形選択（`Ctrl+V`・VISUAL BLOCK）のモード追加・ヤンク/削除/ペースト/矩形挿入(`I`/`A`)/矩形変更(`c`)/矩形置換(`r`)・描画 | ✅ 完了（12テスト・`YankType.BLOCK`追加・ペースト時の新規行自動生成・矩形挿入は既存INSERTモードを再利用し状態フラグで複製する方式） |
 | ㉖ | `vim-substitution` | Vim式置換コマンド`:s`（現在行・`%s`全行・`'<,'>s`Visual選択範囲・`N,Ms`行番号範囲・正規表現・`g`/`i`フラグ・`\1`/`&`置換） | ✅ 完了（18/18テスト・VISUAL/VISUAL_LINE/VISUAL_BLOCKの`:`キーで`'<,'>`自動入力・区切り文字は`/`以外も可・undoグルーピングなし＝`indentLines()`と同じ既存トレードオフを踏襲） |
+| ㉗ | `vim-macro-recording` | Vim式マクロ（`q{register}`記録・`q`終了・`@{register}`再生・`@@`直前マクロ再実行・大文字レジスタ追記） | ✅ 完了（29/29テスト・記録は`processKey()`入口1箇所で生キーを捕捉・マクロ専用レジスタは既存の`yankRegister`とは独立・記録中の入れ子`@`呼び出しは展開せず呼び出し2キーのみ記録・`count`付き再生(`3@a`)は汎用count機構が存在しないためスコープ外） |
 
 ### 依存関係（Skillを作る順序の制約）
 
@@ -217,6 +218,21 @@ project-root/
   - **`\f!pattern` / `\g!pattern`**: FILESEARCH モードの入力バッファ（`fileSearchBuffer`）の**先頭文字が `!` かどうか**で判定する（キー入力のタイミングではなく、Enter時にバッファ全体を見て判定するため、`\f`/`\g` 2打鍵の実行タイミングを変える必要がなく安全）。`!`はパターンから取り除いてから検索に渡す。
   - **タイムアウト・2MB上限は bang の有無に関わらず両方とも適用される**（`fullScan` はあくまで「どのディレクトリを対象にするか」の指定であり、「EDTを保護する安全装置」とは独立した軸のため）。
   - **テスト**: `test/dev/javatexteditor/search/BangSearchTest.java`（10テスト）で、`ProjectSearcher`/`FileNameSearcher`単体と、`gr`/`gR`・`:grep`/`:grep!`・`\g!`・`\f!`経由の統合動作の両方を確認済み。
+
+## F10/F11/F12（プロジェクト全体のコンパイル・実行）の設計決定事項
+
+ユーザーとの事前確認により以下の仕様で確定した（実装前に対話で1つずつ決定）。
+
+- **対象は「エディタが現在開いている作業ディレクトリ（`:cd`で設定した`projectRoot`）配下の任意のJavaプロジェクト」**であり、JavaTextEditor自身を自己ビルドする専用機能ではない（汎用IDE的機能）。
+- **F10（コンパイル）**: `javax.tools.JavaCompiler` で `projectRoot` 配下の全 `.java` を走査してコンパイルし、`.class` を `projectRoot/bin`（`dev.javatexteditor.projectbuild.ProjectBuilder.OUTPUT_DIR_NAME`）に出力する。外部 `javac` プロセスは起動しない。ソース走査は `FileNameSearcher.SKIP_DIRS`（`.git`/`build`/`target`/`.gradle`/`node_modules`/`.idea`/`.vscode`）に加え出力先自身の `bin/` もスキップする。
+- **F11（実行）**: 対象クラスは `dev.javatexteditor.projectbuild.MainClassFinder` が `projectRoot` 配下を正規表現で走査し `public static void main(String[])` を持つクラスを索引化して決定する（javac AST解析は使わない。WordIndexと同じ「軽量な正規表現ベース」の理由づけ）。1件なら即実行、複数あれば ⑳ `telescope-picker` の3ペインオーバーレイ（`MainClassPicker`）を流用して選択させる。`bin/` に `.class` が1つもない（＝F10未実行）場合はエラー表示のみで実行しない。実行は `ProcessBuilder` による別プロセス起動（`java -cp <projectRoot>/bin <FQCN>`）とし、対象アプリのGUI/標準入出力がエディタ自身のJVMを汚染しないようにした。既に前回起動した実行プロセスが生きていれば `destroy()` してから起動し直す（多重実行防止）。
+- **F12**: F10を実行し、成功した場合のみ続けてF11相当（mainクラス解決→実行）を行う。F10が失敗した場合はF11側の処理を行わない。
+- **出力表示**: コンパイル結果・実行結果はいずれも既存の `:grep`/`:rename` と同じ「疑似バッファ」パターン（`*compile*`・`*run*`。`pushBuffer()`を呼ばず直接 `buffer` を差し替えるため、Ctrl+Uの履歴には積まれない）で表示する。専用のガター描画・オーバーレイは追加していない。
+- **有効モード**: NORMALモードのみ。`F2`（診断表示）と同様、`KeymapRegistry` を経由せず `Main.java` のグローバルキーイベントディスパッチャで直接ハードコード処理する（Fキー全般がこの方式）。
+- **スレッド設計**: コンパイル・mainクラス検索・プロセス実行はいずれも `Thread.ofVirtual()` のバックグラウンドスレッドで行い、`SwingUtilities.invokeLater` でEDTに結果を反映する（既存の `runCompileAnalysis`／auto-import と同じ非同期パターン）。プロセスの標準出力/標準エラーは `redirectErrorStream(true)` でマージして捕捉し、プロセス終了後にまとめて `*run*` バッファへ表示する（ストリーミング表示はしない）。そのため、標準入力を要求するプログラム（`Scanner`等によるインタラクティブ入力）は正しく動作しない既知の制約として残る。
+- **新規クラス**: `dev.javatexteditor.projectbuild.BuildResult`/`BuildDiagnostic`/`ProjectBuilder`/`MainClassFinder`、`dev.javatexteditor.telescope.MainClassPicker`。`BuildDiagnostic` は既存の `analysis.CompileDiagnostic`（現在編集中の1ファイルのガター表示専用、filePathを持たない）とは別レコードにした。F10は複数ファイルの診断をfilePath付きで扱う必要があり、用途が異なるため意図的に分離した。
+- **テスト**: `test/dev/javatexteditor/build/ProjectBuilderTest.java`（17テスト）で `ProjectBuilder`/`MainClassFinder` の純粋ロジックを検証。実際の子プロセス起動を伴う `Main.runJavaClass` はGUI/OS依存のため自動テスト対象外（既知のテストギャップ。⑫⑳と同様の理由）。
+- **既知の制約**: OSやウィンドウマネージャによっては `F11` がフルスクリーン切り替え等のショートカットと衝突する場合があるが、アプリケーション側では制御できないため対応しない。
 
 ## 作業時の方針
 
