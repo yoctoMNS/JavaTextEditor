@@ -204,6 +204,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
         bind(Mode.VISUAL, KeyBinding.ofChar('>', "indent.right"), "indent.right");
         bind(Mode.VISUAL, KeyBinding.ofChar('<', "indent.left"),  "indent.left");
+        bind(Mode.VISUAL, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
 
         // VISUAL LINE モード（行単位選択）
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -222,6 +223,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('>', "indent.right"), "indent.right");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('<', "indent.left"),  "indent.left");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
 
         // VISUAL BLOCK モード（矩形選択、Ctrl+V）
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -240,5 +242,6 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('%', "motion.match.pair"), "motion.match.pair");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('>', "indent.right"), "indent.right");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('<', "indent.left"),  "indent.left");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
     }
 }
