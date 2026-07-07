@@ -2,6 +2,7 @@ package dev.javatexteditor.ui;
 
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.DiagnosticKind;
+import dev.javatexteditor.system.SystemStatsMonitor;
 import dev.javatexteditor.telescope.TelescopeItem;
 import javax.swing.JPanel;
 import javax.swing.Timer;
@@ -1022,7 +1023,15 @@ public class EditorCanvas extends JPanel {
         int rightX = getWidth() - clockWidth - 4;
         drawUiText(g2, clockLabel, rightX, y, cellW, lineHeight, theme.background);
 
-        // 診断件数は時刻表示の左隣に表示
+        // CPU温度・GPU温度・メモリ使用率（"|"区切り）は時刻表示の左隣に表示
+        String statsLabel = SystemStatsMonitor.INSTANCE.getStatusLabel();
+        if (!statsLabel.isEmpty()) {
+            int statsWidth = uiTextWidth(statsLabel, cellW);
+            rightX -= statsWidth + cellW; // 時刻表示との間に1文字分の余白
+            drawUiText(g2, statsLabel, rightX, y, cellW, lineHeight, theme.background);
+        }
+
+        // 診断件数はシステムステータス表示のさらに左隣に表示
         if (!diagnostics.isEmpty()) {
             long errCount  = diagnostics.stream()
                 .filter(d -> d.kind() == DiagnosticKind.ERROR).count();
@@ -1030,7 +1039,7 @@ public class EditorCanvas extends JPanel {
                 .filter(d -> d.kind() == DiagnosticKind.WARNING).count();
             String diagLabel = buildDiagLabel(errCount, warnCount);
             int labelWidth = uiTextWidth(diagLabel, cellW);
-            rightX -= labelWidth + cellW; // 時刻表示との間に1文字分の余白
+            rightX -= labelWidth + cellW; // システムステータス表示との間に1文字分の余白
             drawUiText(g2, diagLabel, rightX, y, cellW, lineHeight, theme.background);
         }
 

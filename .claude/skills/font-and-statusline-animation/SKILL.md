@@ -365,6 +365,19 @@ static int testFrameCalculation() {
 - **ライセンス**: IBM Plex Mono は SIL Open Font License 1.1（`Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"`）。OFL はソフトウェアへのフォント埋め込み・再配布を明示的に許可している。今回はビットマップへの変換ではなく TTF 実体そのものを配布物に含める（ただしリポジトリには直接コミットせず `scripts/setup.sh` 経由でダウンロードする）形になったため、ライセンス文（`LICENSE.txt`）もフォントと同じ場所（`lib/fonts/IBMPlexMono-OFL.txt`）に一緒にダウンロードするようにした。
 - **品質**: misc-fixedバージョンで課題だった極小サイズ（5x7相当）でのつぶれも、ベクターアウトライン＋アンチエイリアスのおかげで大幅に改善した（ASCIIダンプで目視確認済み）。非等方向に大きく歪めた場合（例: 20x10）も文字の判読性を保ったまま正しくセル全体を埋めることを確認済み。
 
+## 実装済みの追加機能: ステータスバーへのCPU/GPU温度・メモリ使用率表示（2026-07）
+
+- **要望**: 右下の現在時刻表示のさらに左隣に、境界線として `|` を使い「CPU温度 | GPU温度 | メモリ使用率」の順で表示してほしいという依頼。
+- **新設**: `dev.javatexteditor.system.SystemStatsMonitor`（シングルトン `INSTANCE`）。`ProjectSearcher`/`WordIndex` 等で確立済みの「バックグラウンドスレッドで定期的に値を再計算し、`volatile` フィールドへの参照差し替えだけでEDTに非ブロッキングで公開する」パターンをそのまま踏襲した。`ScheduledExecutorService`（デーモンスレッド、2秒間隔）で `refresh()` を呼び、`getStatusLabel()` はキャッシュ済み文字列を即座に返すだけなので `drawStatusLine()`（EDT）から呼んでも描画がブロックされない。
+- **各項目の取得方法とgraceful degradation**:
+  - **メモリ使用率**: `com.sun.management.OperatingSystemMXBean`（JDK標準の管理API、追加の依存ライブラリではない）の `getTotalMemorySize()`/`getFreeMemorySize()` から算出。ほぼ全環境で確実に取得できる。
+  - **CPU温度**: Linuxの `/sys/class/thermal/thermal_zone*/temp` を読む。`type` ファイルに `cpu`/`x86_pkg_temp` を含むゾーンを優先し、無ければ最初に見つかったゾーンにフォールバックする。ディレクトリ自体が存在しない環境（Windows/macOS、コンテナ等）では `Optional.empty()` を返し、ステータスラインには `N/A` と表示する。
+  - **GPU温度**: `nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits` を `ProcessBuilder` でサブプロセス起動して取得する（NVIDIA環境のみ）。`waitFor(1500ms)` のタイムアウトを設け、コマンドが存在しない・応答がない場合は `Optional.empty()`（`N/A`表示）にフォールバックする。AMD/Intel GPU・コンテナ環境等、`nvidia-smi` が無い環境の方が多いことを前提にした設計。
+  - この3項目とも「取得できないのは異常ではなく普通にありうる」という前提で、例外を投げずに `Optional.empty()` → `N/A` 表示に倒す（Shift+K/`gr` 等の既存コンポーネントと同じ graceful degradation の方針）。
+- **表示位置**: `EditorCanvas.drawStatusLine()` で、時計表示（最右端）のすぐ左隣に `CPU 45°C | GPU N/A | MEM 62%` の形式で表示する。既存の診断件数表示（エラー/警告数）は、このシステムステータス表示のさらに左隣にずれる形になった（右から: 時計 → システムステータス → 診断件数）。
+- **意図的に採用しなかった案**: 真のプラットフォーム非依存なCPU/GPU温度取得手段は存在しない（OSHI等の外部ライブラリがあるが、CLAUDE.mdの「依存ライブラリを一切使用しない」制約に反するため不採用）。Windows向けに `wmic`/PowerShell経由のACPI温度取得を追加することも検討したが、多くの環境で管理者権限が必要・信頼性が低いため今回のスコープでは見送り、Linuxの `/sys/class/thermal` とNVIDIAの `nvidia-smi` のみをサポート対象とした（それ以外の環境では単に `N/A` 表示になる）。
+- **テスト**: `test/dev/javatexteditor/system/SystemStatsMonitorTest.java`（8/8）。このコンテナ環境には温度センサーも `nvidia-smi` も存在しないため、具体的な温度値ではなく「値が取れるなら妥当な範囲(-40〜150°C)」「取れないなら空」の両方を許容する形でテストしている。メモリ使用率のみ、JDK標準APIが常に利用可能なため必ず値が返ることを検証している。
+
 ## このスキルを使うタイミング
 
 - ステータスラインにアニメーションを追加したい場合 → `drawWalkingCharacter()` の実装を参照
