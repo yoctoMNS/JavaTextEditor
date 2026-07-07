@@ -37,7 +37,7 @@ public class TutorialTest {
     }
 
     static void testContentHasAllLessons() {
-        for (int i = 1; i <= 13; i++) {
+        for (int i = 1; i <= 15; i++) {
             assertTrue("contains lesson " + i, Tutorial.CONTENT.contains("レッスン " + i + ":"));
         }
         assertTrue("mentions :tutor", Tutorial.CONTENT.contains(":tutor"));
