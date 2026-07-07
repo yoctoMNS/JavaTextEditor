@@ -411,6 +411,20 @@ public class ModalEditor {
             return;
         }
 
+        // Esc: NORMALモードでは既定では何も割り当てられていないが、
+        // 連続2回押すと検索ハイライトを強制的にクリアする。
+        // 他の保留中シーケンス（dd/yy等）が残っていた場合はここで破棄する（Vim同様、Escは保留操作をキャンセルする）。
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            if (pendingSequence.equals("ESC")) {
+                pendingSequence = "";
+                clearSearchHighlights();
+                statusMessage = "";
+            } else {
+                pendingSequence = "ESC";
+            }
+            return;
+        }
+
         // 2打鍵シーケンス（yy / dd）の処理
         if (!pendingSequence.isEmpty()) {
             String seq = pendingSequence;
@@ -1191,8 +1205,10 @@ public class ModalEditor {
     private void resetSearchAndResultState() {
         grepResults = null;
         fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        // searchMatches/currentMatchIdx のクリアだけでなく、EditorCanvas側に描画済みの
+        // ハイライト矩形（旧バッファの行・列基準）も消さないと、バッファ切替後も前バッファの
+        // ハイライトが画面に残り続けるバグになる（clearSearchHighlights()に一本化して防止）。
+        clearSearchHighlights();
     }
 
     /**

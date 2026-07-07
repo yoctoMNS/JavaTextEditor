@@ -262,6 +262,8 @@ public class EditorCanvas extends JPanel {
         repaint();
     }
 
+    public List<int[]> getSearchHighlights() { return searchHighlights; }
+
     // -------------------------------------------------------------------------
     // フォントセルサイズ調整（Ctrl+Shift+矢印）
     // -------------------------------------------------------------------------

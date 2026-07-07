@@ -1,6 +1,7 @@
 package dev.javatexteditor.search;
 
 import dev.javatexteditor.editor.ModalEditor;
+import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.util.List;
 
@@ -260,6 +261,70 @@ public class TextSearchTest {
         assertTrue("in search mode", ed.isSearchMode());
     }
 
+    private static void sendCommand(ModalEditor ed, String cmd) {
+        sendChar(ed, ':');
+        for (char c : cmd.toCharArray()) sendChar(ed, c);
+        sendCode(ed, KeyEvent.VK_ENTER);
+    }
+
+    static void testHighlightClearedOnBufferSwitch() {
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("foo bar foo", canvas);
+        typeSearch(ed, "foo");
+        assertEq("before switch: 2 matches", 2, ed.getSearchMatches().size());
+        assertFalse("before switch: canvas has highlights", canvas.getSearchHighlights().isEmpty());
+
+        // :enew で新規バッファへ切り替える（旧バッファのハイライトが残ってはいけない）
+        sendCommand(ed, "enew");
+
+        assertTrue("after switch: no search matches", ed.getSearchMatches().isEmpty());
+        assertTrue("after switch: canvas highlights cleared", canvas.getSearchHighlights().isEmpty());
+    }
+
+    static void testHighlightClearedOnBufferHistorySwitch() {
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("foo bar foo", canvas);
+        typeSearch(ed, "foo");
+        assertFalse("history: canvas has highlights before", canvas.getSearchHighlights().isEmpty());
+
+        sendCommand(ed, "enew");
+        // Ctrl+U: 前のバッファへ戻る。ここでも新しいバッファ側の状態としてハイライトが残ってはいけない
+        sendCode(ed, KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK);
+
+        assertTrue("history: no search matches after switch back", ed.getSearchMatches().isEmpty());
+        assertTrue("history: canvas highlights cleared after switch back", canvas.getSearchHighlights().isEmpty());
+    }
+
+    static void testDoubleEscClearsHighlightInNormalMode() {
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("foo bar foo", canvas);
+        typeSearch(ed, "foo");
+        assertEq("before esc: 2 matches", 2, ed.getSearchMatches().size());
+
+        // 1回目の Esc: まだクリアしない
+        sendCode(ed, KeyEvent.VK_ESCAPE);
+        assertEq("after 1st esc: still 2 matches", 2, ed.getSearchMatches().size());
+        assertTrue("after 1st esc: still in normal mode", ed.isNormalMode());
+
+        // 2回目の Esc: 強制的にハイライトをクリアする
+        sendCode(ed, KeyEvent.VK_ESCAPE);
+        assertTrue("after 2nd esc: no search matches", ed.getSearchMatches().isEmpty());
+        assertTrue("after 2nd esc: canvas highlights cleared", canvas.getSearchHighlights().isEmpty());
+    }
+
+    static void testSingleEscDoesNotClearHighlightIfNotRepeated() {
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("foo bar foo", canvas);
+        typeSearch(ed, "foo");
+
+        sendCode(ed, KeyEvent.VK_ESCAPE);
+        // Esc の直後に別のキー（カーソル移動）を押すと、ハイライトクリアの保留状態はキャンセルされる
+        sendChar(ed, 'l');
+        sendCode(ed, KeyEvent.VK_ESCAPE);
+        // 直前の Esc は上の 'l' で保留がリセットされているため、これは「1回目」扱いになりまだクリアされない
+        assertFalse("non-consecutive esc does not clear highlight", ed.getSearchMatches().isEmpty());
+    }
+
     public static void main(String[] args) {
         testSearchEntersSearchMode();
         testSearchBufferAccumulates();
@@ -285,6 +350,10 @@ public class TextSearchTest {
         testNWithoutPriorSearch();
         testStarWordBoundary();
         testSearchModeStatusLine();
+        testHighlightClearedOnBufferSwitch();
+        testHighlightClearedOnBufferHistorySwitch();
+        testDoubleEscClearsHighlightInNormalMode();
+        testSingleEscDoesNotClearHighlightIfNotRepeated();
 
         System.out.println("\n=== TextSearchTest: " + pass + " passed, " + fail + " failed ===");
         if (fail > 0) System.exit(1);
