@@ -10,6 +10,8 @@ import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
 import dev.javatexteditor.buffer.UndoablePieceTable;
+import dev.javatexteditor.projectbuild.BuildDiagnostic;
+import dev.javatexteditor.projectbuild.BuildResult;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
 import dev.javatexteditor.search.DirEntry;
@@ -20,6 +22,7 @@ import dev.javatexteditor.search.SearchResult;
 import dev.javatexteditor.telescope.BufferPicker;
 import dev.javatexteditor.telescope.FilePicker;
 import dev.javatexteditor.telescope.GrepPicker;
+import dev.javatexteditor.telescope.MainClassPicker;
 import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
@@ -40,6 +43,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -173,6 +177,10 @@ public class ModalEditor {
     private final StringBuilder telescopeQuery = new StringBuilder();
     private List<TelescopeItem> telescopeResults = List.of();
     private int telescopeSelectedIdx = 0;
+    /** TELESCOPE モードの Enter が「ファイルを開く」か「F11 の main クラス選択」かを切り替える。 */
+    private enum TelescopePurpose { NAVIGATE, RUN_MAIN_CLASS }
+    private TelescopePurpose telescopePurpose = TelescopePurpose.NAVIGATE;
+    private Consumer<String> onRunMainClassSelected;
     // telescope 起動時にバッファ一覧を供給するコールバック（Main.java から設定）
     private java.util.function.Supplier<List<BufferPicker.BufferEntry>> bufferListSupplier = null;
     // ファイルを開いたとき（telescope/`:e`）にバッファレジストリへ登録するコールバック
@@ -272,6 +280,11 @@ public class ModalEditor {
 
     public void setOnBufferDelete(java.util.function.Consumer<BufferPicker.BufferEntry> callback) {
         this.onBufferDelete = callback;
+    }
+
+    /** F11: telescope の main クラス選択（Enter）を、ファイルを開く代わりに実行要求として受け取るコールバック。 */
+    public void setOnRunMainClassSelected(Consumer<String> callback) {
+        this.onRunMainClassSelected = callback;
     }
 
     public void setExitCallback(Runnable callback) {
@@ -1530,11 +1543,23 @@ public class ModalEditor {
             }
             default -> { return; }
         }
+        telescopePurpose = TelescopePurpose.NAVIGATE;
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
         telescopeResults = telescopePicker.filter("");
         mode = Mode.TELESCOPE;
         statusMessage = "";
+    }
+
+    /** F11: mainメソッドを持つクラスが複数見つかった場合、telescope-picker の3ペインオーバーレイで選択させる。 */
+    public void enterMainClassPicker(List<String> fqcns) {
+        telescopePicker = new MainClassPicker(fqcns);
+        telescopePurpose = TelescopePurpose.RUN_MAIN_CLASS;
+        telescopeQuery.setLength(0);
+        telescopeSelectedIdx = 0;
+        telescopeResults = telescopePicker.filter("");
+        mode = Mode.TELESCOPE;
+        statusMessage = "実行するmainクラスを選択してください（Enterで実行、Escでキャンセル）";
     }
 
     private void processTelescopeKey(int keyCode, char keyChar, int modifiers) {
@@ -1596,7 +1621,12 @@ public class ModalEditor {
     private void openTelescopeSelection() {
         if (telescopePicker == null || telescopeResults.isEmpty()) { exitTelescope(); return; }
         TelescopeItem item = telescopeResults.get(telescopeSelectedIdx);
+        TelescopePurpose purpose = telescopePurpose;
         exitTelescope();
+        if (purpose == TelescopePurpose.RUN_MAIN_CLASS) {
+            if (onRunMainClassSelected != null) onRunMainClassSelected.accept(item.display());
+            return;
+        }
         if (item.filePath() == null) return;
         try {
             Path target = Path.of(item.filePath());
@@ -1655,6 +1685,7 @@ public class ModalEditor {
     private void exitTelescope() {
         mode = Mode.NORMAL;
         telescopePicker = null;
+        telescopePurpose = TelescopePurpose.NAVIGATE;
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
@@ -3674,8 +3705,50 @@ public class ModalEditor {
     public void setChangeWorkingDirectoryCallback(java.util.function.Function<Path, String> cb) {
         this.changeWdCallback = cb;
     }
-    private Path getProjectRoot() {
+    public Path getProjectRoot() {
         return (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+    }
+
+    /**
+     * F10: コンパイル結果を *compile* 疑似バッファに表示する。
+     * :grep/:rename と同じパターン（pushBuffer せず直接 buffer を差し替え、Ctrl+U 履歴には積まない）。
+     */
+    public void showCompileResult(BuildResult result) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("*compile* ").append(result.success() ? "SUCCESS" : "FAILED")
+          .append(" — ").append(result.fileCount()).append(" file(s)\n");
+        if (result.errorMessage() != null) {
+            sb.append(result.errorMessage()).append('\n');
+        }
+        for (BuildDiagnostic d : result.diagnostics()) {
+            sb.append(d.isError() ? "ERROR " : "WARNING ")
+              .append(d.filePath()).append(':').append(d.lineNumber() + 1)
+              .append(':').append(d.column() + 1).append(": ")
+              .append(d.message()).append('\n');
+        }
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = result.success()
+            ? "compile: success (" + result.fileCount() + " file(s))"
+            : "compile: FAILED";
+    }
+
+    /** F11: 実行結果を *run* 疑似バッファに表示する。showCompileResult と同じ疑似バッファパターン。 */
+    public void showRunOutput(String fqcn, String output, int exitCode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("*run* ").append(fqcn).append(" — exit code ").append(exitCode).append('\n');
+        sb.append(output);
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = "run: " + fqcn + " exited with code " + exitCode;
     }
     public boolean isFileSearchMode()     { return mode == Mode.FILESEARCH; }
     public boolean isFileNameSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.NAME; }

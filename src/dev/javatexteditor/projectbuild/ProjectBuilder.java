@@ -1,0 +1,134 @@
+package dev.javatexteditor.projectbuild;
+
+import dev.javatexteditor.search.FileNameSearcher;
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
+import javax.tools.ToolProvider;
+
+/**
+ * F10: projectRoot 配下の全 .java ファイルを javax.tools.JavaCompiler でコンパイルし、
+ * .class を projectRoot/{@value #OUTPUT_DIR_NAME} に出力する。
+ * F11（実行）はこの出力先ディレクトリをクラスパスとして java コマンドを起動する。
+ */
+public class ProjectBuilder {
+
+    /** コンパイル済み .class の出力先ディレクトリ名（projectRoot からの相対）。 */
+    public static final String OUTPUT_DIR_NAME = "bin";
+
+    private static final Set<String> SKIP_DIRS = buildSkipDirs();
+
+    private static Set<String> buildSkipDirs() {
+        Set<String> s = new HashSet<>(FileNameSearcher.SKIP_DIRS);
+        s.add(OUTPUT_DIR_NAME);
+        return Set.copyOf(s);
+    }
+
+    public BuildResult compile(Path projectRoot) {
+        List<Path> sources;
+        try {
+            sources = collectJavaFiles(projectRoot);
+        } catch (IOException e) {
+            return new BuildResult(false, 0, List.of(), "ソース走査に失敗しました: " + e.getMessage());
+        }
+        if (sources.isEmpty()) {
+            return new BuildResult(false, 0, List.of(),
+                "コンパイル対象の.javaファイルが見つかりません: " + projectRoot);
+        }
+
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            return new BuildResult(false, 0, List.of(),
+                "JavaCompilerが見つかりません。JDKで実行してください。");
+        }
+
+        Path binDir = projectRoot.resolve(OUTPUT_DIR_NAME);
+        try {
+            Files.createDirectories(binDir);
+        } catch (IOException e) {
+            return new BuildResult(false, 0, List.of(), "出力先ディレクトリを作成できません: " + binDir);
+        }
+
+        DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
+        try (StandardJavaFileManager fm = compiler.getStandardFileManager(collector, Locale.ENGLISH, null)) {
+            fm.setLocation(StandardLocation.CLASS_OUTPUT, List.of(binDir.toFile()));
+            Iterable<? extends JavaFileObject> units = fm.getJavaFileObjectsFromPaths(sources);
+
+            JavaCompiler.CompilationTask task = compiler.getTask(
+                null, fm, collector, List.of("-proc:none"), null, units);
+            boolean called = Boolean.TRUE.equals(task.call());
+
+            List<BuildDiagnostic> diagnostics = toDiagnostics(collector.getDiagnostics());
+            boolean hasErrors = diagnostics.stream().anyMatch(BuildDiagnostic::isError);
+            return new BuildResult(called && !hasErrors, sources.size(), diagnostics, null);
+        } catch (IOException e) {
+            return new BuildResult(false, sources.size(), List.of(),
+                "コンパイル中にエラーが発生しました: " + e.getMessage());
+        }
+    }
+
+    /** F11: bin/ に .class が1つでもあれば true（未コンパイルなら実行を拒否するためのガード）。 */
+    public boolean hasCompiledClasses(Path projectRoot) {
+        Path binDir = projectRoot.resolve(OUTPUT_DIR_NAME);
+        if (!Files.isDirectory(binDir)) return false;
+        try (var stream = Files.walk(binDir)) {
+            return stream.anyMatch(p -> p.toString().endsWith(".class"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private List<Path> collectJavaFiles(Path projectRoot) throws IOException {
+        List<Path> result = new ArrayList<>();
+        Files.walkFileTree(projectRoot, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                String name = dir.getFileName() == null ? "" : dir.getFileName().toString();
+                if (!dir.equals(projectRoot) && SKIP_DIRS.contains(name)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                if (file.toString().endsWith(".java")) result.add(file);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return result;
+    }
+
+    private List<BuildDiagnostic> toDiagnostics(List<Diagnostic<? extends JavaFileObject>> raw) {
+        List<BuildDiagnostic> result = new ArrayList<>();
+        for (Diagnostic<? extends JavaFileObject> d : raw) {
+            Diagnostic.Kind kind = d.getKind();
+            boolean isError = kind == Diagnostic.Kind.ERROR;
+            boolean isWarning = kind == Diagnostic.Kind.WARNING || kind == Diagnostic.Kind.MANDATORY_WARNING;
+            if (!isError && !isWarning) continue;
+
+            String path = (d.getSource() != null) ? d.getSource().getName() : "?";
+            long rawLine = d.getLineNumber();
+            int line = rawLine > 0 ? (int) rawLine - 1 : 0;
+            long rawCol = d.getColumnNumber();
+            int col = rawCol > 0 ? (int) rawCol - 1 : 0;
+
+            result.add(new BuildDiagnostic(path, line, col, d.getMessage(Locale.ENGLISH), isError));
+        }
+        return result;
+    }
+}
