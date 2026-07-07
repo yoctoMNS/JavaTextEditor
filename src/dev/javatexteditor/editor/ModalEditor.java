@@ -1825,7 +1825,9 @@ public class ModalEditor {
     }
 
     private void executeCommand(String cmd) {
-        if (cmd.equals("w")) {
+        if (handleSubstituteCommand(cmd)) {
+            // 置換コマンドとして処理済み
+        } else if (cmd.equals("w")) {
             saveToFile(currentFilePath);
         } else if (cmd.startsWith("w ")) {
             String path = cmd.substring(2).trim();
@@ -1879,6 +1881,169 @@ public class ModalEditor {
         } else {
             statusMessage = "E: unknown command '" + cmd + "'";
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Vim式置換コマンド（:s / :%s / :'<,'>s / :N,Ms）
+    // 詳細は .claude/skills/vim-substitution/SKILL.md 参照
+    // -------------------------------------------------------------------------
+
+    private static final Pattern SUBSTITUTE_RANGE_PATTERN = Pattern.compile("^(\\d+),(\\d+)(s.*)$");
+
+    /**
+     * cmd が置換コマンド（範囲プレフィックス + s + 区切り文字...）の形なら実行して true を返す。
+     * そうでなければ何もせず false を返し、呼び出し側の既存分岐にフォールスルーさせる。
+     */
+    private boolean handleSubstituteCommand(String cmd) {
+        int r1, r2;
+        String sPart;
+
+        if (cmd.startsWith("%")) {
+            String[] lines = getLines();
+            r1 = 0;
+            r2 = Math.max(0, lines.length - 1);
+            sPart = cmd.substring(1);
+        } else if (cmd.startsWith("'<,'>")) {
+            sPart = cmd.substring(5);
+            if (!sPart_isSubstitute(sPart)) return false;
+            if (!lastVisualValid) {
+                statusMessage = "E: no previous visual selection";
+                return true;
+            }
+            r1 = Math.min(lastVisualAnchorRow, lastVisualCursorRow);
+            r2 = Math.max(lastVisualAnchorRow, lastVisualCursorRow);
+        } else {
+            Matcher rangeMatcher = SUBSTITUTE_RANGE_PATTERN.matcher(cmd);
+            if (rangeMatcher.matches()) {
+                r1 = Integer.parseInt(rangeMatcher.group(1)) - 1;
+                r2 = Integer.parseInt(rangeMatcher.group(2)) - 1;
+                sPart = rangeMatcher.group(3);
+            } else {
+                r1 = r2 = cursorRow;
+                sPart = cmd;
+            }
+        }
+
+        if (!sPart_isSubstitute(sPart)) return false;
+
+        executeSubstitute(r1, r2, sPart);
+        return true;
+    }
+
+    /** sPart が "s" + 区切り文字（英数字・空白以外の1文字）から始まる置換コマンドの形か判定する。 */
+    private boolean sPart_isSubstitute(String sPart) {
+        if (sPart.length() < 2 || sPart.charAt(0) != 's') return false;
+        char delim = sPart.charAt(1);
+        return !Character.isLetterOrDigit(delim) && !Character.isWhitespace(delim);
+    }
+
+    /** [r1, r2]（0始まり・両端含む）の各行に対して s/pattern/replacement/flags を適用する。 */
+    private void executeSubstitute(int r1, int r2, String sPart) {
+        char delimiter = sPart.charAt(1);
+        String[] parts = sPart.substring(2).split(Pattern.quote(String.valueOf(delimiter)), 3);
+
+        String rawPattern = parts.length > 0 ? parts[0] : "";
+        String rawReplacement = parts.length > 1 ? parts[1] : "";
+        String flags = parts.length > 2 ? parts[2] : "";
+
+        String patternStr = rawPattern.isEmpty() ? lastSearchPattern : rawPattern;
+        if (patternStr == null || patternStr.isEmpty()) {
+            statusMessage = "E: no previous substitute pattern";
+            return;
+        }
+
+        boolean global = flags.contains("g");
+        boolean ignoreCase = flags.contains("i");
+
+        Pattern compiledPattern;
+        try {
+            compiledPattern = Pattern.compile(patternStr, ignoreCase ? Pattern.CASE_INSENSITIVE : 0);
+        } catch (PatternSyntaxException ex) {
+            statusMessage = "E: invalid regex: " + ex.getMessage();
+            return;
+        }
+
+        String javaReplacement = translateVimReplacement(rawReplacement);
+
+        String[] lines = getLines();
+        int maxRow = Math.max(0, lines.length - 1);
+        r1 = Math.max(0, Math.min(r1, maxRow));
+        r2 = Math.max(0, Math.min(r2, maxRow));
+        if (r1 > r2) { int tmp = r1; r1 = r2; r2 = tmp; }
+
+        int totalReplacements = 0;
+        int linesChanged = 0;
+        int lastChangedRow = -1;
+
+        for (int row = r1; row <= r2; row++) {
+            String[] currentLines = getLines();
+            if (row >= currentLines.length) break;
+            String line = currentLines[row];
+
+            Matcher counter = compiledPattern.matcher(line);
+            int matchCount = 0;
+            while (counter.find()) {
+                matchCount++;
+                if (!global) break;
+            }
+            if (matchCount == 0) continue;
+
+            Matcher m = compiledPattern.matcher(line);
+            String replaced = global ? m.replaceAll(javaReplacement) : m.replaceFirst(javaReplacement);
+            if (!replaced.equals(line)) {
+                int lineStart = offsetAt(row, 0);
+                buffer.delete(lineStart, line.length());
+                buffer.insert(lineStart, replaced);
+                totalReplacements += matchCount;
+                linesChanged++;
+                lastChangedRow = row;
+            }
+        }
+
+        if (totalReplacements == 0) {
+            statusMessage = "E: pattern not found: " + patternStr;
+            return;
+        }
+
+        if (!rawPattern.isEmpty()) {
+            lastSearchPattern = rawPattern;
+        }
+        cursorRow = lastChangedRow;
+        cursorCol = 0;
+        clampCursorForNormal();
+        statusMessage = totalReplacements + " substitutions on " + linesChanged + " lines";
+    }
+
+    /**
+     * Vim式置換文字列（\1..\9=後方参照, &=マッチ全体, \&/\\=エスケープ）を
+     * Java の Matcher 置換構文（$1..$9, $0, リテラル$のエスケープ）に変換する。
+     */
+    private String translateVimReplacement(String vimReplacement) {
+        StringBuilder sb = new StringBuilder();
+        int len = vimReplacement.length();
+        for (int i = 0; i < len; i++) {
+            char c = vimReplacement.charAt(i);
+            if (c == '\\' && i + 1 < len) {
+                char next = vimReplacement.charAt(i + 1);
+                if (next >= '0' && next <= '9') {
+                    sb.append('$').append(next);
+                } else if (next == '&' || next == '\\') {
+                    sb.append(next == '\\' ? "\\\\" : next);
+                } else {
+                    sb.append(next);
+                }
+                i++;
+            } else if (c == '\\') {
+                sb.append("\\\\");
+            } else if (c == '&') {
+                sb.append("$0");
+            } else if (c == '$') {
+                sb.append("\\$");
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private boolean saveToFile(String path) {
@@ -2269,6 +2434,7 @@ public class ModalEditor {
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
+            case "enter.command.visual" -> enterCommandFromVisual();
         }
     }
 
@@ -2330,6 +2496,7 @@ public class ModalEditor {
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
+            case "enter.command.visual" -> enterCommandFromVisual();
         }
     }
 
@@ -2411,6 +2578,7 @@ public class ModalEditor {
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
+            case "enter.command.visual" -> enterCommandFromVisual();
         }
     }
 
@@ -2672,6 +2840,14 @@ public class ModalEditor {
         lastVisualAnchorCol = anchorCol;
         lastVisualCursorRow = cursorRow;
         lastVisualCursorCol = cursorCol;
+    }
+
+    /** Visual系モードで ':' を押した時: 選択範囲を保存し "'<,'>" 入力済みの COMMAND モードへ入る。 */
+    private void enterCommandFromVisual() {
+        saveLastVisualFromCurrentMode();
+        commandBuffer.setLength(0);
+        commandBuffer.append("'<,'>");
+        mode = Mode.COMMAND;
     }
 
     /** gv: 直前の Visual 選択（範囲・種別）を復元する。未保存なら何もしない。 */
