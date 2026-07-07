@@ -378,6 +378,13 @@ static int testFrameCalculation() {
 - **意図的に採用しなかった案**: 真のプラットフォーム非依存なCPU/GPU温度取得手段は存在しない（OSHI等の外部ライブラリがあるが、CLAUDE.mdの「依存ライブラリを一切使用しない」制約に反するため不採用）。Windows向けに `wmic`/PowerShell経由のACPI温度取得を追加することも検討したが、多くの環境で管理者権限が必要・信頼性が低いため今回のスコープでは見送り、Linuxの `/sys/class/thermal` とNVIDIAの `nvidia-smi` のみをサポート対象とした（それ以外の環境では単に `N/A` 表示になる）。
 - **テスト**: `test/dev/javatexteditor/system/SystemStatsMonitorTest.java`（8/8）。このコンテナ環境には温度センサーも `nvidia-smi` も存在しないため、具体的な温度値ではなく「値が取れるなら妥当な範囲(-40〜150°C)」「取れないなら空」の両方を許容する形でテストしている。メモリ使用率のみ、JDK標準APIが常に利用可能なため必ず値が返ることを検証している。
 
+### 修正: Fedora等でCPU温度が常にN/Aになる不具合（2026-07）
+
+- **症状**: Fedora上で実際にエディタを動かすと、CPU温度欄が常に `N/A` になり表示されない（メモリ使用率・GPU欄は正常）。
+- **原因**: 初版実装は `/sys/class/thermal/thermal_zone*` のみを見ており、`type` ファイルに `cpu`/`x86_pkg_temp` を含むゾーンが無ければ最初に見つかったゾーンにフォールバックしていた。しかしFedora（および多くの最近のディストリビューション）では、ACPI熱ゾーンに公開される値は `acpitz`/`pch_skylake` のような周辺（マザーボード/チップセット）温度であることが多く、CPUダイそのものの温度は `thermal_zone` には現れず、`coretemp`（Intel）/`k10temp`・`zenpower`（AMD）といったhwmonドライバ経由（`/sys/class/hwmon/hwmon*/`）でのみ公開される。環境によっては `thermal_zone` ディレクトリ自体が存在しない、またはCPU用ゾーンが1つも無いため、フォールバック先が「CPUと無関係な値」になるか、ゾーンが皆無で `Optional.empty()`（`N/A`表示）に落ちていた。
+- **修正**: `readCpuTempCelsius()` を「まず `/sys/class/hwmon` を探索し、`name` ファイルが `coretemp`/`k10temp`/`zenpower` のいずれかを含むデバイスを見つけたら、そのデバイス配下の `tempN_input` から値を読む（`tempN_label` が `Package`/`Tdie`/`Tctl` を含むセンサーを優先し、無ければ最初に見つかった`tempN_input`にフォールバック）」→「見つからなければ従来の `thermal_zone` 探索にフォールバック」という2段階の探索に変更した（`readCpuTempFromHwmon()`/`readPreferredHwmonTemp()`/`readCpuTempFromThermalZone()` に分割）。
+- **テスト容易性のためのリファクタ**: `readCpuTempCelsius()` はhwmon/thermalのルートパスを固定定数（`/sys/class/hwmon`・`/sys/class/thermal`）で呼ぶpublicなオーバーロードのままにしつつ、ルートパスを引数で受け取る package-private なオーバーロード `readCpuTempCelsius(Path hwmonRoot, Path thermalRoot)` を追加した。テストは一時ディレクトリに偽装した `hwmon0/name`・`temp1_input`・`temp1_label` 等のファイルを作り、このオーバーロード経由で「hwmonのcoretempがthermal_zoneのacpitzより優先される」「Packageラベルのセンサーが他のセンサーより優先される」「hwmonが無ければthermal_zoneにフォールバックする」「どちらも無ければempty」の4パターンを検証している(`test/dev/javatexteditor/system/SystemStatsMonitorTest.java`、12/12)。実機の `/sys` に依存しないため、このコンテナ環境（`/sys/class/thermal`・`/sys/class/hwmon`ともに温度センサーが存在しない）でも決定的に再現・検証できる。
+
 ## このスキルを使うタイミング
 
 - ステータスラインにアニメーションを追加したい場合 → `drawWalkingCharacter()` の実装を参照
