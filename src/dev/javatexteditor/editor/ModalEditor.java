@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -82,6 +83,16 @@ public class ModalEditor {
     private enum YankType { CHAR, LINE, BLOCK }
     private YankType yankType = YankType.CHAR;
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
+    // vim-macro-recording: q{register}記録 / @{register}再生。
+    // yankRegister（ヤンクバッファ）とは独立したマクロ専用レジスタストレージ。
+    private record RecordedKey(int keyCode, char keyChar, int modifiers) {}
+    private boolean macroRecording = false;
+    private char macroRecordingRegister;
+    private final List<RecordedKey> macroRecordBuffer = new ArrayList<>();
+    private final Map<Character, List<RecordedKey>> macroRegisters = new HashMap<>();
+    private char lastPlayedMacroRegister = '\0'; // @@ 用
+    private int macroReplayDepth = 0; // 再生中の再帰の深さ（記録の二重展開防止・無限再帰ガード）
+    private static final int MACRO_MAX_REPLAY_DEPTH = 1000;
     // Visual '>'/'<' 用の count 前置き入力（例: "3>" は shiftwidth*3）。数字キー以外が来たら破棄する。
     private String visualCountBuffer = "";
     private final IndentSettings indentSettings = new IndentSettings();
@@ -332,6 +343,13 @@ public class ModalEditor {
             syncCanvas();
             return;
         }
+        // vim-macro-recording: 記録中は生キーをそのまま記録する。
+        // 記録終了キー（NORMALモードでのq）自体と、マクロ再生中に内部生成されるキー
+        // （macroReplayDepth>0）は記録対象から除外する（詳細はSkillのreference参照）。
+        boolean isMacroStopKey = macroRecording && mode == Mode.NORMAL && keyChar == 'q';
+        if (macroRecording && macroReplayDepth == 0 && !isMacroStopKey) {
+            macroRecordBuffer.add(new RecordedKey(keyCode, keyChar, modifiers));
+        }
         switch (mode) {
             case INSERT       -> processInsertKey(keyCode, keyChar, modifiers);
             case COMMAND      -> processCommandKey(keyCode, keyChar);
@@ -411,6 +429,14 @@ public class ModalEditor {
             return;
         }
 
+        // マクロ記録中の q: 多打鍵シーケンス（pendingSequence）の途中状態に関わらず
+        // 最優先で記録を終了する（vim-macro-recording skill の「qの優先順位」参照）。
+        if (macroRecording && keyChar == 'q') {
+            stopMacroRecording();
+            pendingSequence = "";
+            return;
+        }
+
         // 2打鍵シーケンス（yy / dd）の処理
         if (!pendingSequence.isEmpty()) {
             String seq = pendingSequence;
@@ -419,6 +445,26 @@ public class ModalEditor {
             char prev = seq.charAt(0);
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
+            // q{register}: マクロ記録開始（小文字=新規, 大文字=既存レジスタへ追記）
+            if (prev == 'q') {
+                if (Character.isLetter(keyChar)) {
+                    startMacroRecording(keyChar);
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return;
+            }
+            // @{register} / @@: マクロ再生
+            if (prev == '@') {
+                if (keyChar == '@') {
+                    replayLastMacro();
+                } else if (Character.isLetter(keyChar)) {
+                    playMacro(Character.toLowerCase(keyChar));
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return;
+            }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
             if (prev == 'g' && keyChar == 'r') { goToReferences(false); return; }
             // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
@@ -553,6 +599,8 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingSequence = "y";
             case "delete.pending" -> pendingSequence = "d";
+            case "macro.record.pending" -> { pendingSequence = "q"; statusMessage = "q-"; }
+            case "macro.play.pending"   -> { pendingSequence = "@"; statusMessage = "@-"; }
             case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
             case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
             case "split.pending"       -> { pendingSequence = "s";  statusMessage = "s-"; }
@@ -2869,6 +2917,63 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
+    // マクロ記録・再生（vim-macro-recording skill 参照）
+    // -------------------------------------------------------------------------
+
+    /** register: 小文字なら新規記録、大文字なら既存内容への追記。 */
+    private void startMacroRecording(char register) {
+        char reg = Character.toLowerCase(register);
+        macroRecordBuffer.clear();
+        if (Character.isUpperCase(register)) {
+            List<RecordedKey> existing = macroRegisters.get(reg);
+            if (existing != null) macroRecordBuffer.addAll(existing);
+        }
+        macroRecording = true;
+        macroRecordingRegister = reg;
+        statusMessage = "recording @" + reg;
+    }
+
+    private void stopMacroRecording() {
+        macroRegisters.put(macroRecordingRegister, List.copyOf(macroRecordBuffer));
+        macroRecording = false;
+        statusMessage = "";
+    }
+
+    private void playMacro(char register) {
+        List<RecordedKey> keys = macroRegisters.get(register);
+        if (keys == null || keys.isEmpty()) {
+            statusMessage = "レジスタ " + register + " は空です";
+            return;
+        }
+        lastPlayedMacroRegister = register;
+        executeMacroKeys(keys);
+    }
+
+    private void replayLastMacro() {
+        if (lastPlayedMacroRegister == '\0') {
+            statusMessage = "直前に実行したマクロがありません";
+            return;
+        }
+        playMacro(lastPlayedMacroRegister);
+    }
+
+    /** 記録済みキー列を processKey() へ再投入して再生する。無限再帰は深さ上限で打ち切る。 */
+    private void executeMacroKeys(List<RecordedKey> keys) {
+        if (macroReplayDepth >= MACRO_MAX_REPLAY_DEPTH) {
+            statusMessage = "マクロの再帰が深すぎます（中断しました）";
+            return;
+        }
+        macroReplayDepth++;
+        try {
+            for (RecordedKey k : keys) {
+                processKey(k.keyCode(), k.keyChar(), k.modifiers());
+            }
+        } finally {
+            macroReplayDepth--;
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // カーソル移動
     // -------------------------------------------------------------------------
 
@@ -3585,6 +3690,16 @@ public class ModalEditor {
     public int getCurrentMatchIdx()       { return currentMatchIdx; }
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType == YankType.LINE ? "line" : "char"; }
+    // vim-macro-recording: テスト・プラグイン向けアクセサ
+    public boolean isRecordingMacro()  { return macroRecording; }
+    public boolean hasMacro(char register) {
+        List<RecordedKey> keys = macroRegisters.get(Character.toLowerCase(register));
+        return keys != null && !keys.isEmpty();
+    }
+    public int getMacroLength(char register) {
+        List<RecordedKey> keys = macroRegisters.get(Character.toLowerCase(register));
+        return keys == null ? 0 : keys.size();
+    }
 
     // プラグイン向けバッファ操作
     public int getLineCount() {

@@ -40,6 +40,8 @@
 | `u` `Ctrl+R` | アンドゥ/リドゥ |
 | `yy` `dd` `x` | 行ヤンク/行削除/1文字削除 |
 | `p` `P` | 貼り付け（後/前） |
+| `q{a-z}` ... `q` | マクロ記録開始/終了（大文字レジスタは既存内容へ追記。[編集支援機能](06-editing-features.md)） |
+| `@{a-z}` `@@` | マクロ再生/直前に実行したマクロを再現（[編集支援機能](06-editing-features.md)） |
 | `Alt+J` `Alt+K` | 行入れ替え（下/上） |
 | `Space+g+g` `Space+g+s` `Space+g+d` | Getter/Setter生成（[Java開発支援](04-java-tooling.md)） |
 | `Space+i+o` / `Ctrl+Shift+O` | import整理（[Java開発支援](04-java-tooling.md)） |
