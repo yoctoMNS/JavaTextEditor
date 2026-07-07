@@ -81,6 +81,7 @@ public class ModalEditor {
     private String yankRegister = "";
     private enum YankType { CHAR, LINE, BLOCK }
     private YankType yankType = YankType.CHAR;
+    private enum CaseOp { UPPER, LOWER, TOGGLE }
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
     // Visual '>'/'<' 用の count 前置き入力（例: "3>" は shiftwidth*3）。数字キー以外が来たら破棄する。
     private String visualCountBuffer = "";
@@ -425,6 +426,18 @@ public class ModalEditor {
             if (prev == 'g' && keyChar == 'R') { goToReferences(true); return; }
             // gv: 直前の Visual 選択（種別・範囲）を再選択する
             if (prev == 'g' && keyChar == 'v') { restoreLastVisual(); return; }
+            // gu/gU/g~: 大文字小文字変換。yy/dd と同じ doubled-letter 方式で行全体に適用する
+            // （operator-pending モーションは②modal-editing-engineでスコープ外のため、3打鍵目は
+            // 常に同じ文字の繰り返しのみを受け付ける）。
+            // 3打鍵目の完了判定（seq.equals("gu") 等）を先に置くこと: prev は seq.charAt(0) であり
+            // seq="g"/"gu" のどちらでも 'g' になるため、下の2打鍵目の遷移判定を先に置くと
+            // 3打鍵目の 'u'/'U'/'~' を「2打鍵目」として誤って再度 pending 状態に戻してしまう。
+            if (seq.equals("gu") && keyChar == 'u') { applyCaseToLines(cursorRow, cursorRow, CaseOp.LOWER); return; }
+            if (seq.equals("gU") && keyChar == 'U') { applyCaseToLines(cursorRow, cursorRow, CaseOp.UPPER); return; }
+            if (seq.equals("g~") && keyChar == '~') { applyCaseToLines(cursorRow, cursorRow, CaseOp.TOGGLE); return; }
+            if (seq.equals("g") && keyChar == 'u') { pendingSequence = "gu"; statusMessage = "gu-"; return; }
+            if (seq.equals("g") && keyChar == 'U') { pendingSequence = "gU"; statusMessage = "gU-"; return; }
+            if (seq.equals("g") && keyChar == '~') { pendingSequence = "g~"; statusMessage = "g~-"; return; }
             if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
                 if (splitHorizontalCallback != null) splitHorizontalCallback.run();
                 return;
@@ -534,6 +547,7 @@ public class ModalEditor {
                 buffer.redo();
                 clampCursorAfterUndoRedo();
             }
+            case "case.toggle.char" -> toggleCaseUnderCursor();
             case "enter.visual" -> {
                 anchorRow = cursorRow;
                 anchorCol = cursorCol;
@@ -2434,6 +2448,11 @@ public class ModalEditor {
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
+            case "case.lower", "case.upper", "case.toggle" -> {
+                applyCaseToSelection(caseOpFor(action));
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+            }
             case "enter.command.visual" -> enterCommandFromVisual();
         }
     }
@@ -2495,6 +2514,15 @@ public class ModalEditor {
                 moveLineStartNonBlank();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
+            }
+            case "case.lower", "case.upper", "case.toggle" -> {
+                int r1 = Math.min(anchorRow, cursorRow);
+                int r2 = Math.max(anchorRow, cursorRow);
+                applyCaseToLines(r1, r2, caseOpFor(action));
+                cursorRow = r1;
+                cursorCol = 0;
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
             }
             case "enter.command.visual" -> enterCommandFromVisual();
         }
@@ -2575,6 +2603,12 @@ public class ModalEditor {
                 saveLastVisualFromCurrentMode();
                 cursorRow = r1;
                 cursorCol = c1;
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
+            case "case.lower", "case.upper", "case.toggle" -> {
+                applyCaseToBlock(caseOpFor(action));
+                saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
@@ -2819,6 +2853,113 @@ public class ModalEditor {
     /** テスト・将来の設定UIから shiftwidth/tabstop/expandtab/shiftround を変更するための入口。 */
     public IndentSettings getIndentSettings() {
         return indentSettings;
+    }
+
+    // -------------------------------------------------------------------------
+    // 大文字小文字変換（~ / gu / gU / g~ / Visual u / U / ~）
+    // -------------------------------------------------------------------------
+
+    /** KeymapRegistry のアクション名から CaseOp を決定する（VISUAL系3モードで共用）。 */
+    private CaseOp caseOpFor(String action) {
+        return switch (action) {
+            case "case.lower" -> CaseOp.LOWER;
+            case "case.upper" -> CaseOp.UPPER;
+            default -> CaseOp.TOGGLE; // "case.toggle"
+        };
+    }
+
+    private String convertCase(String s, CaseOp op) {
+        return switch (op) {
+            case UPPER -> s.toUpperCase(Locale.ROOT);
+            case LOWER -> s.toLowerCase(Locale.ROOT);
+            case TOGGLE -> {
+                StringBuilder sb = new StringBuilder(s.length());
+                for (int i = 0; i < s.length(); i++) {
+                    char c = s.charAt(i);
+                    if (Character.isUpperCase(c)) sb.append(Character.toLowerCase(c));
+                    else if (Character.isLowerCase(c)) sb.append(Character.toUpperCase(c));
+                    else sb.append(c);
+                }
+                yield sb.toString();
+            }
+        };
+    }
+
+    /** NORMAL `~`: カーソル位置の1文字を toggle case し、カーソルを1つ右へ進める（Vim既定の 'notildeop' 相当）。 */
+    private void toggleCaseUnderCursor() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return;
+        String line = lines[cursorRow];
+        if (cursorCol >= line.length()) return;
+        char c = line.charAt(cursorCol);
+        String converted = convertCase(String.valueOf(c), CaseOp.TOGGLE);
+        if (!converted.equals(String.valueOf(c))) {
+            int offset = offsetAt(cursorRow, cursorCol);
+            buffer.delete(offset, 1);
+            buffer.insert(offset, converted);
+        }
+        cursorCol = Math.min(cursorCol + 1, Math.max(0, line.length() - 1));
+    }
+
+    /**
+     * r1〜r2 行（両端含む）の行全体を大文字小文字変換する。VISUAL_LINE の u/U/~ と、
+     * NORMAL の guu/gUU/g~~（doubled-letter で現在行のみに適用）の共通実装。
+     * indentLines() と同じ「行ごとに getLines() を取り直してから delete+insert する」パターン。
+     */
+    private void applyCaseToLines(int r1, int r2, CaseOp op) {
+        for (int row = r1; row <= r2; row++) {
+            String[] lines = getLines();
+            if (row >= lines.length) continue;
+            String line = lines[row];
+            String converted = convertCase(line, op);
+            if (!converted.equals(line)) {
+                int lineStart = offsetAt(row, 0);
+                buffer.delete(lineStart, line.length());
+                buffer.insert(lineStart, converted);
+            }
+        }
+    }
+
+    /** VISUAL（文字単位）の u/U/~: 選択範囲を変換し、カーソルを選択開始位置へ戻す（getSelectedText と同じ範囲規約）。 */
+    private void applyCaseToSelection(CaseOp op) {
+        int o1 = offsetAt(anchorRow, anchorCol);
+        int o2 = offsetOfCursor();
+        int start = Math.min(o1, o2);
+        int end = Math.max(o1, o2);
+        if (end < buffer.length()) {
+            end = Math.min(end + 1, buffer.length());
+        }
+        String text = buffer.getText().substring(start, end);
+        String converted = convertCase(text, op);
+        if (!converted.equals(text)) {
+            buffer.delete(start, end - start);
+            buffer.insert(start, converted);
+        }
+        moveCursorToOffset(start);
+    }
+
+    /** VISUAL BLOCK の u/U/~: 矩形の列範囲(c1〜c2、両端含む)だけを行ごとに変換する（replaceBlockChar と同型）。 */
+    private void applyCaseToBlock(CaseOp op) {
+        int r1 = Math.min(anchorRow, cursorRow);
+        int r2 = Math.max(anchorRow, cursorRow);
+        int c1 = Math.min(anchorCol, cursorCol);
+        int c2 = Math.max(anchorCol, cursorCol);
+        for (int row = r1; row <= r2; row++) {
+            String[] lines = getLines();
+            if (row >= lines.length) continue;
+            String line = lines[row];
+            int start = Math.min(c1, line.length());
+            int end = Math.min(c2 + 1, line.length());
+            if (start >= end) continue;
+            String seg = line.substring(start, end);
+            String converted = convertCase(seg, op);
+            if (!converted.equals(seg)) {
+                buffer.delete(offsetAt(row, start), end - start);
+                buffer.insert(offsetAt(row, start), converted);
+            }
+        }
+        cursorRow = r1;
+        cursorCol = c1;
     }
 
     // -------------------------------------------------------------------------

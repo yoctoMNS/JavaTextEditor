@@ -106,6 +106,7 @@ project-root/
 | ㉔ | `windows-batch-and-subprocess` | `scripts/*.bat`編集・Javaからのサブプロセス出力読み取りの恒久ルール（ASCII専用・ブロック内丸括弧禁止・`native.encoding`） | ✅ Skill追加（⑫実装時のバグ3連鎖から抽出した開発プロセス知識。機能実装は伴わない） |
 | ㉕ | `modal-visual-block-selection` | Vim矩形選択（`Ctrl+V`・VISUAL BLOCK）のモード追加・ヤンク/削除/ペースト/矩形挿入(`I`/`A`)/矩形変更(`c`)/矩形置換(`r`)・描画 | ✅ 完了（12テスト・`YankType.BLOCK`追加・ペースト時の新規行自動生成・矩形挿入は既存INSERTモードを再利用し状態フラグで複製する方式） |
 | ㉖ | `vim-substitution` | Vim式置換コマンド`:s`（現在行・`%s`全行・`'<,'>s`Visual選択範囲・`N,Ms`行番号範囲・正規表現・`g`/`i`フラグ・`\1`/`&`置換） | ✅ 完了（18/18テスト・VISUAL/VISUAL_LINE/VISUAL_BLOCKの`:`キーで`'<,'>`自動入力・区切り文字は`/`以外も可・undoグルーピングなし＝`indentLines()`と同じ既存トレードオフを踏襲） |
+| ㉗ | `vim-case-conversion` | Vim式大文字小文字変換（NORMALの`~`・`guu`/`gUU`/`g~~`、VISUAL/VISUAL_LINE/VISUAL_BLOCKの`u`/`U`/`~`） | ✅ 完了（23/23テスト・operator-pendingモーション（`guiw`等）は②の既存スコープ外判断を踏襲し未対応・doubled-letter方式のみ実装） |
 
 ### 依存関係（Skillを作る順序の制約）
 
