@@ -1573,6 +1573,7 @@ public class ModalEditor {
             currentFilePath = target.toString();
             fileNameResults = null;
             grepResults = null;
+            clearSearchHighlights();
             cursorRow = Math.max(0, item.lineNumber());
             cursorCol = 0;
             statusMessage = "\"" + target.getFileName() + "\" opened";
@@ -1609,6 +1610,7 @@ public class ModalEditor {
             currentFilePath = p.toString();
             fileNameResults = null;
             grepResults = null;
+            clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
             statusMessage = "\"" + p.getFileName() + "\" switched";
@@ -1669,6 +1671,7 @@ public class ModalEditor {
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
         grepResults = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "file-search" + bangLabel + ": " + results.size() + " match(es) — Enter to open";
@@ -1693,6 +1696,7 @@ public class ModalEditor {
             buffer = new UndoablePieceTable(content);
             currentFilePath = target.toString();
             fileNameResults = null;
+            clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
             statusMessage = "\"" + relPath + "\" opened";
@@ -2304,6 +2308,7 @@ public class ModalEditor {
         fileNameResults = null;
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "grep" + bangLabel + ": " + results.size() + " match(es) — Enter to jump";
@@ -2375,6 +2380,7 @@ public class ModalEditor {
             currentFilePath = target.toString();
             inJdkSourceBuffer = false;
             grepResults = null;
+            clearSearchHighlights();
             // 目的の行へジャンプ（1-indexed → 0-indexed）
             cursorRow = Math.max(0, r.lineNumber() - 1);
             cursorCol = 0;
@@ -4225,6 +4231,7 @@ public class ModalEditor {
         currentFilePath = title;
         grepResults = null;
         fileNameResults = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         inJdkSourceBuffer = true;
@@ -4242,6 +4249,7 @@ public class ModalEditor {
         inJdkSourceBuffer = false;
         jdkSourceIsNative = false;
         savedBufferText = null;
+        clearSearchHighlights();
         setStatusMessage("Returned from JDK source");
     }
 

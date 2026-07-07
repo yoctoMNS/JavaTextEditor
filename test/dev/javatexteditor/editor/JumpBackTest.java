@@ -1,5 +1,7 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.analysis.JdkClassIndex;
+import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -19,10 +21,13 @@ public class JumpBackTest {
         testJumpBackAcrossFiles();
         testJumpBackWithNoPriorJump();
         testJumpBackKeyBinding();
+        testShiftKIntoJdkSourceClearsSearchHighlight();
+        testCloseJdkSourceBufferClearsSearchHighlight();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
         if (fail > 0) System.exit(1);
+        System.exit(0);   // EditorCanvas の Swing Timer が AWT スレッドを生かし続けるため明示終了する
     }
 
     static void assertTrue(String name, boolean condition) {
@@ -135,5 +140,71 @@ public class JumpBackTest {
         KeymapRegistry reg = new KeymapRegistry();
         String action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_J, 'J', KeyEvent.SHIFT_DOWN_MASK);
         assertEquals("Shift+J -> jump.back", "jump.back", action);
+    }
+
+    /**
+     * Shift+K で JDK ソース疑似バッファ（*jdk-source:...*）へジャンプすると、
+     * 元バッファの検索ハイライトが画面上に残ってはいけない（バッファ切替時のハイライト残留バグの回帰テスト）。
+     * src.zip が見つからない実行環境ではジャンプ自体が成立しない（graceful degradation）ため、
+     * その場合はテストをスキップする（{@code OpenjdkSourceTracingTest} と同じ方針）。
+     */
+    static void testShiftKIntoJdkSourceClearsSearchHighlight() {
+        EditorCanvas canvas = new EditorCanvas();
+        String content = "String needle = null; // needle needle\n";
+        ModalEditor ed = new ModalEditor(content, canvas);
+        ed.setJdkClassIndex(JdkClassIndex.buildSync());
+
+        // "/" 検索でハイライトを作ってから Shift+K でジャンプする
+        ed.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
+        for (char c : "needle".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        assertTrue("ジャンプ前: ハイライトが存在する", !canvas.getSearchHighlights().isEmpty());
+
+        ed.setCursor(0, 0); // "String" の上へ
+        pressShiftK(ed);
+
+        String path = ed.getCurrentFilePath();
+        if (path == null || !path.startsWith("*jdk-source:")) {
+            System.out.println("  SKIP testShiftKIntoJdkSourceClearsSearchHighlight (src.zip未検出のためジャンプ不成立)");
+            pass++;
+            return;
+        }
+        assertTrue("ジャンプ後: searchMatchesが空", ed.getSearchMatches().isEmpty());
+        assertTrue("ジャンプ後: キャンバスのハイライトが空", canvas.getSearchHighlights().isEmpty());
+    }
+
+    /**
+     * JDK ソース疑似バッファ内で検索した後 q で元バッファへ戻ると、
+     * 疑似バッファ側の検索ハイライトが元バッファの画面に残ってはいけない。
+     */
+    static void testCloseJdkSourceBufferClearsSearchHighlight() {
+        EditorCanvas canvas = new EditorCanvas();
+        String content = "String needle = null;\n";
+        ModalEditor ed = new ModalEditor(content, canvas);
+        ed.setJdkClassIndex(JdkClassIndex.buildSync());
+
+        ed.setCursor(0, 0);
+        pressShiftK(ed);
+        String path = ed.getCurrentFilePath();
+        if (path == null || !path.startsWith("*jdk-source:")) {
+            System.out.println("  SKIP testCloseJdkSourceBufferClearsSearchHighlight (src.zip未検出のためジャンプ不成立)");
+            pass++;
+            return;
+        }
+
+        // 疑似バッファ内で検索してハイライトを作る（"class" は Java ソースにほぼ必ず含まれる）
+        ed.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
+        for (char c : "class".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        if (canvas.getSearchHighlights().isEmpty()) {
+            System.out.println("  SKIP testCloseJdkSourceBufferClearsSearchHighlight (\"class\"が疑似バッファ内で見つからない)");
+            pass++;
+            return;
+        }
+
+        // q で元バッファへ戻る
+        ed.processKey(KeyEvent.VK_UNDEFINED, 'q', 0);
+        assertTrue("q復帰後: searchMatchesが空", ed.getSearchMatches().isEmpty());
+        assertTrue("q復帰後: キャンバスのハイライトが空", canvas.getSearchHighlights().isEmpty());
     }
 }

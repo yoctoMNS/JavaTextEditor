@@ -357,5 +357,6 @@ public class TextSearchTest {
 
         System.out.println("\n=== TextSearchTest: " + pass + " passed, " + fail + " failed ===");
         if (fail > 0) System.exit(1);
+        System.exit(0);   // EditorCanvas の Swing Timer が AWT スレッドを生かし続けるため明示終了する
     }
 }

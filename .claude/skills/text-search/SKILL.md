@@ -108,6 +108,27 @@ for (int[] h : searchHighlights) {
 - **原因**: バッファ切替の全経路（`newBuffer()`/`loadFromFile()`/`restoreBuffer()` 等）は共通ヘルパー `resetSearchAndResultState()` を呼んでいたが、このヘルパーは `searchMatches`/`currentMatchIdx`（ModalEditor 側の内部状態）だけをクリアし、`EditorCanvas.searchHighlights`（実際の描画用リスト）を消していなかった。上記「ハイライトクリア」節の通り、この2つの状態は別物であるため、内部状態だけクリアしても画面には反映されない。
 - **修正**: `resetSearchAndResultState()` を `clearSearchHighlights()` を呼ぶように変更し、`searchMatches`/`currentMatchIdx`/`canvas.setSearchHighlights(List.of())` の3つを常に同時にクリアするよう一本化した。以後、ハイライトを消す処理を新規に書く場合は必ず `clearSearchHighlights()` を経由すること（`searchMatches = List.of()` を直接書く新しいコードを増やさない）。
 
+### 同じバグが他のバッファ切替経路にも存在していた（Shift+K / grep 等）
+
+- **経緯**: 上記の `resetSearchAndResultState()` 一本化は Ctrl+U/P・`:enew`・`:e` 等の主要なバッファ切替経路をカバーするが、ユーザーから「Shift+K や Grep などのバッファ切替にも対応できているか」と確認があり調査したところ、**`resetSearchAndResultState()` を経由しない別系統のバッファ切替コードが複数存在し、そちらは未対応のままだった**ことが判明した。これらは切替先バッファの `grepResults`/`fileNameResults` を自前でインラインに null クリアしており、共通ヘルパーを呼んでいなかったため見落とされていた。
+- **対象と修正**: 以下8箇所すべてに、buffer 差し替え箇所で `clearSearchHighlights()` の呼び出しを追加した（`grepResults`/`fileNameResults` は各メソッドが独自に管理しているため、それらまで巻き込んでクリアする `resetSearchAndResultState()` ではなく、ハイライトだけをクリアする `clearSearchHighlights()` を個別に呼ぶ）。
+  - `openTelescopeSelection()`（SPC+f/SPC+b/SPC+/ でのファイルオープン）
+  - `switchToRelativeBuffer()`（`buffer.prev`/`buffer.next` キーマップアクション。既定キーからは到達不能だが「既知の未接続・二重定義」1. の通りプラグインからは到達しうる）
+  - `executeFileNameSearch()`（`\f` ファイル名検索の疑似バッファ表示）
+  - `jumpToFileNameResult()`（ファイル名検索結果からファイルを開く）
+  - `executeGrep()`（`gr`/`gR`/`:grep`/`:grep!`/`\g`/`\g!` の疑似バッファ表示。**これがユーザーの言う「Grep」**）
+  - `jumpToGrepResult()`（grep結果からファイルを開く）
+  - `openJdkSourceBuffer()`（Shift+K で JDK ソース疑似バッファを開く。**これがユーザーの言う「Shift+K」**。`tryJdkMember()`/`lookupJdkDocAndJump()`/`openCSymbolBuffer()` はすべてこのメソッド経由なので個別修正は不要）
+  - `closeJdkSourceBuffer()`（`q` で JDK ソース疑似バッファから元バッファへ戻る）
+- **`jumpToSymbolLocation()`（Shift+K がプロジェクト内の実ファイルへジャンプする場合）は対応不要だった**: 同一ファイル内ジャンプはバッファを差し替えないため対象外。別ファイルへのジャンプは内部で `loadFromFile()` を呼んでおり、これは既に `resetSearchAndResultState()` 経由でカバー済みだったため。
+- **テストでの検証と環境依存の制約**: `test/dev/javatexteditor/search/ProjectSearchTest.java` に `testGrepClearsSearchHighlight`/`testGrepJumpClearsSearchHighlight` を追加し、`EditorCanvas.getSearchHighlights()`（テスト専用ゲッター）でハイライトが実際に消えることを確認した。Shift+K（`openJdkSourceBuffer`/`closeJdkSourceBuffer`）側は `test/dev/javatexteditor/editor/JumpBackTest.java` に `testShiftKIntoJdkSourceClearsSearchHighlight`/`testCloseJdkSourceBufferClearsSearchHighlight` を追加したが、これらは `⑫ openjdk-source-tracing` スキルに記載の通り src.zip が見つからない実行環境ではジャンプ自体が成立しないため、ジャンプ不成立時は SKIP して pass 扱いにする（`OpenjdkSourceTracingTest` と同じ graceful degradation の方針）。
+
+### テストで `EditorCanvas` を使う場合は `System.exit(0)` を忘れない（JVMハングの罠）
+
+- **症状**: `EditorCanvas` のインスタンスを生成するテストで、かつ同一JVM内で `JdkClassIndex.buildSync()`（jrt:/ 走査によるJDKクラス索引構築）も実行するテストクラスは、全テストが `PASS` と出力されて `main()` が最後まで実行されたにもかかわらず、JVM プロセス自体が終了せずハングすることがある（`ps` で見ると当該 `java` プロセスの CPU 時間はほぼ増えず、I/O待ちでもなく単に生き続ける）。`EditorCanvas()` 単体、`JdkClassIndex.buildSync()` 単体はそれぞれ単独では正常終了するため、切り分けが難しい。
+- **原因**: `EditorCanvasTest.java` に既存のコメント「EditorCanvas の Swing Timer が AWT スレッドを生かし続けるため明示終了する」の通り、`EditorCanvas` のコンストラクタは `animTimer.start()`（`javax.swing.Timer`）を無条件に呼ぶ。この Swing Timer 用の内部スレッドが非デーモンスレッドとして残ることがあり、`main()` 終了後も JVM の自然終了を妨げる。単独では発現しないタイミング依存の問題だが、同一プロセス内で他の重い処理（JDK クラス索引構築など）と組み合わさると発現しやすくなる（未解明・環境依存）。
+- **対策（既存の確立済みパターンに追従）**: `EditorCanvas` を生成するテストクラスの `main()` の末尾には、成功時も失敗時も必ず `System.exit(...)` を呼ぶこと。`EditorCanvasTest.java` に倣い、失敗時は `System.exit(1)`、成功時は `System.exit(0)` を明示的に呼ぶ（return で自然終了させない）。本バグ修正作業で `TextSearchTest.java`/`ProjectSearchTest.java`/`JumpBackTest.java` の3ファイルに `EditorCanvas` を使うテストを追加した際にこの問題を踏み、同じ対策を適用した。今後 `EditorCanvas` を新規テストで使う場合も同様に対応すること。
+
 ---
 
 ## 注意点
