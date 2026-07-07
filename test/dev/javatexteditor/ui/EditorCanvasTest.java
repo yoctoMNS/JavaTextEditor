@@ -52,13 +52,17 @@ public class EditorCanvasTest {
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
-            canvas.setText("A");
+            canvas.setText(" ");
             canvas.setTheme(Theme.LIGHT_MODE);
             canvas.setCursor(0, 0);
             canvas.setInsertMode(true);
 
             BufferedImage img = render(canvas, 400, 300);
             // x=0,1 は縦棒（前景色）、x=5 はバー外（背景色）
+            // 文字は空白にしておく。'A' 等のグリフを使うとフォントの字形次第で
+            // (5,5) 相当の座標がグリフのストローク内に入り得るため
+            // （IBM Plex Mono 移行時に発生）、カーソルバー幅の検証がグリフ形状に
+            // 依存しないようにする。
             int barPixel   = img.getRGB(0, 5);
             int afterPixel = img.getRGB(5, 5);
             boolean barOk   = colorMatch(barPixel,   0x33, 0x33, 0x33);
