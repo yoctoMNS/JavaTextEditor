@@ -450,6 +450,20 @@ public class ModalEditor {
             return;
         }
 
+        // Esc: NORMALモードでは既定では何も割り当てられていないが、
+        // 連続2回押すと検索ハイライトを強制的にクリアする。
+        // 他の保留中シーケンス（dd/yy等）が残っていた場合はここで破棄する（Vim同様、Escは保留操作をキャンセルする）。
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            if (pendingSequence.equals("ESC")) {
+                pendingSequence = "";
+                clearSearchHighlights();
+                statusMessage = "";
+            } else {
+                pendingSequence = "ESC";
+            }
+            return;
+        }
+
         // 2打鍵シーケンス（yy / dd）の処理
         if (!pendingSequence.isEmpty()) {
             String seq = pendingSequence;
@@ -1252,8 +1266,10 @@ public class ModalEditor {
     private void resetSearchAndResultState() {
         grepResults = null;
         fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        // searchMatches/currentMatchIdx のクリアだけでなく、EditorCanvas側に描画済みの
+        // ハイライト矩形（旧バッファの行・列基準）も消さないと、バッファ切替後も前バッファの
+        // ハイライトが画面に残り続けるバグになる（clearSearchHighlights()に一本化して防止）。
+        clearSearchHighlights();
     }
 
     /**
@@ -1635,6 +1651,7 @@ public class ModalEditor {
             currentFilePath = target.toString();
             fileNameResults = null;
             grepResults = null;
+            clearSearchHighlights();
             cursorRow = Math.max(0, item.lineNumber());
             cursorCol = 0;
             statusMessage = "\"" + target.getFileName() + "\" opened";
@@ -1671,6 +1688,7 @@ public class ModalEditor {
             currentFilePath = p.toString();
             fileNameResults = null;
             grepResults = null;
+            clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
             statusMessage = "\"" + p.getFileName() + "\" switched";
@@ -1732,6 +1750,7 @@ public class ModalEditor {
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
         grepResults = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "file-search" + bangLabel + ": " + results.size() + " match(es) — Enter to open";
@@ -1756,6 +1775,7 @@ public class ModalEditor {
             buffer = new UndoablePieceTable(content);
             currentFilePath = target.toString();
             fileNameResults = null;
+            clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
             statusMessage = "\"" + relPath + "\" opened";
@@ -2367,6 +2387,7 @@ public class ModalEditor {
         fileNameResults = null;
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "grep" + bangLabel + ": " + results.size() + " match(es) — Enter to jump";
@@ -2438,6 +2459,7 @@ public class ModalEditor {
             currentFilePath = target.toString();
             inJdkSourceBuffer = false;
             grepResults = null;
+            clearSearchHighlights();
             // 目的の行へジャンプ（1-indexed → 0-indexed）
             cursorRow = Math.max(0, r.lineNumber() - 1);
             cursorCol = 0;
@@ -4397,6 +4419,7 @@ public class ModalEditor {
         currentFilePath = title;
         grepResults = null;
         fileNameResults = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         inJdkSourceBuffer = true;
@@ -4414,6 +4437,7 @@ public class ModalEditor {
         inJdkSourceBuffer = false;
         jdkSourceIsNative = false;
         savedBufferText = null;
+        clearSearchHighlights();
         setStatusMessage("Returned from JDK source");
     }
 
