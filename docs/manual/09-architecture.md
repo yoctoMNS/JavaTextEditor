@@ -54,7 +54,7 @@ project-root/
 │   └── ui/
 │       ├── Theme.java               # カラーテーマ（LIGHT_MODE / DARK_MODE）
 │       ├── EditorCanvas.java        # Swing描画コンポーネント
-│       └── BitmapFont*.java         # 埋め込みビットマップフォント各種
+│       └── TtfMonoFont.java         # 半角ASCII描画（IBM Plex Mono Regular TTF、非等方向スケール）
 ├── test/dev/javatexteditor/         # 自作 main ハーネス形式のテスト（*Test.java）
 ├── docs/
 │   ├── manual/                      # 本マニュアル
@@ -63,7 +63,8 @@ project-root/
 │   └── REFACTORING_PLAN.md
 ├── lib/                             # .gitignore 対象（setup.sh/bat で自動生成）
 │   ├── src.zip                      # OpenJDK 21 Java ソース
-│   └── openjdk-native/              # HotSpot/JNI ネイティブソース
+│   ├── openjdk-native/              # HotSpot/JNI ネイティブソース
+│   └── fonts/                       # IBM Plex Mono Regular (TTF, SIL OFL 1.1)
 └── scripts/
     ├── setup.sh / setup.bat
     ├── build.sh / build.bat

@@ -8,9 +8,9 @@ import dev.javatexteditor.analysis.ImportSuggester;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.SourceAnalyzer;
 import dev.javatexteditor.editor.ModalEditor;
-import dev.javatexteditor.ui.BitmapFont10x20;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.Theme;
+import dev.javatexteditor.ui.TtfMonoFont;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.GraphicsConfiguration;
@@ -166,8 +166,8 @@ public class Main {
     // 起動時にマウスカーソルのあるディスプレイの解像度から算出する初期フォントセルサイズ
     // （4K等の高解像度ディスプレイでデフォルトフォントが小さすぎるのを防ぐ）。
     // 以後はユーザーが Ctrl+Shift+矢印で自由に変更できる。
-    private static int initialCellW = BitmapFont10x20.BASE_CELL_W;
-    private static int initialCellH = BitmapFont10x20.BASE_CELL_H;
+    private static int initialCellW = TtfMonoFont.BASE_CELL_W;
+    private static int initialCellH = TtfMonoFont.BASE_CELL_H;
 
     /** design baseline: フルHD(1920px幅)でBASE_CELL_W/Hがちょうど良い大きさになる想定 */
     private static final double BASELINE_SCREEN_WIDTH_PX = 1920.0;
@@ -189,8 +189,8 @@ public class Main {
     }
 
     private static int[] computeInitialCellSize(double scale) {
-        int w = (int) Math.round(BitmapFont10x20.BASE_CELL_W * scale);
-        int h = (int) Math.round(BitmapFont10x20.BASE_CELL_H * scale);
+        int w = (int) Math.round(TtfMonoFont.BASE_CELL_W * scale);
+        int h = (int) Math.round(TtfMonoFont.BASE_CELL_H * scale);
         return new int[] { w, h };
     }
 

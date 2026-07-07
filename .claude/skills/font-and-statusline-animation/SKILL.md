@@ -343,6 +343,28 @@ static int testFrameCalculation() {
 - **テストへの影響**: `EditorCanvasTest` の「INSERTモードカーソルバーが2px幅で描画されているか」テストが、文字 `'A'` を描画したセルの座標 `(5,5)`（本来はカーソルバー外＝背景色であることを期待する検証点）が、IBM Plex Mono の `'A'` の字形ではストロークの通り道に重なってしまい失敗するようになった。これは misc-fixed の `'A'` の字形がその座標を偶然通っていなかったことに依存した検証であり、本来「カーソルバー幅」の検証は描画される文字の字形と無関係であるべきなので、テストの表示文字を `"A"` から `" "`（空白）に変更して字形非依存の検証に修正した（フォント側の実装は変更していない）。
 - **既知の環境依存の挙動（今回のフォント変更とは無関係）**: `FixedFontCatalogTest` はテスト内容自体は正しく実行され結果も出力される（17/17 PASS）が、テストの最後に生成した `EditorCanvas` の `javax.swing.Timer`（`animTimer`）を明示的に停止しないまま `main()` を抜けるため、AWTのイベントキュースレッド（`AWT-EventQueue-0`、非デーモンスレッド）がタイマーの repaint イベントを処理し続け、プロセスがなかなか終了しないことがある（この環境で確認）。フォントデータやテストロジックには依存しない、Swingを使う自作テストハーネス特有の既知の挙動のため、今回は対応していない（`scripts/test.sh` でこのクラスの完走を待つ場合は `timeout` 等の外側のタイムアウトが必要になる場合がある）。
 
+## 実装済みの変更: misc-fixed 生成ビットマップフォント方式から実TTF（IBM Plex Mono Regular）レンダリング方式への全面移行（2026-07・第2弾）
+
+- **背景**: 直前の節（「misc-fixed から IBM Plex Mono Regular への半角フォント差し替え」）では、IBM Plex Mono を misc-fixed と同じ「事前生成した固定サイズのビットマップ配列」形式に変換して埋め込んでいた。ユーザーから改めて「MiscFixedのようなフォント形式ではなく、TTFフォントとしてそのまま使ってほしい」という明示的な指示があり、`FixedBitmapFont`/`FixedFontCatalog`/`BitmapFont5x7`〜`BitmapFont10x20`（12種類）・`FixedFontRenderer`を全廃止し、`TtfMonoFont`（新設）による実TTFのベクターレンダリングに一本化した。
+- **仕様確認済みの4点**（ユーザーへの質問で確定）:
+  1. TTF実体は `lib/fonts/IBMPlexMono-Regular.ttf` に実ファイルとして置き、実行時に相対パス的な探索で読む。
+  2. 旧ビットマップ基盤（12種類切替の仕組み）は完全に削除し、TTFレンダリングに一本化する。
+  3. `Ctrl+Shift+矢印` でセル幅・高さを個別に伸縮し縦横比がフォント本来の比率からずれた場合、セルに合わせて縦横別々に伸縮する（misc-fixed 版の独立軸ニアレストネイバー拡縮と同じ「セルを歪めてでも埋める」挙動を維持）。
+  4. 描画はアンチエイリアス（滑らかな輪郭）を有効にする。
+- **`lib/` が `.gitignore` 対象という制約への対応**: `lib/openjdk-native`・`lib/src.zip` と同じく `lib/` はまるごと `.gitignore` されており、コミットできない。ユーザーに確認した結果、「`scripts/setup.sh`/`setup.bat` 経由でダウンロードする外部リソースにする」方針を採用し、`lib/` の既存の意味（`setup.sh` が取得する外部リソース置き場）をそのまま維持した。`.gitignore` の変更・新しい追跡対象ディレクトリの追加は行っていない。
+  - `scripts/setup.sh`: 冒頭の「JDKソース一式が揃っていれば即終了」ガードを `JDK_SOURCES_READY` フラグ方式に変更し、JDKソース取得済みでもフォント取得セクション（新設の第4節）が必ず実行されるようにした（早期 `exit 0` のままだと2回目以降の実行でフォントだけが未取得のケースをカバーできないため）。フォント取得は `curl -fsSL` で `https://raw.githubusercontent.com/IBM/plex/master/packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf` から `lib/fonts/IBMPlexMono-Regular.ttf` へ、ライセンス文（`LICENSE.txt`、SIL OFL 1.1）を `lib/fonts/IBMPlexMono-OFL.txt` へダウンロードする。ダウンロード失敗（ネットワーク不可・`curl` 未インストール等）は warning を出すだけで exit 1 にはしない設計とした（フォントが無くてもフォールバックフォントで起動は継続できるため、致命的エラー扱いにしない）。IBM/plex リポジトリは `IBM-Plex-Mono/...` という旧パスでは 404 になり、実際には `packages/plex-mono/...` に再編されている点を実機の `curl` 疎通確認で特定した。
+  - `scripts/setup.bat`: `windows-batch-and-subprocess` スキルのルールに従い、追加したブロックは ASCII のみ・`if`/`for` ブロック内に丸括弧を含む `echo` を置かない設計にした。JDKソース既存時の早期 `goto :eof` を `goto :setup_fonts` に変更し、`:cleanup` の後に `:setup_fonts` ラベルでフォント取得処理（`curl` の有無チェック→ダウンロード→`move`）を追加、最終サマリの前に `:setup_done` ラベルを置いて合流させた。
+- **`TtfMonoFont`（新設・`src/dev/javatexteditor/ui/TtfMonoFont.java`）の設計**:
+  - シングルトン（`INSTANCE`）。固定サイズ切替が不要になったため `FixedBitmapFont` のようなインタフェース抽象化はせず、`isSupported(int)`/`descentPixels(int)`/`renderGlyph(int,int,int,int)` の3メソッドのみを持つ具象クラスとした。
+  - フォント読み込みは `⑫openjdk-source-tracing` で確立済みの `CodeSourceLocator.findUpward(anchorClass, "lib/xxx", maxLevels, predicate)` パターンをそのまま再利用し、実行形態（クラスパス直接実行・jar実行）やカレントディレクトリに依存せず `lib/fonts/IBMPlexMono-Regular.ttf` を発見できるようにした（`OpenjdkSourceTracer.findNativeSrcDir()`/`findBundledSrcZip()` と同型）。見つからない場合は `Font.MONOSPACED` にフォールバックする（フォントファイル欠如时でも起動自体はできる graceful degradation）。
+  - **非等方向スケールによるセルサイズ追従**: 参照フォントサイズ（100pt、絶対値に意味は無い）でのメトリクス（`ascent`・`descent`・`charWidth('M')`）を起動時に一度だけ計測し、`sx = cellW / 参照アドバンス幅`・`sy = cellH / (参照ascent+参照descent)` を毎回のセルサイズから算出。`Graphics2D.translate(0, 参照ascent*sy)` してから `scale(sx, sy)` を適用し、参照サイズで `drawString` した結果を非等方向にアフィン変換することで、セル幅・高さの比率が崩れてもラスタ再サンプリングではなくベクターアウトライン自体の変形で正確にセル全体を埋める（misc-fixed版の「独立軸ニアレストネイバーでビットマップを引き伸ばす」挙動を、より高品質なベクター変形で再現したもの）。
+  - `descentPixels(cellH)` は `Math.round(cellH * 参照descent / (参照ascent+参照descent))` で、旧 `BASE_DESCENT` ベースの比例計算と同じ考え方をフォント自体のメトリクスから動的に算出する形に置き換えた。
+  - 空白文字（`' '`）は `drawString` を呼ばず即座に透明画像を返す（旧実装と同じ最適化）。
+- **`EditorCanvas` 側の変更**: `cellW`/`cellH` の初期値・クランプ範囲（5〜40 / 8〜80）や `adjustCellWidth`/`adjustCellHeight`/`setInitialCellSize`・グリフキャッシュ（`glyphCacheFg`/`Bg`/`uiGlyphCache`）の仕組みは一切変更していない。`FixedFontCatalog.select()` によるフォント再選択（`updateBitmapFont()`）が不要になったため削除し、フィールド名を `bitmapFont`（型 `FixedBitmapFont`）から `ttfFont`（型 `TtfMonoFont`、`final`）に変更、呼び出し箇所は `isSupportedI`/`renderGlyphI`/`descentPixelsI` → `isSupported`/`renderGlyph`/`descentPixels`（インタフェース経由の `I` サフィックスが不要になったため）に統一した。`Main.java` の `BitmapFont10x20.BASE_CELL_W`/`BASE_CELL_H` 参照も `TtfMonoFont.BASE_CELL_W`/`BASE_CELL_H`（10, 20 の既定値を維持）に置き換えた。
+- **削除したファイル**: `BitmapFont5x7`〜`BitmapFont10x20`（12ファイル）・`FixedBitmapFont`・`FixedFontCatalog`・`FixedFontRenderer`・`FixedFontCatalogTest`。`EditorCanvasTest` の `BitmapFont10x20.isSupported`/`renderGlyph` 呼び出しは `TtfMonoFont.INSTANCE.isSupported`/`renderGlyph`（インスタンスメソッド化に伴う書き換えのみ、テストの意図・アサーション内容は変更していない）。
+- **ライセンス**: IBM Plex Mono は SIL Open Font License 1.1（`Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"`）。OFL はソフトウェアへのフォント埋め込み・再配布を明示的に許可している。今回はビットマップへの変換ではなく TTF 実体そのものを配布物に含める（ただしリポジトリには直接コミットせず `scripts/setup.sh` 経由でダウンロードする）形になったため、ライセンス文（`LICENSE.txt`）もフォントと同じ場所（`lib/fonts/IBMPlexMono-OFL.txt`）に一緒にダウンロードするようにした。
+- **品質**: misc-fixedバージョンで課題だった極小サイズ（5x7相当）でのつぶれも、ベクターアウトライン＋アンチエイリアスのおかげで大幅に改善した（ASCIIダンプで目視確認済み）。非等方向に大きく歪めた場合（例: 20x10）も文字の判読性を保ったまま正しくセル全体を埋めることを確認済み。
+
 ## このスキルを使うタイミング
 
 - ステータスラインにアニメーションを追加したい場合 → `drawWalkingCharacter()` の実装を参照
