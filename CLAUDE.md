@@ -33,7 +33,10 @@ Vimのモーダル編集とEmacsの拡張性の良い所を統合した、Java S
 project-root/
 ├── CLAUDE.md
 ├── docs/
-│   └── requirements.md
+│   ├── manual/                           ← 利用者向け全機能マニュアル（README.mdからリンク）
+│   ├── requirements.md
+│   ├── implementation-history.md
+│   └── REFACTORING_PLAN.md
 ├── .claude/
 │   └── skills/                          ← 設計知識はここに集約する（下記ロードマップ参照）
 │       ├── editor-buffer-architecture/
