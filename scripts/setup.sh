@@ -12,17 +12,20 @@ SRC_ZIP="$LIB_DIR/src.zip"
 NATIVE_DIR="$LIB_DIR/openjdk-native"
 HOTSPOT_DIR="$NATIVE_DIR/hotspot"
 
+JDK_SOURCES_READY=0
 if [ -f "$SRC_ZIP" ] && [ -d "$NATIVE_DIR" ] \
     && [ "$(find "$NATIVE_DIR" -name '*.c' | head -1)" != "" ] \
     && [ -d "$HOTSPOT_DIR" ] && [ "$(find "$HOTSPOT_DIR" -name '*.cpp' | head -1)" != "" ]; then
     echo "src.zip, openjdk-native, and hotspot sources already exist. Nothing to do."
-    exit 0
+    JDK_SOURCES_READY=1
 fi
 
-if ! command -v git >/dev/null 2>&1; then
+if [ "$JDK_SOURCES_READY" -eq 0 ] && ! command -v git >/dev/null 2>&1; then
     echo "ERROR: git not found. This script requires git to fetch OpenJDK 21 sources."
     exit 1
 fi
+
+if [ "$JDK_SOURCES_READY" -eq 0 ]; then
 
 WORK_DIR="$LIB_DIR/_openjdk_clone_tmp"
 rm -rf "$WORK_DIR"
@@ -109,8 +112,46 @@ fi
 
 rm -rf "$WORK_DIR"
 
+fi # JDK_SOURCES_READY
+
+# ---- 4. IBM Plex Mono Regular (TTF) の取得 ----
+# 半角ASCIIの描画に使うフォント本体。SIL OFL 1.1 で配布されており、ソース同梱
+# ではなく実行時にダウンロードして lib/fonts/ に置く（lib/ は .gitignore 対象の
+# ため、src.zip/openjdk-native と同じ「外部リソースは setup.sh で取得」という
+# 既存の方針に合わせている）。
+FONTS_DIR="$LIB_DIR/fonts"
+FONT_TTF="$FONTS_DIR/IBMPlexMono-Regular.ttf"
+FONT_LICENSE="$FONTS_DIR/IBMPlexMono-OFL.txt"
+FONT_TTF_URL="https://raw.githubusercontent.com/IBM/plex/master/packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf"
+FONT_LICENSE_URL="https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt"
+
+if [ -f "$FONT_TTF" ]; then
+    echo "IBM Plex Mono Regular already exists: $FONT_TTF"
+else
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "WARNING: curl not found; skipping IBM Plex Mono Regular download."
+        echo "         The editor will fall back to a substitute monospace font."
+    else
+        echo "=== Downloading IBM Plex Mono Regular (SIL OFL 1.1) ==="
+        mkdir -p "$FONTS_DIR"
+        if curl -fsSL -o "$FONT_TTF.tmp" "$FONT_TTF_URL"; then
+            mv "$FONT_TTF.tmp" "$FONT_TTF"
+            echo "Saved: $FONT_TTF"
+        else
+            echo "WARNING: failed to download IBM Plex Mono Regular from $FONT_TTF_URL"
+            echo "         The editor will fall back to a substitute monospace font."
+            rm -f "$FONT_TTF.tmp"
+        fi
+        if [ -f "$FONT_TTF" ] && [ ! -f "$FONT_LICENSE" ]; then
+            curl -fsSL -o "$FONT_LICENSE" "$FONT_LICENSE_URL" \
+                || echo "WARNING: failed to download the OFL license text (non-fatal)."
+        fi
+    fi
+fi
+
 echo ""
 echo "=== Setup complete ==="
 [ -f "$SRC_ZIP" ]    && echo "  src.zip    : $SRC_ZIP"
 [ -d "$NATIVE_DIR" ] && echo "  native src : $NATIVE_DIR"
 [ -d "$HOTSPOT_DIR" ] && echo "  hotspot src: $HOTSPOT_DIR"
+[ -f "$FONT_TTF" ]   && echo "  font       : $FONT_TTF"

@@ -22,6 +22,11 @@ set LIB_DIR=%SCRIPT_DIR%..\lib
 set SRC_ZIP=%LIB_DIR%\src.zip
 set NATIVE_DIR=%LIB_DIR%\openjdk-native
 set HOTSPOT_DIR=%NATIVE_DIR%\hotspot
+set FONTS_DIR=%LIB_DIR%\fonts
+set FONT_TTF=%FONTS_DIR%\IBMPlexMono-Regular.ttf
+set FONT_LICENSE=%FONTS_DIR%\IBMPlexMono-OFL.txt
+set FONT_TTF_URL=https://raw.githubusercontent.com/IBM/plex/master/packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf
+set FONT_LICENSE_URL=https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt
 
 if not exist "%LIB_DIR%\" mkdir "%LIB_DIR%\"
 
@@ -33,7 +38,7 @@ if exist "%HOTSPOT_DIR%\" (
 
 if exist "%SRC_ZIP%" if exist "%NATIVE_DIR%\" if !HOTSPOT_READY! equ 1 (
     echo src.zip, openjdk-native, and hotspot sources already exist. Nothing to do.
-    goto :eof
+    goto :setup_fonts
 )
 
 where git >nul 2>&1
@@ -153,8 +158,44 @@ if exist "%WORK_DIR%\src\hotspot\share\" (
 :cleanup
 rmdir /s /q "%WORK_DIR%"
 
+rem ---- 4. Fetch IBM Plex Mono Regular (TTF) ----
+rem Font used to render half-width ASCII. Distributed under SIL OFL 1.1.
+rem Downloaded at setup time into lib\fonts\ instead of being committed,
+rem since lib\ is gitignored the same way as src.zip/openjdk-native above.
+
+:setup_fonts
+if exist "%FONT_TTF%" (
+    echo IBM Plex Mono Regular already exists: %FONT_TTF%
+    goto :setup_done
+)
+
+where curl >nul 2>&1
+if %errorlevel% neq 0 (
+    echo WARNING: curl not found; skipping IBM Plex Mono Regular download.
+    echo          The editor will fall back to a substitute monospace font.
+    goto :setup_done
+)
+
+echo === Downloading IBM Plex Mono Regular SIL OFL 1.1 ===
+if not exist "%FONTS_DIR%\" mkdir "%FONTS_DIR%\"
+curl -fsSL -o "%FONT_TTF%.tmp" "%FONT_TTF_URL%"
+if %errorlevel% neq 0 (
+    echo WARNING: failed to download IBM Plex Mono Regular from %FONT_TTF_URL%
+    echo          The editor will fall back to a substitute monospace font.
+    if exist "%FONT_TTF%.tmp" del "%FONT_TTF%.tmp"
+    goto :setup_done
+)
+move /y "%FONT_TTF%.tmp" "%FONT_TTF%" >nul
+echo Saved: %FONT_TTF%
+
+if not exist "%FONT_LICENSE%" (
+    curl -fsSL -o "%FONT_LICENSE%" "%FONT_LICENSE_URL%"
+)
+
+:setup_done
 echo.
 echo === Setup complete ===
 if exist "%SRC_ZIP%"    echo   src.zip    : %SRC_ZIP%
 if exist "%NATIVE_DIR%" echo   native src : %NATIVE_DIR%
 if exist "%HOTSPOT_DIR%" echo   hotspot src: %HOTSPOT_DIR%
+if exist "%FONT_TTF%"   echo   font       : %FONT_TTF%

@@ -66,14 +66,13 @@ public class EditorCanvas extends JPanel {
     // 行番号 → 最も優先度の高い診断種別（ERROR > WARNING）
     private Map<Integer, DiagnosticKind> diagByLine = Map.of();
 
-    // ビットマップフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
-    private int cellW = BitmapFont10x20.BASE_CELL_W;
-    private int cellH = BitmapFont10x20.BASE_CELL_H;
+    // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
+    private int cellW = TtfMonoFont.BASE_CELL_W;
+    private int cellH = TtfMonoFont.BASE_CELL_H;
 
-    // cellW/cellH の横縦比率に最も近いフォントを FixedFontCatalog が自動選択する。
-    // cellW/cellH を変更する箇所（adjustCellWidth/Height, setInitialCellSize）では
-    // 必ず updateBitmapFont() も呼び、選択結果をこのフィールドに反映すること。
-    private FixedBitmapFont bitmapFont = BitmapFont10x20.INSTANCE;
+    // 半角ASCIIは IBM Plex Mono Regular (TTF) を cellW×cellH に合わせて
+    // 非等方向にスケールしてラスタライズする（TtfMonoFont参照）。
+    private final TtfMonoFont ttfFont = TtfMonoFont.INSTANCE;
 
     // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
     // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
@@ -269,7 +268,6 @@ public class EditorCanvas extends JPanel {
     /** 文字セル幅を delta px 変更する（範囲: 5〜40）。両ペインから呼ばれる。 */
     public void adjustCellWidth(int delta) {
         cellW = Math.max(5, Math.min(40, cellW + delta));
-        updateBitmapFont();
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         repaint();
@@ -278,7 +276,6 @@ public class EditorCanvas extends JPanel {
     /** 文字セル高さを delta px 変更する（範囲: 8〜80）。両ペインから呼ばれる。 */
     public void adjustCellHeight(int delta) {
         cellH = Math.max(8, Math.min(80, cellH + delta));
-        updateBitmapFont();
         invalidateGlyphCache();
         cachedLineHeight = cellH;
         repaint();
@@ -294,15 +291,9 @@ public class EditorCanvas extends JPanel {
     public void setInitialCellSize(int w, int h) {
         cellW = Math.max(5, Math.min(40, w));
         cellH = Math.max(8, Math.min(80, h));
-        updateBitmapFont();
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         cachedLineHeight = cellH;
-    }
-
-    /** cellW/cellH の横縦比率に最も近いビットマップフォントを選び直す（FixedFontCatalog参照）。 */
-    private void updateBitmapFont() {
-        bitmapFont = FixedFontCatalog.select(cellW, cellH);
     }
 
     private void invalidateGlyphCache() {
@@ -314,21 +305,21 @@ public class EditorCanvas extends JPanel {
     private BufferedImage getUiGlyph(int codePoint, int cw, int ch, Color color) {
         UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
         return uiGlyphCache.computeIfAbsent(key,
-            k -> bitmapFont.renderGlyphI(codePoint, cw, ch, color.getRGB()));
+            k -> ttfFont.renderGlyph(codePoint, cw, ch, color.getRGB()));
     }
 
     /**
-     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を MiscFixed
+     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を IBM Plex Mono
      * ビットマップフォントで描画する（本文の drawLineWithFullWidthSupport と同じ配色規則:
      * ASCIIはビットマップフォント、それ以外（日本語等）は Swing フォールバックフォント）。
      * y はセル下端（ベースライン）のY座標。
      */
     private void drawUiText(Graphics2D g2, String s, int x, int y, int cw, int ch, Color color) {
-        int swingBaselineY = y - bitmapFont.descentPixelsI(ch);
+        int swingBaselineY = y - ttfFont.descentPixels(ch);
         for (int i = 0; i < s.length(); ) {
             int cp = s.codePointAt(i);
             int widthMult = charCellWidth(cp);
-            if (bitmapFont.isSupportedI(cp)) {
+            if (ttfFont.isSupported(cp)) {
                 g2.drawImage(getUiGlyph(cp, cw, ch, color), x, y - ch, null);
             } else {
                 Color prev = g2.getColor();
@@ -363,12 +354,12 @@ public class EditorCanvas extends JPanel {
 
     private BufferedImage getGlyphFg(int cp) {
         return glyphCacheFg.computeIfAbsent(cp,
-            k -> bitmapFont.renderGlyphI(k, cellW, cellH, theme.foreground.getRGB()));
+            k -> ttfFont.renderGlyph(k, cellW, cellH, theme.foreground.getRGB()));
     }
 
     private BufferedImage getGlyphBg(int cp) {
         return glyphCacheBg.computeIfAbsent(cp,
-            k -> bitmapFont.renderGlyphI(k, cellW, cellH, theme.background.getRGB()));
+            k -> ttfFont.renderGlyph(k, cellW, cellH, theme.background.getRGB()));
     }
 
     private Font getSwingFont() {
@@ -583,7 +574,7 @@ public class EditorCanvas extends JPanel {
         g2.setColor(theme.accent);
         g2.drawRect(ox, oy, overlayW, overlayH);
 
-        // 本文と同じ MiscFixed ビットマップフォントのセルサイズをそのまま使う
+        // 本文と同じ IBM Plex Mono のセルサイズをそのまま使う
         int cw = cellW;
         int fh = lineHeight;
         int pad = 4;
@@ -705,7 +696,7 @@ public class EditorCanvas extends JPanel {
 
     /**
      * 全角文字を考慮しながら1行を描画する。
-     * ASCII(0x20-0x7E): BitmapFont10x20 でピクセルレンダリング。
+     * ASCII(0x20-0x7E): TtfMonoFont (IBM Plex Mono Regular) でレンダリング。
      * それ以外: Swing フォント（g2 に設定済み）で描画。
      * y はベースライン（セル底辺）の Y 座標。
      */
@@ -713,13 +704,13 @@ public class EditorCanvas extends JPanel {
             int charWidth, int scrollOffsetX, int gutterWidth) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
-        int swingBaselineY = y - bitmapFont.descentPixelsI(cellH);
+        int swingBaselineY = y - ttfFont.descentPixels(cellH);
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
             int widthMult = charCellWidth(codePoint);
             int charPixelWidth = charWidth * widthMult;
             if (x + charPixelWidth > 0 && x < getWidth()) {
-                if (bitmapFont.isSupportedI(codePoint)) {
+                if (ttfFont.isSupported(codePoint)) {
                     g2.drawImage(getGlyphFg(codePoint), x, y - cellTopOffset, null);
                 } else {
                     g2.setColor(theme.foreground);
@@ -752,11 +743,11 @@ public class EditorCanvas extends JPanel {
             g2.setColor(theme.foreground);
             g2.fillRect(x, yTop, blockWidth, lineHeight);
             if (codePoint != -1) {
-                if (bitmapFont.isSupportedI(codePoint)) {
+                if (ttfFont.isSupported(codePoint)) {
                     g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
                 } else {
                     g2.setColor(theme.background);
-                    int swingBaselineY = (screenRow + 1) * lineHeight - bitmapFont.descentPixelsI(lineHeight);
+                    int swingBaselineY = (screenRow + 1) * lineHeight - ttfFont.descentPixels(lineHeight);
                     g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
                 }
             }
