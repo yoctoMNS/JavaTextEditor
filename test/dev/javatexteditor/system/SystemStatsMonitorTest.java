@@ -3,12 +3,13 @@ package dev.javatexteditor.system;
 import java.util.Optional;
 
 /**
- * SystemStatsMonitor（CPU使用率・GPU使用率・メモリ使用率）のテスト。
- * CI/コンテナ環境にはNVIDIA GPU（nvidia-smi）が存在しないことが多いため、
- * 具体的な使用率の値ではなく「値が取れる場合は妥当な範囲」「取れない場合は
+ * SystemStatsMonitor（CPU温度・GPU温度・メモリ使用率）のテスト。
+ * CI/コンテナ環境には温度センサーやnvidia-smiが存在しないことが多いため、
+ * 具体的な温度値ではなく「値が取れる場合は妥当な範囲」「取れない場合は
  * N/A として graceful degradation する」ことを検証する。
- * CPU使用率はJDK標準の com.sun.management.OperatingSystemMXBean 経由のため
- * Linux/Windows/macOSいずれでも通常は必ず値が返る。
+ * CPU/GPU温度の取得コマンドはOSごとに異なる（Linux=/sys/class/thermal、
+ * Windows=WMI経由のPowerShell、macOS=osx-cpu-temp）ため、このコンテナ
+ * （Linux）では readCpuTempLinux() 相当のパスのみ実機検証できる。
  */
 public class SystemStatsMonitorTest {
 
@@ -17,8 +18,8 @@ public class SystemStatsMonitorTest {
 
     public static void main(String[] args) throws Exception {
         testMemoryUsageIsWithinValidRangeOrAbsent();
-        testCpuUsageIsWithinValidRangeOrAbsent();
-        testGpuUsageIsWithinValidRangeOrAbsent();
+        testCpuTempIsWithinValidRangeOrAbsent();
+        testGpuTempIsWithinValidRangeOrAbsent();
         testStatusLabelFormat();
         testStatusLabelIsNonBlockingAfterConstruction();
 
@@ -44,19 +45,18 @@ public class SystemStatsMonitorTest {
         mem.ifPresent(p -> assertTrue("memory usage percent within 0-100", p >= 0 && p <= 100));
     }
 
-    static void testCpuUsageIsWithinValidRangeOrAbsent() {
-        Optional<Integer> cpu = SystemStatsMonitor.INSTANCE.readCpuUsagePercent();
-        // getCpuLoad()はJDK標準実装がLinux/Windows/macOS全てに持つため、通常は必ず値が返る。
-        // 起動直後で値が未確定な場合のみ empty になりうる。
-        assertTrue("cpu usage percent absent or within 0-100",
-            cpu.isEmpty() || (cpu.get() >= 0 && cpu.get() <= 100));
+    static void testCpuTempIsWithinValidRangeOrAbsent() {
+        Optional<Integer> cpu = SystemStatsMonitor.INSTANCE.readCpuTempCelsius();
+        // センサー/コマンドが無い環境ではempty、ある環境では現実的な温度範囲になっているはず。
+        assertTrue("cpu temp absent or plausible",
+            cpu.isEmpty() || (cpu.get() >= -40 && cpu.get() <= 150));
     }
 
-    static void testGpuUsageIsWithinValidRangeOrAbsent() {
-        Optional<Integer> gpu = SystemStatsMonitor.INSTANCE.readGpuUsagePercent();
-        // nvidia-smiが無い環境（このコンテナ含む）ではempty。あれば0-100%の範囲になっているはず。
-        assertTrue("gpu usage percent absent or within 0-100",
-            gpu.isEmpty() || (gpu.get() >= 0 && gpu.get() <= 100));
+    static void testGpuTempIsWithinValidRangeOrAbsent() {
+        Optional<Integer> gpu = SystemStatsMonitor.INSTANCE.readGpuTempCelsius();
+        // nvidia-smiが無い環境（このコンテナ含む）ではempty。あれば現実的な範囲になっているはず。
+        assertTrue("gpu temp absent or plausible",
+            gpu.isEmpty() || (gpu.get() >= -40 && gpu.get() <= 150));
     }
 
     static void testStatusLabelFormat() throws Exception {
