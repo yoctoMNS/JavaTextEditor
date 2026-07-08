@@ -237,10 +237,14 @@ project-root/
 
 ## `SystemStatsMonitor`（ステータス行のCPU/GPU表示）の設計決定事項
 
-- **CPU項目は「温度」ではなく「使用率(%)」に変更した**。旧実装（Linuxの`/sys/class/thermal/thermal_zone*/temp`を読む）は構造的にLinux専用で、Windows/macOSでは常に`N/A`になっていた（「Windows11だとCPU使用率とGPU使用率がN/Aになる」という報告への対応）。JDK標準の`com.sun.management.OperatingSystemMXBean#getCpuLoad()`はLinux/Windows/macOSいずれのJDK標準実装にも同梱されているシステム全体のCPU使用率取得APIのため、これに切り替えることでOS依存のfile/コマンドを使わずに全プラットフォーム対応にした。既存の`readMemoryUsagePercent()`が同じ`sunBean`から`getTotalMemorySize()`/`getFreeMemorySize()`を読んでいるのと同じ設計に揃えた形。
-- **GPU項目は既存どおり`nvidia-smi`ベースだが、クエリ対象を`temperature.gpu`から`utilization.gpu`（使用率%）に変更**した。`nvidia-smi`コマンド自体はNVIDIAドライバがLinux/Windows双方でインストール時にPATHへ追加するため、コマンド起動の可否という意味では元々クロスプラットフォームだった。非NVIDIA GPU環境（AMD/Intel統合GPU等）やドライバ未導入環境では`N/A`のまま（graceful degradation、既存の設計方針を維持）。JDK標準APIのみでベンダーを問わずGPU使用率を取得する手段は存在しないため、この制約は解消していない。
-- **サブプロセス出力の読み取りに`native.encoding`を明示するよう修正**した（`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠）。旧実装は文字セット省略の`new String(bytes)`（JEP 400以降のUTF-8決め打ち）で`nvidia-smi`の出力を読んでおり、Windows環境で出力がネイティブエンコーディング（CP932等）だった場合に文字化けしうる潜在バグだった。数字のみの出力なら実害は出にくいが、恒久ルールに合わせて修正した。
-- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）は元からクロスプラットフォームで動作していたため変更していない。ラベルのフォーマット（`"CPU " + cpu + " | GPU " + gpu + " | MEM " + mem`）や2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
+- **一度CPU項目を「温度」から「使用率(%)」に変更したが、ユーザーから「使用率ではなく温度を、Linux/Windows/Macいずれでも表示できるようにしてほしい」という明示的な差し戻し指示があり、「温度」表示に戻した**。表示形式は再び `CPU 45°C | GPU N/A | MEM 62%` である。使用率(%)への変更は撤回済みなので、以後この項目を再び使用率に変更する場合は改めてユーザーに確認すること。
+- **CPU温度はOS判定（`os.name`）で取得方法を切り替える3分岐方式にした**。JDK標準APIには温度を返すクロスプラットフォームなAPIが存在しないため、OSごとに別々の手段が必要という制約は解消していない。
+  - **Linux**: 従来どおり `/sys/class/thermal/thermal_zone*/temp`（`readCpuTempLinux()`）。
+  - **Windows**: `powershell -Command "(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty CurrentTemperature)"` をサブプロセスとして起動し、返り値（10分の1ケルビン単位）を摂氏に変換する（`readCpuTempWindows()`）。**既知の制約**: `MSAcpi_ThermalZoneTemperature` はACPIが温度ゾーンを公開している機種でのみインスタンスが存在し、多くのノートPC・一部のデスクトップでは該当インスタンスが無く空文字が返る（＝`N/A`のまま）。これはJDK標準APIにもWindows標準コマンドにも代替手段が無いための構造的な制約であり、サードパーティ製ツール（OpenHardwareMonitor等）の導入なしにはこれ以上の改善余地がない。
+  - **macOS**: JDK標準API・macOS標準コマンドのいずれにもCPU温度取得手段が無いため、Homebrewで導入可能な `osx-cpu-temp` コマンド（`readCpuTempMac()`）を試す方式にした。未導入環境では`N/A`のまま（graceful degradation）。`powermetrics`はsudo権限が必要でありユーザーに昇格を求めるのは望ましくないため採用しなかった。
+- **GPU温度は`nvidia-smi`ベースのまま維持**（クエリは`temperature.gpu`に戻した）。`nvidia-smi`コマンド自体はNVIDIAドライバがLinux/Windows双方でインストール時にPATHへ追加するため、OS判定なしで共通に試すだけでよい。macOSはNVIDIAドライバが提供されないためコマンド起動自体が失敗し自然に`N/A`になる（macOS専用の分岐は不要と判断し追加していない）。非NVIDIA GPU環境（AMD/Intel統合GPU等）も同様に`N/A`のまま。
+- **サブプロセス起動・待機・エンコーディング処理を`runCommand(String... command)`ヘルパーに共通化した**。CPU温度（Windows/Mac）・GPU温度（nvidia-smi）の3つのコマンド呼び出しがいずれも「起動→タイムアウト付きwaitFor→native.encodingでデコード→非0終了/空文字はnull」という同じ手順だったため。`native.encoding`での読み取りは`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠（Windows環境でのnvidia-smi/PowerShell出力の文字化け対策）。
+- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）はJDK標準APIで元からクロスプラットフォームに動作するため変更していない。ラベルのフォーマット（`"CPU " + cpu + " | GPU " + gpu + " | MEM " + mem`）や2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
 
 ## 作業時の方針
 
