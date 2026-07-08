@@ -11,7 +11,9 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -24,9 +26,11 @@ import java.util.regex.Pattern;
  * 正規表現でトークンを抜き出すだけなのでビルドが高速。ローカル変数・定数・
  * Java 以外のファイルの単語も拾える。
  *
- * TreeSet の subSet(prefix, prefix+MAX_VALUE) による O(log n + k) のプレフィックス
- * 検索を使う（k = 一致件数のみを走査すればよく、全件スキャンしない）。
- * ビルド完了後の TreeSet インスタンスは不変として扱い、参照の差し替え（volatile）だけで
+ * プレフィックス検索は大文字小文字を区別しない。TreeMap のキーを word.toLowerCase() に
+ * 正規化し、subMap(prefix, prefix+MAX_VALUE) による O(log n + k) の検索を使う
+ * （k = 一致件数のみを走査すればよく、全件スキャンしない）。値には元の大文字小文字表記を
+ * 複数保持できる（例: "Apple" と "apple" は別キー "apple" の下に両方残る）。
+ * ビルド完了後の TreeMap インスタンスは不変として扱い、参照の差し替え（volatile）だけで
  * スレッド間の可視性を保証するため、通常の読み取りにロックは不要。
  */
 public final class WordIndex {
@@ -47,7 +51,9 @@ public final class WordIndex {
         "html", "css", "scss", "vue"
     );
 
-    private volatile TreeSet<String> words = new TreeSet<>();
+    // key = word.toLowerCase()、value = 出現した元の大文字小文字表記（重複除去）。
+    // 大文字小文字を区別しないプレフィックス検索のため、TreeMap のキーを小文字に正規化する。
+    private volatile TreeMap<String, TreeSet<String>> words = new TreeMap<>();
     private volatile boolean ready = false;
 
     private WordIndex() {}
@@ -71,7 +77,7 @@ public final class WordIndex {
     }
 
     /**
-     * プレフィックスに前方一致（大文字小文字区別あり）する単語を最大 maxResults 件返す。
+     * プレフィックスに前方一致（大文字小文字区別なし）する単語を最大 maxResults 件返す。
      *
      * Vim の i_CTRL-N（'complete' 既定値 ".,w,b,u,t,i"）がカレントバッファを最優先ソースとして
      * 扱うのに倣い、extraWords（呼び出し側が並べた順序をそのまま尊重する。例:
@@ -88,18 +94,23 @@ public final class WordIndex {
 
         List<String> result = new java.util.ArrayList<>();
         Set<String> seen = new java.util.HashSet<>();
+        String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
 
         if (extraWords != null) {
             for (String w : extraWords) {
                 if (result.size() >= maxResults) break;
-                if (w.startsWith(prefix) && seen.add(w)) result.add(w);
+                if (w.toLowerCase(Locale.ROOT).startsWith(lowerPrefix) && seen.add(w)) result.add(w);
             }
         }
         if (ready && result.size() < maxResults) {
-            String hi = prefix + Character.MAX_VALUE;
-            for (String w : words.subSet(prefix, hi)) { // O(log n + k)：一致件数分だけ走査
+            String hi = lowerPrefix + Character.MAX_VALUE;
+            // O(log n + k)：小文字キーの一致件数分だけ走査
+            for (TreeSet<String> originals : words.subMap(lowerPrefix, hi).values()) {
+                for (String w : originals) {
+                    if (result.size() >= maxResults) break;
+                    if (seen.add(w)) result.add(w);
+                }
                 if (result.size() >= maxResults) break;
-                if (seen.add(w)) result.add(w);
             }
         }
         return result;
@@ -131,20 +142,21 @@ public final class WordIndex {
         List<String> result = new java.util.ArrayList<>();
         Set<String> seen = new java.util.HashSet<>();
         Matcher m = WORD.matcher(text);
+        String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
 
         // 1周目: カーソル位置以降〜本文末尾（カーソル位置そのものの語は除く）
         while (m.find()) {
             int start = m.start();
             if (start < cursorOffset || start == cursorOffset) continue;
             String word = m.group();
-            if (word.startsWith(prefix) && seen.add(word)) result.add(word);
+            if (word.toLowerCase(Locale.ROOT).startsWith(lowerPrefix) && seen.add(word)) result.add(word);
         }
         // 2周目: 本文先頭〜カーソル位置（末尾から折り返した続き）。マッチは常に位置の昇順で
         // 見つかるため、cursorOffset 以降に達した時点で走査を打ち切ってよい。
         m.reset();
         while (m.find() && m.start() < cursorOffset) {
             String word = m.group();
-            if (word.startsWith(prefix) && seen.add(word)) result.add(word);
+            if (word.toLowerCase(Locale.ROOT).startsWith(lowerPrefix) && seen.add(word)) result.add(word);
         }
         return result;
     }
@@ -154,7 +166,7 @@ public final class WordIndex {
     // -------------------------------------------------------------------------
 
     private void scanAndPublish(Path root) {
-        TreeSet<String> collected = new TreeSet<>();
+        TreeMap<String, TreeSet<String>> collected = new TreeMap<>();
         if (root != null) {
             try {
                 Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
@@ -192,12 +204,13 @@ public final class WordIndex {
         return TEXT_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT));
     }
 
-    private static void indexFile(Path file, TreeSet<String> collected) {
+    private static void indexFile(Path file, TreeMap<String, TreeSet<String>> collected) {
         try {
             String content = Files.readString(file);
             Matcher m = WORD.matcher(content);
             while (m.find()) {
-                collected.add(m.group());
+                String word = m.group();
+                collected.computeIfAbsent(word.toLowerCase(Locale.ROOT), k -> new TreeSet<>()).add(word);
             }
         } catch (MalformedInputException ignored) {
             // UTF-8 として読めない（バイナリ寄り）ファイルはスキップ
