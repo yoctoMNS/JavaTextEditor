@@ -22,8 +22,5 @@ public interface TelescopePicker {
      */
     List<TelescopeItem> filter(String query);
 
-    /** 選択した候補のプレビュー文字列を返す（ファイル内容の抜粋）。 */
-    String preview(TelescopeItem item);
-
     int MAX_RESULTS = 200;
 }

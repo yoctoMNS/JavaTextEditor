@@ -2,8 +2,6 @@ package dev.javatexteditor.telescope;
 
 import dev.javatexteditor.search.ProjectSearcher;
 import dev.javatexteditor.search.SearchResult;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,27 +46,5 @@ public class GrepPicker implements TelescopePicker {
             result.add(new TelescopeItem(display, r.filePath(), r.lineNumber() - 1, 0));
         }
         return result;
-    }
-
-    @Override
-    public String preview(TelescopeItem item) {
-        if (item.filePath() == null) return "";
-        try {
-            Path p = Path.of(item.filePath());
-            if (!Files.isRegularFile(p) || Files.size(p) > 1_000_000) return "(binary or too large)";
-            List<String> lines = Files.readAllLines(p);
-            int center = Math.max(0, item.lineNumber());
-            int start = Math.max(0, center - 5);
-            int end = Math.min(lines.size(), start + 40);
-            StringBuilder sb = new StringBuilder();
-            for (int i = start; i < end; i++) {
-                if (i == item.lineNumber()) sb.append("▸ ");
-                else sb.append("  ");
-                sb.append(i + 1).append(": ").append(lines.get(i)).append("\n");
-            }
-            return sb.toString();
-        } catch (IOException e) {
-            return "(preview unavailable)";
-        }
     }
 }
