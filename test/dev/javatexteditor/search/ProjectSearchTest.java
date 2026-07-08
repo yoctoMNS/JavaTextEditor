@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import dev.javatexteditor.editor.ModalEditor;
+import dev.javatexteditor.ui.EditorCanvas;
 
 /**
  * ProjectSearcher と ModalEditor の :grep コマンド統合テスト。
@@ -36,6 +37,8 @@ public class ProjectSearchTest {
         testEnterJumpsToFile();
         testEnterOnHeaderLineDoesNothing();
         testGrepResultsClearedOnFileOpen();
+        testGrepClearsSearchHighlight();
+        testGrepJumpClearsSearchHighlight();
 
         // --- 追加テスト ---
         testSearchResultToDisplayLine();
@@ -43,6 +46,7 @@ public class ProjectSearchTest {
 
         System.out.println("\n=== ProjectSearch: " + passed + "/" + (passed + failed) + " PASS ===");
         if (failed > 0) System.exit(1);
+        System.exit(0);   // EditorCanvas の Swing Timer が AWT スレッドを生かし続けるため明示終了する
     }
 
     // -------------------------------------------------------------------------
@@ -281,6 +285,64 @@ public class ProjectSearchTest {
         assertEquals("lineNumber", 7, r.lineNumber());
         assertEquals("lineContent", "bar", r.lineContent());
         passed("testSearchResultRecord");
+    }
+
+    /**
+     * バッファ内検索でハイライト表示中に :grep を実行すると、grep結果バッファの画面には
+     * 旧バッファのハイライトが残ってはいけない（バッファ切替時のハイライト残留バグの回帰テスト）。
+     */
+    static void testGrepClearsSearchHighlight() throws Exception {
+        Path dir = createTempDir();
+        writeFile(dir, "a.txt", "foo bar\nbaz\nfoo end\n");
+        String savedDir = System.getProperty("user.dir");
+        System.setProperty("user.dir", dir.toString());
+        try {
+            EditorCanvas canvas = new EditorCanvas();
+            ModalEditor editor = new ModalEditor("needle needle text", canvas);
+            editor.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
+            for (char c : "needle".toCharArray()) editor.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+            editor.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            assertFalse("grep前: ハイライトが存在する", canvas.getSearchHighlights().isEmpty());
+
+            sendCommand(editor, "grep foo");
+            assertTrue("grep結果バッファに切替済み", editor.getText().contains("*grep*"));
+            assertTrue("grep後: searchMatchesが空", editor.getSearchMatches().isEmpty());
+            assertTrue("grep後: キャンバスのハイライトが空", canvas.getSearchHighlights().isEmpty());
+            passed("testGrepClearsSearchHighlight");
+        } finally {
+            System.setProperty("user.dir", savedDir);
+        }
+    }
+
+    /**
+     * grep結果バッファ内で検索した後 Enter で結果ファイルへジャンプすると、
+     * grep結果バッファ側のハイライトがジャンプ先の画面に残ってはいけない。
+     */
+    static void testGrepJumpClearsSearchHighlight() throws Exception {
+        Path dir = createTempDir();
+        writeFile(dir, "jump.txt", "line one\nfind me here\nline three\n");
+        String savedDir = System.getProperty("user.dir");
+        System.setProperty("user.dir", dir.toString());
+        try {
+            EditorCanvas canvas = new EditorCanvas();
+            ModalEditor editor = new ModalEditor("", canvas);
+            sendCommand(editor, "grep find");
+
+            // grep結果バッファ内で検索してハイライトを作る（ヘッダ行の "match" は必ず含まれる）
+            editor.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
+            for (char c : "match".toCharArray()) editor.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+            editor.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            assertFalse("ジャンプ前: ハイライトが存在する", canvas.getSearchHighlights().isEmpty());
+
+            editor.setCursor(1, 0);
+            editor.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            assertTrue("ジャンプ先のファイル内容が読み込まれた", editor.getText().contains("find me here"));
+            assertTrue("ジャンプ後: searchMatchesが空", editor.getSearchMatches().isEmpty());
+            assertTrue("ジャンプ後: キャンバスのハイライトが空", canvas.getSearchHighlights().isEmpty());
+            passed("testGrepJumpClearsSearchHighlight");
+        } finally {
+            System.setProperty("user.dir", savedDir);
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -94,6 +94,9 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('P', "paste.before"), "paste.before");
         bind(Mode.NORMAL, KeyBinding.ofChar('y', "yank.pending"), "yank.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('d', "delete.pending"), "delete.pending");
+        // マクロ記録(q)・再生(@)
+        bind(Mode.NORMAL, KeyBinding.ofChar('q', "macro.record.pending"), "macro.record.pending");
+        bind(Mode.NORMAL, KeyBinding.ofChar('@', "macro.play.pending"),   "macro.play.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.SHIFT_DOWN_MASK, "jdk.doc"), "jdk.doc");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_J, KeyEvent.SHIFT_DOWN_MASK, "jump.back"), "jump.back");
         // %: 対応する括弧へジャンプ（(), [], {} のネストをスタック相当で解決）

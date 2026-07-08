@@ -10,6 +10,8 @@ import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
 import dev.javatexteditor.buffer.UndoablePieceTable;
+import dev.javatexteditor.projectbuild.BuildDiagnostic;
+import dev.javatexteditor.projectbuild.BuildResult;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
 import dev.javatexteditor.search.DirEntry;
@@ -20,6 +22,7 @@ import dev.javatexteditor.search.SearchResult;
 import dev.javatexteditor.telescope.BufferPicker;
 import dev.javatexteditor.telescope.FilePicker;
 import dev.javatexteditor.telescope.GrepPicker;
+import dev.javatexteditor.telescope.MainClassPicker;
 import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
@@ -30,6 +33,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,6 +43,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -83,6 +88,16 @@ public class ModalEditor {
     private YankType yankType = YankType.CHAR;
     private enum CaseOp { UPPER, LOWER, TOGGLE }
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
+    // vim-macro-recording: q{register}記録 / @{register}再生。
+    // yankRegister（ヤンクバッファ）とは独立したマクロ専用レジスタストレージ。
+    private record RecordedKey(int keyCode, char keyChar, int modifiers) {}
+    private boolean macroRecording = false;
+    private char macroRecordingRegister;
+    private final List<RecordedKey> macroRecordBuffer = new ArrayList<>();
+    private final Map<Character, List<RecordedKey>> macroRegisters = new HashMap<>();
+    private char lastPlayedMacroRegister = '\0'; // @@ 用
+    private int macroReplayDepth = 0; // 再生中の再帰の深さ（記録の二重展開防止・無限再帰ガード）
+    private static final int MACRO_MAX_REPLAY_DEPTH = 1000;
     // Visual '>'/'<' 用の count 前置き入力（例: "3>" は shiftwidth*3）。数字キー以外が来たら破棄する。
     private String visualCountBuffer = "";
     private final IndentSettings indentSettings = new IndentSettings();
@@ -163,6 +178,10 @@ public class ModalEditor {
     private final StringBuilder telescopeQuery = new StringBuilder();
     private List<TelescopeItem> telescopeResults = List.of();
     private int telescopeSelectedIdx = 0;
+    /** TELESCOPE モードの Enter が「ファイルを開く」か「F11 の main クラス選択」かを切り替える。 */
+    private enum TelescopePurpose { NAVIGATE, RUN_MAIN_CLASS }
+    private TelescopePurpose telescopePurpose = TelescopePurpose.NAVIGATE;
+    private Consumer<String> onRunMainClassSelected;
     // telescope 起動時にバッファ一覧を供給するコールバック（Main.java から設定）
     private java.util.function.Supplier<List<BufferPicker.BufferEntry>> bufferListSupplier = null;
     // ファイルを開いたとき（telescope/`:e`）にバッファレジストリへ登録するコールバック
@@ -264,6 +283,11 @@ public class ModalEditor {
         this.onBufferDelete = callback;
     }
 
+    /** F11: telescope の main クラス選択（Enter）を、ファイルを開く代わりに実行要求として受け取るコールバック。 */
+    public void setOnRunMainClassSelected(Consumer<String> callback) {
+        this.onRunMainClassSelected = callback;
+    }
+
     public void setExitCallback(Runnable callback) {
         this.exitCallback = callback;
     }
@@ -332,6 +356,13 @@ public class ModalEditor {
             pendingSequence = "";
             syncCanvas();
             return;
+        }
+        // vim-macro-recording: 記録中は生キーをそのまま記録する。
+        // 記録終了キー（NORMALモードでのq）自体と、マクロ再生中に内部生成されるキー
+        // （macroReplayDepth>0）は記録対象から除外する（詳細はSkillのreference参照）。
+        boolean isMacroStopKey = macroRecording && mode == Mode.NORMAL && keyChar == 'q';
+        if (macroRecording && macroReplayDepth == 0 && !isMacroStopKey) {
+            macroRecordBuffer.add(new RecordedKey(keyCode, keyChar, modifiers));
         }
         switch (mode) {
             case INSERT       -> processInsertKey(keyCode, keyChar, modifiers);
@@ -412,6 +443,28 @@ public class ModalEditor {
             return;
         }
 
+        // マクロ記録中の q: 多打鍵シーケンス（pendingSequence）の途中状態に関わらず
+        // 最優先で記録を終了する（vim-macro-recording skill の「qの優先順位」参照）。
+        if (macroRecording && keyChar == 'q') {
+            stopMacroRecording();
+            pendingSequence = "";
+            return;
+        }
+
+        // Esc: NORMALモードでは既定では何も割り当てられていないが、
+        // 連続2回押すと検索ハイライトを強制的にクリアする。
+        // 他の保留中シーケンス（dd/yy等）が残っていた場合はここで破棄する（Vim同様、Escは保留操作をキャンセルする）。
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            if (pendingSequence.equals("ESC")) {
+                pendingSequence = "";
+                clearSearchHighlights();
+                statusMessage = "";
+            } else {
+                pendingSequence = "ESC";
+            }
+            return;
+        }
+
         // 2打鍵シーケンス（yy / dd）の処理
         if (!pendingSequence.isEmpty()) {
             String seq = pendingSequence;
@@ -420,6 +473,26 @@ public class ModalEditor {
             char prev = seq.charAt(0);
             if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
             if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
+            // q{register}: マクロ記録開始（小文字=新規, 大文字=既存レジスタへ追記）
+            if (prev == 'q') {
+                if (Character.isLetter(keyChar)) {
+                    startMacroRecording(keyChar);
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return;
+            }
+            // @{register} / @@: マクロ再生
+            if (prev == '@') {
+                if (keyChar == '@') {
+                    replayLastMacro();
+                } else if (Character.isLetter(keyChar)) {
+                    playMacro(Character.toLowerCase(keyChar));
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return;
+            }
             if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
             if (prev == 'g' && keyChar == 'r') { goToReferences(false); return; }
             // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
@@ -567,6 +640,8 @@ public class ModalEditor {
             case "paste.before" -> pasteBefore();
             case "yank.pending" -> pendingSequence = "y";
             case "delete.pending" -> pendingSequence = "d";
+            case "macro.record.pending" -> { pendingSequence = "q"; statusMessage = "q-"; }
+            case "macro.play.pending"   -> { pendingSequence = "@"; statusMessage = "@-"; }
             case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
             case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
             case "split.pending"       -> { pendingSequence = "s";  statusMessage = "s-"; }
@@ -1205,8 +1280,10 @@ public class ModalEditor {
     private void resetSearchAndResultState() {
         grepResults = null;
         fileNameResults = null;
-        searchMatches = List.of();
-        currentMatchIdx = -1;
+        // searchMatches/currentMatchIdx のクリアだけでなく、EditorCanvas側に描画済みの
+        // ハイライト矩形（旧バッファの行・列基準）も消さないと、バッファ切替後も前バッファの
+        // ハイライトが画面に残り続けるバグになる（clearSearchHighlights()に一本化して防止）。
+        clearSearchHighlights();
     }
 
     /**
@@ -1496,11 +1573,23 @@ public class ModalEditor {
             }
             default -> { return; }
         }
+        telescopePurpose = TelescopePurpose.NAVIGATE;
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
         telescopeResults = telescopePicker.filter("");
         mode = Mode.TELESCOPE;
         statusMessage = "";
+    }
+
+    /** F11: mainメソッドを持つクラスが複数見つかった場合、telescope-picker の3ペインオーバーレイで選択させる。 */
+    public void enterMainClassPicker(List<String> fqcns) {
+        telescopePicker = new MainClassPicker(fqcns);
+        telescopePurpose = TelescopePurpose.RUN_MAIN_CLASS;
+        telescopeQuery.setLength(0);
+        telescopeSelectedIdx = 0;
+        telescopeResults = telescopePicker.filter("");
+        mode = Mode.TELESCOPE;
+        statusMessage = "実行するmainクラスを選択してください（Enterで実行、Escでキャンセル）";
     }
 
     private void processTelescopeKey(int keyCode, char keyChar, int modifiers) {
@@ -1562,7 +1651,12 @@ public class ModalEditor {
     private void openTelescopeSelection() {
         if (telescopePicker == null || telescopeResults.isEmpty()) { exitTelescope(); return; }
         TelescopeItem item = telescopeResults.get(telescopeSelectedIdx);
+        TelescopePurpose purpose = telescopePurpose;
         exitTelescope();
+        if (purpose == TelescopePurpose.RUN_MAIN_CLASS) {
+            if (onRunMainClassSelected != null) onRunMainClassSelected.accept(item.display());
+            return;
+        }
         if (item.filePath() == null) return;
         try {
             Path target = Path.of(item.filePath());
@@ -1571,6 +1665,7 @@ public class ModalEditor {
             currentFilePath = target.toString();
             fileNameResults = null;
             grepResults = null;
+            clearSearchHighlights();
             cursorRow = Math.max(0, item.lineNumber());
             cursorCol = 0;
             statusMessage = "\"" + target.getFileName() + "\" opened";
@@ -1607,6 +1702,7 @@ public class ModalEditor {
             currentFilePath = p.toString();
             fileNameResults = null;
             grepResults = null;
+            clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
             statusMessage = "\"" + p.getFileName() + "\" switched";
@@ -1621,6 +1717,7 @@ public class ModalEditor {
     private void exitTelescope() {
         mode = Mode.NORMAL;
         telescopePicker = null;
+        telescopePurpose = TelescopePurpose.NAVIGATE;
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
@@ -1667,6 +1764,7 @@ public class ModalEditor {
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
         grepResults = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "file-search" + bangLabel + ": " + results.size() + " match(es) — Enter to open";
@@ -1691,6 +1789,7 @@ public class ModalEditor {
             buffer = new UndoablePieceTable(content);
             currentFilePath = target.toString();
             fileNameResults = null;
+            clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
             statusMessage = "\"" + relPath + "\" opened";
@@ -2302,6 +2401,7 @@ public class ModalEditor {
         fileNameResults = null;
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "grep" + bangLabel + ": " + results.size() + " match(es) — Enter to jump";
@@ -2373,6 +2473,7 @@ public class ModalEditor {
             currentFilePath = target.toString();
             inJdkSourceBuffer = false;
             grepResults = null;
+            clearSearchHighlights();
             // 目的の行へジャンプ（1-indexed → 0-indexed）
             cursorRow = Math.max(0, r.lineNumber() - 1);
             cursorCol = 0;
@@ -3007,6 +3108,63 @@ public class ModalEditor {
             case LINE -> Mode.VISUAL_LINE;
             case BLOCK -> Mode.VISUAL_BLOCK;
         };
+    }
+
+    // -------------------------------------------------------------------------
+    // マクロ記録・再生（vim-macro-recording skill 参照）
+    // -------------------------------------------------------------------------
+
+    /** register: 小文字なら新規記録、大文字なら既存内容への追記。 */
+    private void startMacroRecording(char register) {
+        char reg = Character.toLowerCase(register);
+        macroRecordBuffer.clear();
+        if (Character.isUpperCase(register)) {
+            List<RecordedKey> existing = macroRegisters.get(reg);
+            if (existing != null) macroRecordBuffer.addAll(existing);
+        }
+        macroRecording = true;
+        macroRecordingRegister = reg;
+        statusMessage = "recording @" + reg;
+    }
+
+    private void stopMacroRecording() {
+        macroRegisters.put(macroRecordingRegister, List.copyOf(macroRecordBuffer));
+        macroRecording = false;
+        statusMessage = "";
+    }
+
+    private void playMacro(char register) {
+        List<RecordedKey> keys = macroRegisters.get(register);
+        if (keys == null || keys.isEmpty()) {
+            statusMessage = "レジスタ " + register + " は空です";
+            return;
+        }
+        lastPlayedMacroRegister = register;
+        executeMacroKeys(keys);
+    }
+
+    private void replayLastMacro() {
+        if (lastPlayedMacroRegister == '\0') {
+            statusMessage = "直前に実行したマクロがありません";
+            return;
+        }
+        playMacro(lastPlayedMacroRegister);
+    }
+
+    /** 記録済みキー列を processKey() へ再投入して再生する。無限再帰は深さ上限で打ち切る。 */
+    private void executeMacroKeys(List<RecordedKey> keys) {
+        if (macroReplayDepth >= MACRO_MAX_REPLAY_DEPTH) {
+            statusMessage = "マクロの再帰が深すぎます（中断しました）";
+            return;
+        }
+        macroReplayDepth++;
+        try {
+            for (RecordedKey k : keys) {
+                processKey(k.keyCode(), k.keyChar(), k.modifiers());
+            }
+        } finally {
+            macroReplayDepth--;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -3710,8 +3868,50 @@ public class ModalEditor {
     public void setChangeWorkingDirectoryCallback(java.util.function.Function<Path, String> cb) {
         this.changeWdCallback = cb;
     }
-    private Path getProjectRoot() {
+    public Path getProjectRoot() {
         return (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
+    }
+
+    /**
+     * F10: コンパイル結果を *compile* 疑似バッファに表示する。
+     * :grep/:rename と同じパターン（pushBuffer せず直接 buffer を差し替え、Ctrl+U 履歴には積まない）。
+     */
+    public void showCompileResult(BuildResult result) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("*compile* ").append(result.success() ? "SUCCESS" : "FAILED")
+          .append(" — ").append(result.fileCount()).append(" file(s)\n");
+        if (result.errorMessage() != null) {
+            sb.append(result.errorMessage()).append('\n');
+        }
+        for (BuildDiagnostic d : result.diagnostics()) {
+            sb.append(d.isError() ? "ERROR " : "WARNING ")
+              .append(d.filePath()).append(':').append(d.lineNumber() + 1)
+              .append(':').append(d.column() + 1).append(": ")
+              .append(d.message()).append('\n');
+        }
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = result.success()
+            ? "compile: success (" + result.fileCount() + " file(s))"
+            : "compile: FAILED";
+    }
+
+    /** F11: 実行結果を *run* 疑似バッファに表示する。showCompileResult と同じ疑似バッファパターン。 */
+    public void showRunOutput(String fqcn, String output, int exitCode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("*run* ").append(fqcn).append(" — exit code ").append(exitCode).append('\n');
+        sb.append(output);
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = "run: " + fqcn + " exited with code " + exitCode;
     }
     public boolean isFileSearchMode()     { return mode == Mode.FILESEARCH; }
     public boolean isFileNameSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.NAME; }
@@ -3726,6 +3926,16 @@ public class ModalEditor {
     public int getCurrentMatchIdx()       { return currentMatchIdx; }
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType == YankType.LINE ? "line" : "char"; }
+    // vim-macro-recording: テスト・プラグイン向けアクセサ
+    public boolean isRecordingMacro()  { return macroRecording; }
+    public boolean hasMacro(char register) {
+        List<RecordedKey> keys = macroRegisters.get(Character.toLowerCase(register));
+        return keys != null && !keys.isEmpty();
+    }
+    public int getMacroLength(char register) {
+        List<RecordedKey> keys = macroRegisters.get(Character.toLowerCase(register));
+        return keys == null ? 0 : keys.size();
+    }
 
     // プラグイン向けバッファ操作
     public int getLineCount() {
@@ -4350,6 +4560,7 @@ public class ModalEditor {
         currentFilePath = title;
         grepResults = null;
         fileNameResults = null;
+        clearSearchHighlights();
         cursorRow = 0;
         cursorCol = 0;
         inJdkSourceBuffer = true;
@@ -4367,6 +4578,7 @@ public class ModalEditor {
         inJdkSourceBuffer = false;
         jdkSourceIsNative = false;
         savedBufferText = null;
+        clearSearchHighlights();
         setStatusMessage("Returned from JDK source");
     }
 
