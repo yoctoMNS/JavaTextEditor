@@ -169,6 +169,10 @@ public class EditorCanvas extends JPanel {
     @Override
     public void addNotify() {
         super.addNotify();
+        // OS(特にLinux/X11)がウィンドウ露出等をきっかけに生成するシステム側の再描画要求を
+        // 無視させ、歩行アニメーションの描画は animTimer 駆動の repaint() だけに一本化する。
+        // ピア生成後(addNotify後)でないと効果が確定しないため、ここで呼ぶ。
+        setIgnoreRepaint(true);
         animTimer.start();
         if (!timerResolutionPinHeld) {
             acquireTimerResolutionPin();
