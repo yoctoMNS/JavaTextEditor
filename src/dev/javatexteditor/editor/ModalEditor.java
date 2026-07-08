@@ -399,9 +399,15 @@ public class ModalEditor {
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
 
-        // Ctrl+U: 前のバッファへ / Ctrl+P: 次のバッファへ
+        // Ctrl+U: :bprev相当 / Ctrl+P: :bnext相当。
+        // 現在のバッファがファイルを持つ場合は switchToRelativeBuffer()（BUFFER_REGISTRY を
+        // 循環する本来の :bnext/:bprev 方式）を使う。ファイルパスを持たないバッファ（:tutor・:enew
+        // 等の疑似バッファ）は BUFFER_REGISTRY の対象外のため、従来の bufferHistory スナップショット
+        // 方式にフォールバックする（詳細は modal-editing-engine スキル参照）。
         if (ctrlDown && keyCode == KeyEvent.VK_U) {
-            if (historyIdx > 0) {
+            if (currentFilePath != null) {
+                switchToRelativeBuffer(-1);
+            } else if (historyIdx > 0) {
                 restoreBuffer(historyIdx - 1);
             } else {
                 statusMessage = "これ以上前のバッファはありません";
@@ -409,7 +415,9 @@ public class ModalEditor {
             return;
         }
         if (ctrlDown && keyCode == KeyEvent.VK_P) {
-            if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
+            if (currentFilePath != null) {
+                switchToRelativeBuffer(+1);
+            } else if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
                 restoreBuffer(historyIdx + 1);
             } else {
                 statusMessage = "これ以上次のバッファはありません";
@@ -1738,7 +1746,10 @@ public class ModalEditor {
     private void switchToRelativeBuffer(int delta) {
         if (bufferListSupplier == null) return;
         List<BufferPicker.BufferEntry> entries = bufferListSupplier.get();
-        if (entries.isEmpty()) return;
+        if (entries.size() <= 1) {
+            statusMessage = "他に開いているファイルバッファがありません";
+            return;
+        }
         int currentIdx = -1;
         for (int i = 0; i < entries.size(); i++) {
             if (entries.get(i).filePath() != null &&

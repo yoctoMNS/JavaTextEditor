@@ -255,9 +255,22 @@ project-root/
 
 次の開発者が片側だけ修正する事故を防ぐための記録。いずれも「消してよいか／どちらが正か」の仕様判断が未決定のため、判断せずに残してある（docs/REFACTORING_PLAN.md の P-10〜P-13・P-21・U-7 参照）。
 
-1. **NORMAL モード Ctrl+U/P のバッファ切替が二重実装**: `ModalEditor.processNormalKey` 冒頭のハードコード（`bufferHistory` スナップショット方式）が優先され、`KeymapRegistry` の `buffer.prev`/`buffer.next`（`switchToRelativeBuffer` = レジストリ一覧巡回方式）には既定キーから到達しない。プラグインが別キーに `buffer.prev` を束縛すれば後者にも到達可能なため、安易に削除しないこと。2実装のどちらを正とするかは未決定。
+1. **（2026-07 解消済み）NORMAL モード Ctrl+U/P のバッファ切替が二重実装だった問題**: 以前は `ModalEditor.processNormalKey` 冒頭のハードコード（`bufferHistory` スナップショット方式）が無条件に優先され、`switchToRelativeBuffer`（`Main.BUFFER_REGISTRY` を巡回する本来の `:bnext`/`:bprev` 相当の実装）には既定キーから到達しなかった。詳細は本ファイル末尾の「Ctrl+U/Ctrl+P のバッファ切替（:bnext/:bprev 方式への統一）」節を参照。
 2. **COMMAND モードの registry 束縛は機能しない**: `processCommandKey` は KeymapRegistry を参照せず ESC/Enter/TAB をハードコードで処理するため、`KeymapRegistry` の COMMAND モード束縛（`enter.normal`/`execute.command`）は現状到達不能。外部（プラグイン）からの参照想定が不明なため削除しない。
 3. **`CompletionIndex.refreshProjectSymbols()` は未使用**: 本番・テストとも呼び出しゼロ。Javadoc の「保存時に呼ぶ」想定で呼ぶ場合は、`ready==true` 後にバックグラウンドで `TreeMap` を更新すると EDT の `query()` と同期なしで競合するため、不変マップ差し替え等の並行更新対策が先に必要。
 4. **`extension/` パッケージ（PluginLoader ほか）は本番経路から未接続**: `:plugin` 等の起動コマンドが未実装のため、動的コンパイル・プラグイン機構はテストからしか呼ばれない（ロードマップ③⑥は機構としては完了、UI 接続のみ未着手）。
 5. **疑似バッファ退避2系統の相互作用は未定義**: jdk-source 疑似バッファ（`saved*` フィールド群）と `*cd候補*` 疑似バッファ（`cdSaved*` フィールド群）を重ねて使った場合の挙動は未定義・未テスト。
 6. **`ScrollTest` の2ケース（halfPageUp 系）は恒常的に FAIL する**: Ctrl+U の仕様変更（半ページスクロール → バッファ履歴を前へ）にテストが追従しておらず、ベースライン時点で 18/20 PASS。テストを更新するかキー割当てを戻すかは未決定（REFACTORING_PLAN.md U-7）。どちらの修正も仕様判断を伴うため「ついでに」直さないこと。
+
+## Ctrl+U/Ctrl+P のバッファ切替（:bnext/:bprev 方式への統一）
+
+- **不具合報告**: SPC+f（telescope）で複数ファイルを開いた場合、Ctrl+U/Ctrl+Pを押しても他の開いているファイルへ切り替わらなかった。
+- **原因**: `ModalEditor.openTelescopeSelection()` はファイルを開く際に `buffer`/`currentFilePath` を直接差し替えるだけで、`pushBuffer()`（`bufferHistory` への追加）を呼んでいなかった。一方 `processNormalKey` 冒頭の Ctrl+U/Ctrl+P ハードコードは `bufferHistory`/`historyIdx` のみを見ていたため、telescope 経由で開いたファイルはこの履歴に反映されず、切替が効かなかった。
+  - なお `switchToRelativeBuffer()`（`Main.BUFFER_REGISTRY` を `floorMod` で循環する、本来の `:bnext`/`:bprev` 相当の実装）は既に存在していたが、`KeymapRegistry` の `buffer.prev`/`buffer.next` 経由でしか到達できず、既定の Ctrl+U/Ctrl+P キーからは呼ばれていなかった（旧・既知の未接続問題1.）。
+- **修正方針（ユーザー確認済み）**: Ctrl+U/Ctrl+P を完全に `switchToRelativeBuffer()` 一本化はせず、**ハイブリッド方式**を採用した。
+  - **`currentFilePath != null`（ファイルを開いている通常のバッファ）の場合**: `switchToRelativeBuffer(-1)`/`switchToRelativeBuffer(+1)` を呼び、`Main.BUFFER_REGISTRY`（＝これまでに開いたファイルの一覧。`onFileOpened` コールバックで telescope/`:e`/FILER 等すべての経路から登録される）を循環する、Vimの `:bprev`/`:bnext` と同じ意味論で切り替える。
+  - **`currentFilePath == null`（`:tutor`・`:enew` 等、ファイルパスを持たない疑似バッファ）の場合**: 従来どおり `bufferHistory`/`historyIdx` のスナップショット方式にフォールバックする。`BUFFER_REGISTRY` はファイルパスを持つエントリしか保持できないため、この方式を残さないと「チュートリアルを開く前のバッファに Ctrl+U で戻れる」という既存機能（チュートリアルモード節参照）が失われるため。
+  - キー割り当て自体は変更していない（Ctrl+U=前方向/`:bprev`相当、Ctrl+P=次方向/`:bnext`相当のまま）。
+- **`switchToRelativeBuffer()` の副変更**: 開いているファイルバッファが自分1件のみ（＝他に切替先がない）場合に何もフィードバックせず無反応だった挙動を、「他に開いているファイルバッファがありません」という `statusMessage` を出すように変更した。
+- **意図的に変更しなかった点**: `switchToRelativeBuffer()` は既存同様、切替先ファイルを毎回ディスクから読み直す（`Files.readString`）。未保存の編集内容を保持したままバッファを切り替える仕組みは元から無く、今回もスコープ外（`openTelescopeSelection()` も同じ挙動）。
+- **テスト**: `test/dev/javatexteditor/editor/BufferSwitchTest.java`（新設・9テスト）。`Main.java` の `BUFFER_REGISTRY`/`registerBuffer` 相当をテスト内に最小限のフェイク実装として再現し、複数ファイルを開いた状態での Ctrl+P（前方循環・折り返し）・Ctrl+U（後方循環・折り返し）と、`:enew` のようなファイルパスなしバッファでの Ctrl+U フォールバックの両方を検証している。
