@@ -1,6 +1,6 @@
 ---
 name: telescope-picker
-description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、telescope.nvim風ファジーファインダー（SPC+f=ファイル検索/SPC+/=ライブgrep/SPC+b=バッファ一覧。あいまい検索は維持しつつ表示は\\f/\\gと同じ疑似バッファ方式。3ペインオーバーレイは2026-07に廃止）を設計・実装する際に使用する。「ファジー検索を追加したい」「FuzzyMatcherのスコアリング」「TELESCOPEモードのキー処理・モード遷移」といった相談、またFilePicker/GrepPicker/BufferPickerを触る作業に着手する前に、必ず最初に参照すること。"
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、telescope.nvim風ファジーファインダー（SPC+f=ファイル検索/SPC+/=ライブgrep/SPC+b=バッファ一覧。あいまい検索は維持しつつ表示は\\f/\\gと同じ疑似バッファ方式。3ペインオーバーレイは2026-07に廃止。FILER（:cd後のディレクトリブラウザ）も同時期に同じ疑似バッファ方式へ統一済み）を設計・実装する際に使用する。「ファジー検索を追加したい」「FuzzyMatcherのスコアリング」「TELESCOPEモードのキー処理・モード遷移」といった相談、またFilePicker/GrepPicker/BufferPickerを触る作業に着手する前に、必ず最初に参照すること。"
 ---
 
 # telescope-picker スキル
@@ -154,10 +154,23 @@ TELESCOPE
   先に復元してから `onRunMainClassSelected` コールバックを呼ぶため、実行対象のソース
   バッファ自体は以前（オーバーレイ方式で `buffer` に一切触れなかった頃）と同じ状態に戻る。
 - **`EditorCanvas.setTelescopeState()`/`drawTelescopeOverlay()` 自体は削除していない**。
-  IMPORT_SELECT（未定義シンボルの import 選択）・FILER（`:cd` 後のディレクトリブラウザ）が
-  同じオーバーレイ描画を流用しているため、これらは変更対象外（今回廃止したのは
-  telescope-picker が使っていた「3ペイン・あいまい検索フローティングウィンドウ」という
-  UI パターンであり、EditorCanvas 側の汎用オーバーレイ描画インフラそのものではない）。
+  IMPORT_SELECT（未定義シンボルの import 選択）が同じオーバーレイ描画を流用しているため、
+  これは変更対象外（今回廃止したのは telescope-picker が使っていた「3ペイン・あいまい検索
+  フローティングウィンドウ」という UI パターンであり、EditorCanvas 側の汎用オーバーレイ
+  描画インフラそのものではない）。
+- **追記（2026-07）: FILER（`:cd` 後のディレクトリブラウザ）も同じ疑似バッファ表示に統一した**。
+  「`:cd` でディレクトリ移動している間も telescope 風のオーバーレイ画面が表示されてしまう」
+  という指摘を受け、`ModalEditor.enterFiler()`/`renderFilerBuffer()` を telescope の
+  `beginTelescopeSession()`/`renderTelescopeBuffer()` と同じ設計で書き直した。
+  `:cd`（`changeDirectory()`）実行時にのみ元バッファを `filerSaved*` へ退避し、ディレクトリ間の
+  再帰移動（`openSelectedEntry()` でサブディレクトリへ進む場合）は保存し直さない
+  （telescope はセッション開始が1箇所のみなのに対し、FILER は `:cd` の1回の起動から
+  ディレクトリを何度も移動できるため、保存タイミングを「外側から見て初めて FILER に入る瞬間」
+  である `changeDirectory()` に限定する必要があった）。Esc で `exitFiler()` により退避済みの
+  バッファへ復元する。ファイルを選択した場合は `exitFiler()` で元バッファに戻してから
+  既存の `loadFromFile()` を呼ぶ（`pushBuffer()` が正しい元バッファを履歴に積むようにするため。
+  FILERモードの設計決定事項節の「ファイルオープンの再利用」を参照）。プレビュー欄
+  （`buildFilerPreview()`）は telescope 同様に廃止した。
 
 ### FuzzyMatcher の実装
 

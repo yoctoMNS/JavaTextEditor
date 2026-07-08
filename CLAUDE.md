@@ -133,9 +133,9 @@ project-root/
 - **`currentDirectory` は `projectRoot` と統合**（`getProjectRoot()`経由で参照）。別フィールドは作らない。WD_MANAGER リスナーが同期的に全エディタの `projectRoot` を更新するため、`:cd` 成功後に `enterFiler()` を呼ぶとその時点で正しい `projectRoot` が読める。
 - **`changeWdCallback` の型を `Consumer<Path>` から `Function<Path, String>` に変更**。成功時 null、失敗時日本語エラー文字列を返す。ModalEditor が成功/失敗を同期的に判定して FILER 遷移またはエラー表示を行う。
 - **processCommandKey Enter ハンドラ**: `mode = Mode.NORMAL` を `if (mode == Mode.COMMAND) mode = Mode.NORMAL` に変更。`enterFiler()` が `mode = Mode.FILER` をセットした後に上書きされることを防ぐ。
-- **描画の再利用**: `EditorCanvas.setTelescopeState()` / `drawTelescopeOverlay()` を FILER モードでも流用（IMPORT_SELECT と同じパターン）。`DirEntry` を `TelescopeItem` に変換して渡す。
+- **描画は疑似バッファ方式（2026-07 に変更）**: 当初は `EditorCanvas.setTelescopeState()` / `drawTelescopeOverlay()` を FILER モードでも流用していた（IMPORT_SELECT と同じオーバーレイパターン）が、「`:cd` でディレクトリ移動している間も telescope 風のオーバーレイ画面が表示されてしまう」という指摘を受け、telescope-picker（SPC+f/SPC+b等）と同じ「`\f`/`\g`と同じヘッダ行＋結果一覧をbufferに直接描画」方式に統一した。`ModalEditor.renderFilerBuffer()` が `*filer* <projectRoot> — N件` ヘッダ＋エントリ一覧を `buffer` に描画し、選択中の項目は実カーソル（`cursorRow = filerSelectedIdx + 1`）で示す。プレビュー欄（`buildFilerPreview()`）は telescope 同様に廃止した。`:cd` 実行時（`changeDirectory()`）にのみ元バッファを `filerSaved*` に退避し、`Esc`（`exitFiler()`）で復元する。サブディレクトリへの再帰移動（`openSelectedEntry()` でディレクトリを選ぶ場合）は `enterFiler()` を呼び直すだけで保存はしない（telescope のセッション開始が1箇所なのに対し、FILER は `:cd` 一回の起動から何度もディレクトリを移動できるため、退避は「外部から FILER に入る瞬間」の1箇所に限定する必要がある）。詳細は `.claude/skills/telescope-picker/SKILL.md` の「追記（2026-07）」を参照。
 - **純粋ロジックの分離**: ディレクトリ列挙・フィルタは `dev.javatexteditor.search.DirectoryLister` に独立させ、ModalEditor はオーケストレーション（状態管理・キー処理）のみ担う。
-- **ファイルオープンの再利用**: `openSelectedEntry()` がファイルを選択した際は既存の `loadFromFile(String)` を呼び出す（pushBuffer・onFileOpened コールバック等が確実に動く）。
+- **ファイルオープンの再利用**: `openSelectedEntry()` がファイルを選択した際は `exitFiler()` で元バッファへ復元してから既存の `loadFromFile(String)` を呼び出す（`loadFromFile` 内の `pushBuffer()` が正しい元バッファを履歴に積むために必要。復元を挟まないと疑似バッファのテキストが誤って履歴に積まれてしまう）。
 
 ## チュートリアルモード（㉒ editor-tutorial）の設計決定事項
 

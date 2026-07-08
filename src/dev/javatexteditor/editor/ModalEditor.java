@@ -222,12 +222,16 @@ public class ModalEditor {
     private int edSavedCursorRow = 0;
     private int edSavedCursorCol = 0;
     private String edSavedCommandText = "";
-    // filer モード状態
+    // filer モード状態（\f/\g/telescope と同じ疑似バッファ表示。saved* は元バッファの一時退避）
     private List<DirEntry> filerEntries = List.of();
     private List<DirEntry> filerFiltered = List.of();
     private int filerSelectedIdx = 0;
     private boolean filerSearchMode = false;
     private final StringBuilder filerQuery = new StringBuilder();
+    private String filerSavedBufferText = null;
+    private String filerSavedFilePath = null;
+    private int filerSavedCursorRow = 0;
+    private int filerSavedCursorCol = 0;
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
     private String savedBufferText = null;       // 元バッファのテキスト
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
@@ -3688,9 +3692,11 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     // -------------------------------------------------------------------------
-    // FILERモード処理（:cd 実行後に表示されるディレクトリ一覧オーバーレイ）
+    // FILERモード処理（:cd 実行後に表示されるディレクトリ一覧。\f/\g/telescope と同じ
+    // 「ヘッダ行＋結果1行ずつ」の疑似バッファ表示。EditorCanvas のオーバーレイは使わない）
     // -------------------------------------------------------------------------
 
+    /** ディレクトリ移動先の一覧を取得し直し、疑似バッファを再描画する（ディレクトリ間の再帰移動でも呼ぶため保存は行わない）。 */
     private void enterFiler() {
         try {
             filerEntries = DirectoryLister.listDirectoryEntries(getProjectRoot());
@@ -3703,6 +3709,30 @@ public class ModalEditor {
         filerSearchMode = false;
         filerQuery.setLength(0);
         mode = Mode.FILER;
+        renderFilerBuffer();
+    }
+
+    /**
+     * filerFiltered/filerSelectedIdx の現在値を \f（*file-search*）・\g（*grep*）・telescope と同じ
+     * 「ヘッダ行＋結果1行ずつ」の疑似バッファ形式で buffer に描画する。
+     * 選択中の候補は専用のハイライトではなく、cursorRow をその行に合わせることで示す。
+     */
+    private void renderFilerBuffer() {
+        Path root = getProjectRoot();
+        StringBuilder sb = new StringBuilder();
+        sb.append("*filer* ").append(root.toString().replace('\\', '/'));
+        if (filerSearchMode) sb.append(" /").append(filerQuery);
+        sb.append(" — ").append(filerFiltered.size()).append("件\n");
+        for (DirEntry e : filerFiltered) {
+            sb.append(e.kind() == DirEntry.Kind.DIRECTORY ? e.name() + "/" : e.name()).append('\n');
+        }
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        clearSearchHighlights();
+        cursorRow = filerFiltered.isEmpty() ? 0 : filerSelectedIdx + 1;
+        cursorCol = 0;
     }
 
     /**
@@ -3732,10 +3762,25 @@ public class ModalEditor {
                 statusMessage = "E: " + err;
                 return;
             }
+            filerSavedBufferText = buffer.getText();
+            filerSavedFilePath = currentFilePath;
+            filerSavedCursorRow = cursorRow;
+            filerSavedCursorCol = cursorCol;
             enterFiler();
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
         }
+    }
+
+    /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */
+    private void exitFiler() {
+        mode = Mode.NORMAL;
+        buffer = new UndoablePieceTable(filerSavedBufferText != null ? filerSavedBufferText : "");
+        currentFilePath = filerSavedFilePath;
+        cursorRow = filerSavedCursorRow;
+        cursorCol = filerSavedCursorCol;
+        filerSavedBufferText = null;
+        filerSavedFilePath = null;
     }
 
     private void processFilerKey(int keyCode, char keyChar, int modifiers) {
@@ -3747,6 +3792,7 @@ public class ModalEditor {
                 filerQuery.setLength(0);
                 filerFiltered = filerEntries;
                 filerSelectedIdx = 0;
+                renderFilerBuffer();
                 return;
             }
             if (keyCode == KeyEvent.VK_ENTER) {
@@ -3758,6 +3804,7 @@ public class ModalEditor {
                     filerQuery.deleteCharAt(filerQuery.length() - 1);
                     filerFiltered = DirectoryLister.filterEntries(filerEntries, filerQuery.toString());
                     filerSelectedIdx = 0;
+                    renderFilerBuffer();
                 }
                 return;
             }
@@ -3767,10 +3814,11 @@ public class ModalEditor {
                 filerQuery.append(keyChar);
                 filerFiltered = DirectoryLister.filterEntries(filerEntries, filerQuery.toString());
                 filerSelectedIdx = 0;
+                renderFilerBuffer();
             }
         } else {
             if (keyCode == KeyEvent.VK_ESCAPE) {
-                mode = Mode.NORMAL;
+                exitFiler();
                 return;
             }
             if (keyCode == KeyEvent.VK_ENTER) {
@@ -3782,13 +3830,17 @@ public class ModalEditor {
             if (keyChar == '/') {
                 filerSearchMode = true;
                 filerQuery.setLength(0);
+                renderFilerBuffer();
             }
         }
     }
 
+    /** 結果リスト自体は変わらないので、選択行に合わせて実カーソルを動かすだけでよい（telescope の moveTelescope() と同じ）。 */
     private void moveSelection(int delta) {
         if (filerFiltered.isEmpty()) return;
         filerSelectedIdx = Math.max(0, Math.min(filerFiltered.size() - 1, filerSelectedIdx + delta));
+        cursorRow = filerSelectedIdx + 1;
+        cursorCol = 0;
     }
 
     private void openSelectedEntry() {
@@ -3806,42 +3858,8 @@ public class ModalEditor {
             }
             enterFiler();
         } else {
-            mode = Mode.NORMAL;
+            exitFiler();
             loadFromFile(entry.path().toString());
-        }
-    }
-
-    private String buildFilerPreview() {
-        if (filerFiltered.isEmpty()) {
-            return filerSearchMode ? "(no match)" : "(empty)";
-        }
-        DirEntry entry = filerFiltered.get(Math.min(filerSelectedIdx, filerFiltered.size() - 1));
-        try {
-            if (entry.kind() == DirEntry.Kind.DIRECTORY) {
-                List<DirEntry> children = DirectoryLister.listDirectoryEntries(entry.path());
-                if (children.isEmpty()) return "(empty directory)";
-                StringBuilder sb = new StringBuilder();
-                int limit = Math.min(children.size(), 20);
-                for (int i = 0; i < limit; i++) {
-                    DirEntry c = children.get(i);
-                    sb.append(c.kind() == DirEntry.Kind.DIRECTORY ? c.name() + "/" : c.name()).append('\n');
-                }
-                if (children.size() > limit) sb.append("... (").append(children.size() - limit).append(" more)");
-                return sb.toString();
-            } else {
-                StringBuilder sb = new StringBuilder();
-                try (var reader = Files.newBufferedReader(entry.path())) {
-                    String line;
-                    int count = 0;
-                    while (count < 30 && (line = reader.readLine()) != null) {
-                        sb.append(line).append('\n');
-                        count++;
-                    }
-                }
-                return sb.toString();
-            }
-        } catch (IOException e) {
-            return "(error: " + e.getMessage() + ")";
         }
     }
 
@@ -3885,8 +3903,8 @@ public class ModalEditor {
                 canvas.setCommandLineText(null);
             }
 
-            // TELESCOPE は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
-            // オーバーレイは使わない。IMPORT_SELECT/FILER は従来どおりオーバーレイを使う。
+            // TELESCOPE/FILER は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
+            // オーバーレイは使わない。IMPORT_SELECT のみ従来どおりオーバーレイを使う。
             if (mode == Mode.IMPORT_SELECT) {
                 // import 候補選択モーダル: TelescopeItem リストとして表示する
                 List<TelescopeItem> items = new ArrayList<>();
@@ -3898,18 +3916,6 @@ public class ModalEditor {
                 String title = "Import: " + importSelectSymbol
                     + "  [" + sym + "/" + total + "]";
                 canvas.setTelescopeState(true, title, "", items, importSelectIdx, "");
-            } else if (mode == Mode.FILER) {
-                // filer オーバーレイ: DirEntry → TelescopeItem に変換して既存描画を再利用
-                List<TelescopeItem> items = new ArrayList<>();
-                for (DirEntry e : filerFiltered) {
-                    String display = e.kind() == DirEntry.Kind.DIRECTORY ? e.name() + "/" : e.name();
-                    items.add(new TelescopeItem(display, e.path().toString(), 0, 0));
-                }
-                Path root = getProjectRoot();
-                String dirName = root.getFileName() != null ? root.getFileName().toString() : root.toString();
-                String filerTitle = filerSearchMode ? dirName + " /" : dirName;
-                String filerQ = filerSearchMode ? filerQuery.toString() : "";
-                canvas.setTelescopeState(true, filerTitle, filerQ, items, filerSelectedIdx, buildFilerPreview());
             } else {
                 canvas.setTelescopeState(false, "", "", List.of(), 0, "");
             }
