@@ -1991,9 +1991,26 @@ public class ModalEditor {
             } else if (saveToFile(currentFilePath)) {
                 exitCallback.run();
             }
+        } else if (cmd.matches("\\d+")) {
+            jumpToLineNumber(Integer.parseInt(cmd));
         } else {
             statusMessage = "E: unknown command '" + cmd + "'";
         }
+    }
+
+    /**
+     * ":X"（Xは1始まりの行番号）コマンド。X行目の先頭へカーソルを移動する。
+     * Xが1未満、または総行数を超える場合はエラーメッセージのみ設定しカーソルは動かさない。
+     * 詳細は .claude/skills/line-number-jump/SKILL.md 参照。
+     */
+    private void jumpToLineNumber(int oneBasedLine) {
+        int totalLines = getLines().length;
+        if (oneBasedLine < 1 || oneBasedLine > totalLines) {
+            statusMessage = "E: invalid line number";
+            return;
+        }
+        cursorRow = oneBasedLine - 1;
+        cursorCol = 0;
     }
 
     // -------------------------------------------------------------------------
