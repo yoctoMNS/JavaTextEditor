@@ -47,7 +47,11 @@ project-root/
 │   │   # ※ バッファ内文字列検索（/ * # n N）は ModalEditor に直接実装
 │   ├── refactor/
 │   │   └── RenameRefactorer.java    # 語境界付き正規表現による複数ファイル一括リネームエンジン
-│   ├── telescope/                   # FuzzyMatcher・FilePicker・GrepPicker・BufferPicker
+│   ├── projectbuild/
+│   │   ├── ProjectBuilder.java      # F10: JavaCompilerでプロジェクト全体をコンパイル・bin/出力先解決
+│   │   ├── MainClassFinder.java     # F11: public static void main を持つクラスの正規表現ベース索引
+│   │   └── BuildResult.java / BuildDiagnostic.java # コンパイル結果・診断（analysis.CompileDiagnosticとは別レコード）
+│   ├── telescope/                   # FuzzyMatcher・FilePicker・GrepPicker・BufferPicker・MainClassPicker（F11用）
 │   ├── system/
 │   │   └── SystemStatsMonitor.java  # CPU/GPU使用率・メモリ使用率のバックグラウンド監視（2秒間隔）
 │   ├── tutorial/
