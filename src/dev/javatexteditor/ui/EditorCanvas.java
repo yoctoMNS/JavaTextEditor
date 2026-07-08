@@ -1025,7 +1025,7 @@ public class EditorCanvas extends JPanel {
         int rightX = getWidth() - clockWidth - 4;
         drawUiText(g2, clockLabel, rightX, y, cellW, lineHeight, theme.background);
 
-        // CPU温度・GPU温度・メモリ使用率（"|"区切り）は時刻表示の左隣に表示
+        // CPU使用率・GPU使用率・メモリ使用率（取得できた項目のみ"|"区切り）は時刻表示の左隣に表示
         String statsLabel = SystemStatsMonitor.INSTANCE.getStatusLabel();
         if (!statsLabel.isEmpty()) {
             int statsWidth = uiTextWidth(statsLabel, cellW);
