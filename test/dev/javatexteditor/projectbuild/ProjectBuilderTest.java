@@ -21,6 +21,10 @@ public class ProjectBuilderTest {
         testHasCompiledClassesFalseBeforeCompile();
         testHasCompiledClassesTrueAfterCompile();
         testCompileSkipsBinDirectory();
+        testBinDirForFallsBackWhenNoSrcAncestor();
+        testBinDirForUsesProjectRootWhenSrcIsDirectChild();
+        testBinDirForClimbsToSrcAncestorWhenCwdIsInsideSrc();
+        testCompileAndRunUseSameBinDirWhenCwdIsInsideSrc();
 
         testFindMainClassWithPackage();
         testFindMainClassWithoutPackage();
@@ -104,6 +108,48 @@ public class ProjectBuilderTest {
         BuildResult result = new ProjectBuilder().compile(dir);
         assertTrue("only Hello.java compiled (bin/ skipped)", result.success());
         assertEquals("fileCount excludes bin/Stray.java", 1, result.fileCount());
+    }
+
+    static void testBinDirForFallsBackWhenNoSrcAncestor() throws IOException {
+        // どの祖先ディレクトリにも src/ が存在しない場合は projectRoot/bin にフォールバックする
+        Path dir = Files.createTempDirectory("pb-no-src-ancestor");
+        Path expected = dir.resolve("bin");
+        assertEquals("falls back to projectRoot/bin", expected, new ProjectBuilder().binDirFor(dir));
+    }
+
+    static void testBinDirForUsesProjectRootWhenSrcIsDirectChild() throws IOException {
+        // projectRoot 自身が src/ の親ディレクトリなら、そのまま projectRoot/bin を使う
+        Path dir = Files.createTempDirectory("pb-src-direct-child");
+        Files.createDirectories(dir.resolve("src"));
+        Path expected = dir.resolve("bin");
+        assertEquals("uses projectRoot/bin directly", expected, new ProjectBuilder().binDirFor(dir));
+    }
+
+    static void testBinDirForClimbsToSrcAncestorWhenCwdIsInsideSrc() throws IOException {
+        // :cd で src/ 配下の深い場所に移動していても、src/ の親ディレクトリまで遡って bin を置く
+        Path projectDir = Files.createTempDirectory("pb-climb-to-src");
+        Files.createDirectories(projectDir.resolve("src").resolve("dev").resolve("javatexteditor"));
+        Path cwd = projectDir.resolve("src").resolve("dev").resolve("javatexteditor");
+
+        Path expected = projectDir.resolve("bin");
+        assertEquals("climbs up to the src/ parent directory", expected, new ProjectBuilder().binDirFor(cwd));
+    }
+
+    static void testCompileAndRunUseSameBinDirWhenCwdIsInsideSrc() throws IOException {
+        // F10（コンパイル）とF11（実行）の両方が同じ bin/ を見ることを確認する
+        Path projectDir = Files.createTempDirectory("pb-compile-from-inside-src");
+        Path pkgDir = projectDir.resolve("src").resolve("dev").resolve("javatexteditor");
+        Files.createDirectories(pkgDir);
+        Files.writeString(pkgDir.resolve("Hello.java"),
+            "public class Hello { public static void main(String[] a) {} }");
+
+        ProjectBuilder builder = new ProjectBuilder();
+        BuildResult result = builder.compile(pkgDir);
+        assertTrue("compile from inside src/ succeeds", result.success());
+        assertTrue("bin/Hello.class exists at src/ sibling",
+            Files.exists(projectDir.resolve("bin").resolve("Hello.class")));
+        assertTrue("hasCompiledClasses true when queried from inside src/",
+            builder.hasCompiledClasses(pkgDir));
     }
 
     static void testFindMainClassWithPackage() throws IOException {

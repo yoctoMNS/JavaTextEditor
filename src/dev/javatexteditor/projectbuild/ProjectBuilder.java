@@ -56,7 +56,7 @@ public class ProjectBuilder {
                 "JavaCompilerが見つかりません。JDKで実行してください。");
         }
 
-        Path binDir = projectRoot.resolve(OUTPUT_DIR_NAME);
+        Path binDir = binDirFor(projectRoot);
         try {
             Files.createDirectories(binDir);
         } catch (IOException e) {
@@ -83,13 +83,37 @@ public class ProjectBuilder {
 
     /** F11: bin/ に .class が1つでもあれば true（未コンパイルなら実行を拒否するためのガード）。 */
     public boolean hasCompiledClasses(Path projectRoot) {
-        Path binDir = projectRoot.resolve(OUTPUT_DIR_NAME);
+        Path binDir = binDirFor(projectRoot);
         if (!Files.isDirectory(binDir)) return false;
         try (var stream = Files.walk(binDir)) {
             return stream.anyMatch(p -> p.toString().endsWith(".class"));
         } catch (IOException e) {
             return false;
         }
+    }
+
+    /**
+     * F10/F11/F12 の .class 出力先（{@value #OUTPUT_DIR_NAME}/）を解決する。
+     * projectRoot が src フォルダの兄弟位置（＝projectRoot/src が存在する）ならそのまま
+     * projectRoot/bin を使う。projectRoot が src フォルダ配下の任意の深さのディレクトリ
+     * （例: :cd でプロジェクトルート配下のパッケージディレクトリに移動している場合）である
+     * 場合は、祖先ディレクトリを遡って最初に src 子ディレクトリを持つディレクトリを探し、
+     * そこを基準に bin を置く。どの祖先にも src が見つからない場合は projectRoot 自身に
+     * フォールバックする（従来どおり projectRoot/bin）。
+     */
+    public Path binDirFor(Path projectRoot) {
+        return resolveProjectBaseDir(projectRoot).resolve(OUTPUT_DIR_NAME);
+    }
+
+    private Path resolveProjectBaseDir(Path projectRoot) {
+        Path dir = projectRoot.toAbsolutePath().normalize();
+        while (dir != null) {
+            if (Files.isDirectory(dir.resolve("src"))) {
+                return dir;
+            }
+            dir = dir.getParent();
+        }
+        return projectRoot;
     }
 
     private List<Path> collectJavaFiles(Path projectRoot) throws IOException {
