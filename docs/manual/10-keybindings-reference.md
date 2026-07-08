@@ -9,6 +9,9 @@
 | キー | 動作 |
 |---|---|
 | `F2` | カーソル行のエラー・警告一覧をダイアログ表示（[編集支援機能](06-editing-features.md)） |
+| `F10` | プロジェクト全体をコンパイル（[Java開発支援](04-java-tooling.md)） |
+| `F11` | mainクラスを解決して実行（[Java開発支援](04-java-tooling.md)） |
+| `F12` | コンパイルして成功時のみ実行（[Java開発支援](04-java-tooling.md)） |
 | `Ctrl+Shift+←` / `→` | アクティブペインのフォントセル幅を調整（[編集支援機能](06-editing-features.md)） |
 | `Ctrl+Shift+↑` / `↓` | アクティブペインのフォントセル高さを調整（[編集支援機能](06-editing-features.md)） |
 | マウスクリック | クリックしたペインへフォーカス移動 |
@@ -43,6 +46,8 @@
 | `q{a-z}` ... `q` | マクロ記録開始/終了（大文字レジスタは既存内容へ追記。[編集支援機能](06-editing-features.md)） |
 | `@{a-z}` `@@` | マクロ再生/直前に実行したマクロを再現（[編集支援機能](06-editing-features.md)） |
 | `Alt+J` `Alt+K` | 行入れ替え（下/上） |
+| `~` | カーソル位置の1文字の大文字/小文字を反転（[モーダル編集](02-modal-editing.md)） |
+| `guu` `gUU` `g~~` | 現在行を小文字化/大文字化/大文字小文字反転（[モーダル編集](02-modal-editing.md)） |
 | `Space+g+g` `Space+g+s` `Space+g+d` | Getter/Setter生成（[Java開発支援](04-java-tooling.md)） |
 | `Space+i+o` / `Ctrl+Shift+O` | import整理（[Java開発支援](04-java-tooling.md)） |
 | `[g` `[d` | 次/前のエラー・警告行へ（[Java開発支援](04-java-tooling.md)） |
@@ -56,6 +61,7 @@
 | `:` `;` | COMMANDへ |
 | `/` | SEARCHへ（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `n` `N` `*` `#` | 検索ジャンプ・単語検索（[検索・ナビゲーション](03-search-and-navigation.md)） |
+| `Esc` `Esc`（2回連続） | 検索ハイライトを強制クリア（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `\f` `\g` | ファイル名検索/grep検索（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `SPC+f` `SPC+/` `SPC+b` | telescope（ファイル/grep/バッファ）（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `K` | 定義・ドキュメント参照（[Java開発支援](04-java-tooling.md)） |
@@ -117,6 +123,7 @@
 | `Ctrl+F` `Ctrl+B` `Ctrl+D` `Ctrl+U` | スクロール（半ページ含む） |
 | `>` `<` | インデント/デデント |
 | `y` `d` | ヤンク/削除してNORMALへ |
+| `u` `U` `~` | 小文字化/大文字化/大文字小文字反転してNORMALへ |
 | `:` | `'<,'>` 付きでCOMMANDへ（`:s` 置換用） |
 | `v` / `V` / `Escape` | 解除してNORMALへ |
 
@@ -126,6 +133,7 @@
 |---|---|
 | `h` `j` `k` `l` `%` | 矩形範囲の拡張 |
 | `y` `d` | 矩形ヤンク/矩形削除 |
+| `u` `U` `~` | 矩形の列範囲を小文字化/大文字化/大文字小文字反転してNORMALへ |
 | `:` | `'<,'>` 付きでCOMMANDへ（`:s` は矩形の列ではなく選択行全体が対象） |
 | `I` `A` | 矩形左端/右端+1でINSERT（全行同時入力） |
 | `c` | 矩形削除して `I` 相当でINSERT |
