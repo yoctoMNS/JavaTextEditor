@@ -235,6 +235,13 @@ project-root/
 - **テスト**: `test/dev/javatexteditor/build/ProjectBuilderTest.java`（17テスト）で `ProjectBuilder`/`MainClassFinder` の純粋ロジックを検証。実際の子プロセス起動を伴う `Main.runJavaClass` はGUI/OS依存のため自動テスト対象外（既知のテストギャップ。⑫⑳と同様の理由）。
 - **既知の制約**: OSやウィンドウマネージャによっては `F11` がフルスクリーン切り替え等のショートカットと衝突する場合があるが、アプリケーション側では制御できないため対応しない。
 
+## `SystemStatsMonitor`（ステータス行のCPU/GPU表示）の設計決定事項
+
+- **CPU項目は「温度」ではなく「使用率(%)」に変更した**。旧実装（Linuxの`/sys/class/thermal/thermal_zone*/temp`を読む）は構造的にLinux専用で、Windows/macOSでは常に`N/A`になっていた（「Windows11だとCPU使用率とGPU使用率がN/Aになる」という報告への対応）。JDK標準の`com.sun.management.OperatingSystemMXBean#getCpuLoad()`はLinux/Windows/macOSいずれのJDK標準実装にも同梱されているシステム全体のCPU使用率取得APIのため、これに切り替えることでOS依存のfile/コマンドを使わずに全プラットフォーム対応にした。既存の`readMemoryUsagePercent()`が同じ`sunBean`から`getTotalMemorySize()`/`getFreeMemorySize()`を読んでいるのと同じ設計に揃えた形。
+- **GPU項目は既存どおり`nvidia-smi`ベースだが、クエリ対象を`temperature.gpu`から`utilization.gpu`（使用率%）に変更**した。`nvidia-smi`コマンド自体はNVIDIAドライバがLinux/Windows双方でインストール時にPATHへ追加するため、コマンド起動の可否という意味では元々クロスプラットフォームだった。非NVIDIA GPU環境（AMD/Intel統合GPU等）やドライバ未導入環境では`N/A`のまま（graceful degradation、既存の設計方針を維持）。JDK標準APIのみでベンダーを問わずGPU使用率を取得する手段は存在しないため、この制約は解消していない。
+- **サブプロセス出力の読み取りに`native.encoding`を明示するよう修正**した（`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠）。旧実装は文字セット省略の`new String(bytes)`（JEP 400以降のUTF-8決め打ち）で`nvidia-smi`の出力を読んでおり、Windows環境で出力がネイティブエンコーディング（CP932等）だった場合に文字化けしうる潜在バグだった。数字のみの出力なら実害は出にくいが、恒久ルールに合わせて修正した。
+- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）は元からクロスプラットフォームで動作していたため変更していない。ラベルのフォーマット（`"CPU " + cpu + " | GPU " + gpu + " | MEM " + mem`）や2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
+
 ## 作業時の方針
 
 - 何かを実装・設計する前に、関連する`.claude/skills/`配下のSKILL.mdを必ず確認すること。
