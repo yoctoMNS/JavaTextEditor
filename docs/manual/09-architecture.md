@@ -49,7 +49,7 @@ project-root/
 │   │   └── RenameRefactorer.java    # 語境界付き正規表現による複数ファイル一括リネームエンジン
 │   ├── telescope/                   # FuzzyMatcher・FilePicker・GrepPicker・BufferPicker
 │   ├── system/
-│   │   └── SystemStatsMonitor.java  # CPU/GPU温度・メモリ使用率のバックグラウンド監視（2秒間隔）
+│   │   └── SystemStatsMonitor.java  # CPU/GPU使用率・メモリ使用率のバックグラウンド監視（2秒間隔）
 │   ├── tutorial/
 │   │   └── Tutorial.java            # :tutor で開く対話型チュートリアル本文（テキストブロック埋め込み）
 │   ├── completion2/                 # 未接続の独立コンポーネント（詳細は「プラグインシステム」章）
@@ -194,7 +194,7 @@ n/N → currentMatchIdx を ±1（折り返しあり）
 - 全角文字（CJK・ひらがな・カタカナ）を2セル幅として正確に描画。半角ASCIIは `TtfMonoFont`（IBM Plex Mono Regular TTF）をアンチエイリアス付き・非等方向スケールでセルに合わせて描画（固定サイズのビットマップフォントカタログは廃止済み）
 - NORMALモード: ブロックカーソル。INSERTモード: 縦棒カーソル（2px幅）
 - VISUAL: 文字単位ハイライト。VISUAL LINE: 行全幅ハイライト。VISUAL BLOCK: 矩形ハイライト
-- 画面最下部のステータス行（右から）: 診断件数バッジ ← システムステータス（`CPU 45°C | GPU N/A | MEM 62%`、`SystemStatsMonitor` が2秒間隔のバックグラウンドスレッドで更新しEDTは非ブロッキングでキャッシュを読むだけ） ← 時計（`HH:mm:ss`）。歩行キャラクターアニメーションも表示（いずれもアクティブペインのみ）
+- 画面最下部のステータス行（右から）: 診断件数バッジ ← システムステータス（`CPU 12% | MEM 62%`、`SystemStatsMonitor` が2秒間隔のバックグラウンドスレッドで更新しEDTは非ブロッキングでキャッシュを読むだけ） ← 時計（`HH:mm:ss`）。歩行キャラクターアニメーションも表示（いずれもアクティブペインのみ）
 - アニメーションは `javax.swing.Timer` でステータス行のみを周期的に再描画（キャンバス全体は再描画しない）
 - 縦・横スクロール対応（カーソルが画面外に出ると自動追従）、`JSplitPane` によるペイン分割
 

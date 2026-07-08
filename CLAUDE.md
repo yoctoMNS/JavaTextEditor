@@ -237,14 +237,13 @@ project-root/
 
 ## `SystemStatsMonitor`（ステータス行のCPU/GPU表示）の設計決定事項
 
-- **一度CPU項目を「温度」から「使用率(%)」に変更したが、ユーザーから「使用率ではなく温度を、Linux/Windows/Macいずれでも表示できるようにしてほしい」という明示的な差し戻し指示があり、「温度」表示に戻した**。表示形式は再び `CPU 45°C | GPU N/A | MEM 62%` である。使用率(%)への変更は撤回済みなので、以後この項目を再び使用率に変更する場合は改めてユーザーに確認すること。
-- **CPU温度はOS判定（`os.name`）で取得方法を切り替える3分岐方式にした**。JDK標準APIには温度を返すクロスプラットフォームなAPIが存在しないため、OSごとに別々の手段が必要という制約は解消していない。
-  - **Linux**: 従来どおり `/sys/class/thermal/thermal_zone*/temp`（`readCpuTempLinux()`）。
-  - **Windows**: `powershell -Command "(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty CurrentTemperature)"` をサブプロセスとして起動し、返り値（10分の1ケルビン単位）を摂氏に変換する（`readCpuTempWindows()`）。**既知の制約**: `MSAcpi_ThermalZoneTemperature` はACPIが温度ゾーンを公開している機種でのみインスタンスが存在し、多くのノートPC・一部のデスクトップでは該当インスタンスが無く空文字が返る（＝`N/A`のまま）。これはJDK標準APIにもWindows標準コマンドにも代替手段が無いための構造的な制約であり、サードパーティ製ツール（OpenHardwareMonitor等）の導入なしにはこれ以上の改善余地がない。
-  - **macOS**: JDK標準API・macOS標準コマンドのいずれにもCPU温度取得手段が無いため、Homebrewで導入可能な `osx-cpu-temp` コマンド（`readCpuTempMac()`）を試す方式にした。未導入環境では`N/A`のまま（graceful degradation）。`powermetrics`はsudo権限が必要でありユーザーに昇格を求めるのは望ましくないため採用しなかった。
-- **GPU温度は`nvidia-smi`ベースのまま維持**（クエリは`temperature.gpu`に戻した）。`nvidia-smi`コマンド自体はNVIDIAドライバがLinux/Windows双方でインストール時にPATHへ追加するため、OS判定なしで共通に試すだけでよい。macOSはNVIDIAドライバが提供されないためコマンド起動自体が失敗し自然に`N/A`になる（macOS専用の分岐は不要と判断し追加していない）。非NVIDIA GPU環境（AMD/Intel統合GPU等）も同様に`N/A`のまま。
-- **サブプロセス起動・待機・エンコーディング処理を`runCommand(String... command)`ヘルパーに共通化した**。CPU温度（Windows/Mac）・GPU温度（nvidia-smi）の3つのコマンド呼び出しがいずれも「起動→タイムアウト付きwaitFor→native.encodingでデコード→非0終了/空文字はnull」という同じ手順だったため。`native.encoding`での読み取りは`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠（Windows環境でのnvidia-smi/PowerShell出力の文字化け対策）。
-- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）はJDK標準APIで元からクロスプラットフォームに動作するため変更していない。ラベルのフォーマット（`"CPU " + cpu + " | GPU " + gpu + " | MEM " + mem`）や2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
+- **CPU項目は「温度」と「使用率(%)」の間で2度差し戻しがあった末、最終的に「使用率(%)」で確定した**。経緯: ①最初に温度→使用率に変更 → ②「Linux/Windows/Macいずれでも温度を表示できるようにしてほしい」という差し戻しでOS別3分岐の温度取得（Linux=`/sys/class/thermal`、Windows=WMI経由PowerShell、macOS=`osx-cpu-temp`）を実装 → ③「Windows11でCPU温度がN/Aになる」という報告に対し、native実装（C/C++・JNI）での解決を提案されたが、CLAUDE.md本文の「依存ライブラリ一切使用しない・javac直接呼び出し」という根本方針と矛盾するためユーザーに確認 → ④ユーザーが方針転換し「CPU/GPUとも温度ではなく使用率にし、N/Aになる場合はそもそも表示しない」との指示で最終確定。今後この項目を再び温度表示に戻す提案をする場合、上記②のOS別3分岐実装（Windows WMI/`MSAcpi_ThermalZoneTemperature`が多くの機種で非対応・macOSの`osx-cpu-temp`が未導入だと動かない、という既知の制約）を再発明しないよう、まずこの節を参照すること。
+- **native実装（C/C++・JNI）は採用しなかった**。理由は上記の通りCLAUDE.mdの「依存ライブラリ一切不使用・`javac`直接呼び出し・ビルドツール不使用」という根本方針と衝突するため（JNIは3プラットフォーム分のネイティブライブラリのビルド・配布、Cコンパイラの導入、`scripts/build.sh`の拡張を必要とし、学習目的の「javac一発でビルドできる」というシンプルさを損なう）。この判断はユーザーへの確認の上で行われた。将来的にどうしても温度取得の精度を上げたい場合でも、まずJava標準API・OS標準コマンドの組み合わせで対応できないか検討し、native実装は最終手段とすること。
+- **CPU使用率**は `com.sun.management.OperatingSystemMXBean#getCpuLoad()` から算出する（`readCpuUsagePercent()`）。JDK標準の実装がLinux/Windows/macOSいずれにも同梱しているシステム全体のCPU使用率取得APIのため、OS判定・外部コマンドいずれも不要で全プラットフォームで動作する。
+- **GPU使用率**は`nvidia-smi --query-gpu=utilization.gpu`から算出する（`readGpuUsagePercent()`）。`nvidia-smi`コマンド自体はNVIDIAドライバがLinux/Windows双方でインストール時にPATHへ追加するため、OS判定なしで共通に試すだけでよい。GPU非搭載機・非NVIDIA GPU環境（AMD/Intel統合GPU等）・macOS（NVIDIAドライバ非提供）ではコマンド起動自体が失敗し、値が取れない。
+- **取得できなかった項目は`N/A`と表示せず、ラベルから丸ごと省略する**（`refresh()`が`List<String> parts`に取得できた項目だけ追加し`String.join(" | ", parts)`で結合）。「ノートPCにGPUが無いのは想定内なので`N/A`は不要、そもそも表示しないでほしい」というユーザー要望に基づく。全項目が取得できない場合は`cachedLabel`が空文字列になり、`EditorCanvas`側の既存の`if (!statsLabel.isEmpty())`ガードでシステムステータス自体が非表示になる（この分岐自体は変更していない）。
+- **サブプロセス起動・待機・エンコーディング処理は`runCommand(String... command)`ヘルパーに集約している**（GPU使用率取得の`nvidia-smi`呼び出しのみで使用）。`native.encoding`での読み取りは`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠（Windows環境でのnvidia-smi出力の文字化け対策）。
+- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）はJDK標準APIで元からクロスプラットフォームに動作するため変更していない。2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
 
 ## 作業時の方針
 
