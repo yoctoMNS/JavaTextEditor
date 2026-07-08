@@ -72,11 +72,12 @@ public class KeymapRegistryTest {
         System.out.println("[未登録キー確認]");
         KeymapRegistry reg = new KeymapRegistry();
 
-        // 登録されていないキー '~' を NORMAL モードで解決
-        // ('@' はマクロ再生 macro.play.pending に、'q' はマクロ記録 macro.record.pending に
-        //  割り当て済みのため、未登録キー確認には別のキーを使う。vim-macro-recording skill参照)
-        String action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_UNDEFINED, '~', 0);
-        check("未登録キー '~' -> null", action == null);
+        // 登録されていないキー '`' を NORMAL モードで解決
+        // ('@' はマクロ再生 macro.play.pending、'q' はマクロ記録 macro.record.pending、
+        //  '~' は大文字小文字トグル case.toggle.char に割り当て済みのため、未登録キー確認には
+        //  別のキーを使う。vim-macro-recording / vim-case-conversion skill参照)
+        String action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_UNDEFINED, '`', 0);
+        check("未登録キー '`' -> null", action == null);
 
         // 登録されていない Ctrl+A を NORMAL モードで解決
         action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_A, (char) 1, KeyEvent.CTRL_DOWN_MASK);
