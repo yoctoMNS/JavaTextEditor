@@ -266,6 +266,19 @@ project-root/
 5. **疑似バッファ退避2系統の相互作用は未定義**: jdk-source 疑似バッファ（`saved*` フィールド群）と `*cd候補*` 疑似バッファ（`cdSaved*` フィールド群）を重ねて使った場合の挙動は未定義・未テスト。
 6. **`ScrollTest` の2ケース（halfPageUp 系）は恒常的に FAIL する**: Ctrl+U の仕様変更（半ページスクロール → バッファ履歴を前へ）にテストが追従しておらず、ベースライン時点で 18/20 PASS。テストを更新するかキー割当てを戻すかは未決定（REFACTORING_PLAN.md U-7）。どちらの修正も仕様判断を伴うため「ついでに」直さないこと。
 
+## Ctrl+Alt+矢印によるペインリサイズの設計決定事項
+
+画面分割中に現在のアクティブペインの縦横幅を伸縮する機能。実装前に `AskUserQuestion` でユーザーに以下を確認済み（詳細は `.claude/skills/gui-rendering-pipeline/references/pane-resize.md` 参照）。
+
+- **矢印キーの意味は「現在ペインを伸縮する」に固定**した（tmux的な「境界を矢印方向へ動かす」方式は不採用）。Right/Down＝現在ペインを常に拡大、Left/Up＝常に縮小。分割の左右/上下どちら側に現在ペインがあっても意味が変わらない。
+- **1回の入力あたりの増減量は固定ピクセル数**（`PANE_RESIZE_STEP_PX`）。Ctrl+Shift+矢印（フォントセルサイズ変更）と同じくキーリピートでの連続操作を想定。
+- **入れ子分割（`:split`/`:vsplit`の組み合わせ）時は、アクティブペインの Swing コンポーネント階層を親方向へ辿り、キーの方向に対応する `orientation` を持つ最初の祖先 `JSplitPane` だけを調整する**。見つからなければ何もしない。`Main.java` の `PaneNode`/`Split` ツリー（構造管理専用で実際の `JSplitPane` インスタンスは持たない）は使わず、実際に画面に貼られている Swing コンポーネント階層を直接辿る方式にした（`buildComponent` はリーフの `EditorCanvas` を中間ラッパーなしで直接 `JSplitPane` の子にするため、`canvas.getParent()` を辿るだけで済む）。
+- **最小ペインサイズは固定ピクセル数**（`PANE_RESIZE_MIN_PX`）でクランプする。
+- **`KeymapRegistry` を経由せず、`Ctrl+W`（ペインフォーカス切替）・`Ctrl+Shift+矢印`（フォントセルサイズ変更）と同じ `Main.java` のグローバル `KeyboardFocusManager` dispatcher で直接処理する**。モードに依存せず動作する（テキスト編集操作ではなくウィンドウレイアウト操作のため）。
+- **リサイズ結果は `:split`/`:vsplit`/ペインを閉じる操作をまたいで保持されない**（`rebuildLayout` が `JSplitPane` を毎回作り直すため）。既存の分割実装がそもそも `dividerLocation` を保持する仕組みを持っていないため、新規の劣化ではなく既存設計の延長として許容し、今回はスコープ外とした。
+- **既知の制約**: `Ctrl+Alt+矢印` はOS/ウィンドウマネージャのグローバルショートカット（Linuxの仮想デスクトップ切り替え等）と衝突し得るが、ユーザーの明示的な指定に基づき採用した。
+- **純粋ロジックの分離**: dividerLocationの新しい値を計算する部分だけを `dev.javatexteditor.ui.PaneResizeCalculator`（新設・Swing非依存）に分離し、`test/dev/javatexteditor/ui/PaneResizeCalculatorTest.java` で検証した。`Main.java` 側の実際の配線（Swing階層探索・`KeyboardFocusManager`）はF10/F11/F12と同様GUI依存のため自動テスト対象外（既知のギャップ）。
+
 ## Ctrl+U/Ctrl+P のバッファ切替（:bnext/:bprev 方式への統一）
 
 - **不具合報告**: SPC+f（telescope）で複数ファイルを開いた場合、Ctrl+U/Ctrl+Pを押しても他の開いているファイルへ切り替わらなかった。

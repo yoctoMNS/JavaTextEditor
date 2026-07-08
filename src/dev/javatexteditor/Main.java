@@ -39,6 +39,10 @@ public class Main {
     private static final int WINDOW_WIDTH  = 1200;
     private static final int WINDOW_HEIGHT = 750;
 
+    // Ctrl+Alt+矢印: アクティブペインのリサイズ量・最小ペインサイズ（ピクセル）
+    private static final int PANE_RESIZE_STEP_PX = 20;
+    private static final int PANE_RESIZE_MIN_PX   = 60;
+
     // 作業ディレクトリの中央管理（main() で初期化）
     private static WorkingDirectoryManager WD_MANAGER;
 
@@ -500,6 +504,37 @@ public class Main {
         updateBorders(allLeaves(root), active);
     }
 
+    /**
+     * Ctrl+Alt+矢印: アクティブペインを囲む祖先のうち、キーの方向に対応するorientationを持つ
+     * 最初のJSplitPaneだけを調整し、現在ペインを伸縮する。対応する分割が見つからなければ何もしない。
+     * PaneNode/Splitツリーではなく、実際に画面に貼られたSwingコンポーネント階層を直接辿る
+     * （buildComponentがリーフのEditorCanvasを中間ラッパーなしでJSplitPaneの子にするため辿れる）。
+     */
+    private static void resizeActivePane(Leaf active, int keyCode) {
+        boolean horizontal = (keyCode == KeyEvent.VK_LEFT || keyCode == KeyEvent.VK_RIGHT);
+        int neededOrientation = horizontal ? JSplitPane.HORIZONTAL_SPLIT : JSplitPane.VERTICAL_SPLIT;
+        boolean grow = (keyCode == KeyEvent.VK_RIGHT || keyCode == KeyEvent.VK_DOWN);
+
+        Component prev = active.canvas();
+        Component cur  = prev.getParent();
+        while (cur != null) {
+            if (cur instanceof JSplitPane sp && sp.getOrientation() == neededOrientation) {
+                boolean isFirstChildActive = (sp.getLeftComponent() == prev);
+                int totalSpan = horizontal ? sp.getWidth() : sp.getHeight();
+                int newLoc = dev.javatexteditor.ui.PaneResizeCalculator.computeNewDividerLocation(
+                    sp.getDividerLocation(), totalSpan, sp.getDividerSize(),
+                    isFirstChildActive, grow, PANE_RESIZE_STEP_PX, PANE_RESIZE_MIN_PX);
+                sp.setDividerLocation(newLoc);
+                sp.revalidate();
+                sp.repaint();
+                return;
+            }
+            prev = cur;
+            cur = cur.getParent();
+        }
+        // 対応方向の分割祖先が見つからない場合は何もしない（単一ペイン・非対応方向のみの入れ子等）
+    }
+
     private static void updateBorders(List<Leaf> leaves, Leaf active) {
         for (Leaf l : leaves) {
             boolean isActive = l == active;
@@ -613,6 +648,17 @@ public class Main {
                                 pressedHandled[0] = true; return true;
                             } else if (kc == KeyEvent.VK_UP) {
                                 active[0].canvas().adjustCellHeight(-1);
+                                pressedHandled[0] = true; return true;
+                            }
+                        }
+
+                        // Ctrl+Alt+矢印: 画面分割中、アクティブペインの縦横幅を伸縮する
+                        boolean alt = (e.getModifiersEx() & KeyEvent.ALT_DOWN_MASK) != 0;
+                        if (ctrl && alt && !shift) {
+                            int kc = e.getKeyCode();
+                            if (kc == KeyEvent.VK_LEFT || kc == KeyEvent.VK_RIGHT
+                                    || kc == KeyEvent.VK_UP || kc == KeyEvent.VK_DOWN) {
+                                resizeActivePane(active[0], kc);
                                 pressedHandled[0] = true; return true;
                             }
                         }

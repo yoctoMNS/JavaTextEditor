@@ -2,10 +2,11 @@
 
 このファイルは`SKILL.md`から参照される、v1完成後の拡張方針。v1（単一バッファ静的表示）が動作確認できてから着手すること。
 
-> **実装状態（2026-06-25 更新）**
+> **実装状態（2026-07-08 更新）**
 > - v2（縦スクロール）: ✅ 実装済み（`scrollRow` / `ensureCursorVisible`）
 > - v3（横スクロール + JSplitPane ウィンドウ分割）: ✅ 実装済み（`scrollCol` / `ensureCursorColVisible` / Ctrl+W フォーカス切り替え）
-> - v4 以降: 本ファイル末尾の「v4 候補」セクション参照
+> - v4: Ctrl+Alt+矢印によるペインリサイズ ✅ 実装済み（`references/pane-resize.md` 参照）
+> - v4 その他の候補: 本ファイル末尾の「v4 候補」セクション参照
 
 ---
 
@@ -100,6 +101,11 @@ splitPane.setResizeWeight(0.5);
 `Ctrl+W` は `KeyboardFocusManager` の dispatcher レベルでインターセプトし、`int[] activePaneIdx` でアクティブペインを切り替える。
 
 ---
+
+## v4: Ctrl+Alt+矢印によるペインリサイズ（✅ 実装済み）
+
+詳細な仕様決定・実装は `references/pane-resize.md` に分離した（現在のアクティブペインを
+Ctrl+Alt+矢印で伸縮する機能。祖先の`JSplitPane`を辿って対応方向の分割を1つだけ調整する設計）。
 
 ## v4 候補（未着手）
 
