@@ -358,7 +358,7 @@ public class Main {
         if (runningProcess != null && runningProcess.isAlive()) {
             runningProcess.destroy();
         }
-        Path binDir = projectRoot.resolve(dev.javatexteditor.projectbuild.ProjectBuilder.OUTPUT_DIR_NAME);
+        Path binDir = PROJECT_BUILDER.binDirFor(projectRoot);
         editor.setStatusMessage("run: " + fqcn + " を実行中...");
         Thread.ofVirtual().start(() -> {
             StringBuilder output = new StringBuilder();
