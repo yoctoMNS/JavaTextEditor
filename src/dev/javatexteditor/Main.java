@@ -457,6 +457,10 @@ public class Main {
             JFrame frame, PaneNode[] root, Leaf[] active) {
         for (Leaf leaf : allLeaves(root[0])) {
             setupSplitCallbacks(frame, root, active, leaf);
+            // :wa/:qa/:qa! の対象を現在の全ペインにする（分割構成は :split/:vsplit のたびに変わるため、
+            // 固定リストではなく毎回 allLeaves(root[0]) を再評価するSupplierを渡す）。
+            leaf.editor().setAllEditorsSupplier(
+                    () -> allLeaves(root[0]).stream().map(Leaf::editor).toList());
             leaf.editor().setMovePanePrevCallback(() -> {
                 List<Leaf> leaves = allLeaves(root[0]);
                 if (leaves.size() <= 1) return;

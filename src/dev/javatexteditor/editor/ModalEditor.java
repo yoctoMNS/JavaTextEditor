@@ -123,11 +123,15 @@ public class ModalEditor {
     private String currentFilePath = null;
     private String statusMessage = "";
     private Runnable exitCallback = () -> System.exit(0);
+    private Runnable exitAllCallback = () -> System.exit(0); // :qa/:qa! 用。既定はexitCallbackと同じ全終了
     private Runnable closeBlockedCallback = null; // 最後の1ペインで :q を拒否するとき呼ぶ
     private Runnable splitHorizontalCallback = null; // sv: 左右分割
     private Runnable splitVerticalCallback   = null; // ss: 上下分割
     private Runnable movePanePrevCallback    = null; // sh/sk: 前のペインへ
     private Runnable movePaneNextCallback    = null; // sl/sj: 次のペインへ
+    // :wa/:qa/:qa! が対象とする「開いている全編集対象」を返す。既定は自分自身のみ（単一ペイン相当）で、
+    // 画面分割時は Main.java が全ペインの ModalEditor を返すよう差し替える（movePanePrevCallback等と同じ配線方式）。
+    private Supplier<List<ModalEditor>> allEditorsSupplier = () -> List.of(this);
     // JDK API ナビゲーション用インデックス（バックグラウンドで構築）
     private JdkClassIndex jdkIndex = null;
     private final JdkJavadocReader javadocReader = new JdkJavadocReader();
@@ -308,6 +312,11 @@ public class ModalEditor {
         this.exitCallback = callback;
     }
 
+    /** :qa/:qa! で全終了するときに呼ばれるコールバックを差し替える（既定は System.exit(0)）。 */
+    public void setExitAllCallback(Runnable callback) {
+        this.exitAllCallback = callback;
+    }
+
     public void setCloseBlockedCallback(Runnable callback) {
         this.closeBlockedCallback = callback;
     }
@@ -326,6 +335,16 @@ public class ModalEditor {
 
     public void setMovePaneNextCallback(Runnable callback) {
         this.movePaneNextCallback = callback;
+    }
+
+    /** :wa/:qa/:qa! の対象一覧を差し替える。画面分割時に Main.java から全ペイン分を渡すために使う。 */
+    public void setAllEditorsSupplier(Supplier<List<ModalEditor>> supplier) {
+        this.allEditorsSupplier = supplier;
+    }
+
+    /** 最後の保存以降に編集操作が行われたか（:wa/:qa 判定用）。 */
+    public boolean isModified() {
+        return buffer.isModified();
     }
 
     /**
@@ -2024,6 +2043,8 @@ public class ModalEditor {
     private void executeCommand(String cmd) {
         if (handleSubstituteCommand(cmd)) {
             // 置換コマンドとして処理済み
+        } else if (cmd.equals("wa") || cmd.equals("wall")) {
+            saveAll();
         } else if (cmd.equals("w")) {
             saveToFile(currentFilePath);
         } else if (cmd.startsWith("w ")) {
@@ -2063,6 +2084,10 @@ public class ModalEditor {
             if (splitVerticalCallback != null) splitVerticalCallback.run();
         } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
             if (splitHorizontalCallback != null) splitHorizontalCallback.run();
+        } else if (cmd.equals("qa") || cmd.equals("qall")) {
+            quitAll(false);
+        } else if (cmd.equals("qa!") || cmd.equals("qall!")) {
+            quitAll(true);
         } else if (cmd.equals("q")) {
             if (closeBlockedCallback != null) {
                 closeBlockedCallback.run();
@@ -2275,12 +2300,69 @@ public class ModalEditor {
             Files.createDirectories(targetPath.getParent());
             Files.writeString(targetPath, buffer.getText());
             statusMessage = "\"" + targetPath + "\" written";
+            buffer.markSaved();
             if (onSave != null) onSave.run();
             return true;
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
             return false;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // :wa / :qa / :qa!（Vim互換の全保存・全終了）
+    // 対象は allEditorsSupplier が返す全 ModalEditor（既定は自分自身のみ＝単一ペイン相当。
+    // 画面分割時は Main.java が setAllEditorsSupplier() で全ペイン分に差し替える）。
+    // saveToFile()/currentFilePath は private だが、同一クラス内であれば他インスタンスのメンバーにも
+    // アクセスできるという Java の仕様を利用し、新規のpublicメソッドを増やさずに済ませている。
+    // -------------------------------------------------------------------------
+
+    /** :wa / :wall。未保存変更のある全編集対象のみ保存する。 */
+    private void saveAll() {
+        List<ModalEditor> editors = allEditorsSupplier.get();
+        int savedCount = 0;
+        List<String> failed = new ArrayList<>();
+        for (ModalEditor ed : editors) {
+            if (!ed.buffer.isModified()) continue;
+            String label = ed.currentFilePath != null ? ed.currentFilePath : "(no file name)";
+            if (ed.saveToFile(ed.currentFilePath)) {
+                savedCount++;
+            } else {
+                failed.add(label);
+            }
+        }
+        if (!failed.isEmpty()) {
+            statusMessage = "E: failed to save: " + String.join(", ", failed);
+        } else if (savedCount == 0) {
+            statusMessage = "no changes to save";
+        } else {
+            statusMessage = savedCount + " file(s) written";
+        }
+    }
+
+    /**
+     * :qa / :qall（force=false）と :qa! / :qall!（force=true）。
+     * force=false の場合、未保存変更のある編集対象が1つでもあれば全終了を拒否しメッセージを出す。
+     * force=true の場合は未保存変更を破棄してアプリケーション全体を終了する。
+     * :q と異なり、画面分割中でも「現在のペインを閉じる」ではなく常にアプリケーション全体を終了する
+     * （Vimの :qa がウィンドウ分割の有無に関わらずアプリケーションを終了するのと同じ意味論）。
+     */
+    private void quitAll(boolean force) {
+        List<ModalEditor> editors = allEditorsSupplier.get();
+        if (!force) {
+            List<String> unsaved = new ArrayList<>();
+            for (ModalEditor ed : editors) {
+                if (ed.buffer.isModified()) {
+                    unsaved.add(ed.currentFilePath != null ? ed.currentFilePath : "[No Name]");
+                }
+            }
+            if (!unsaved.isEmpty()) {
+                statusMessage = "E37: No write since last change for: "
+                        + String.join(", ", unsaved) + " (add ! to override)";
+                return;
+            }
+        }
+        exitAllCallback.run();
     }
 
     /**
