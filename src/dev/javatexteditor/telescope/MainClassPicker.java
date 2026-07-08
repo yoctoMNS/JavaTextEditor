@@ -36,9 +36,4 @@ public class MainClassPicker implements TelescopePicker {
         result.sort(Comparator.comparingInt(TelescopeItem::score).reversed());
         return result;
     }
-
-    @Override
-    public String preview(TelescopeItem item) {
-        return "public static void main(String[] args)\n\n" + item.display();
-    }
 }

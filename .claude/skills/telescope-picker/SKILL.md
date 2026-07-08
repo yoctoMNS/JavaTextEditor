@@ -1,6 +1,6 @@
 ---
 name: telescope-picker
-description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、telescope.nvim風ファジーファインダー（SPC+f=ファイル検索/SPC+/=ライブgrep/SPC+b=バッファ一覧・3ペインオーバーレイ）を設計・実装する際に使用する。「ファジー検索を追加したい」「FuzzyMatcherのスコアリング」「TELESCOPEモードのキー処理・モード遷移」といった相談、またFilePicker/GrepPicker/BufferPickerを触る作業に着手する前に、必ず最初に参照すること。"
+description: "Vim/Emacsの良い所を統合したJava SE製テキストエディタにおいて、telescope.nvim風ファジーファインダー（SPC+f=ファイル検索/SPC+/=ライブgrep/SPC+b=バッファ一覧。あいまい検索は維持しつつ表示は\\f/\\gと同じ疑似バッファ方式。3ペインオーバーレイは2026-07に廃止）を設計・実装する際に使用する。「ファジー検索を追加したい」「FuzzyMatcherのスコアリング」「TELESCOPEモードのキー処理・モード遷移」といった相談、またFilePicker/GrepPicker/BufferPickerを触る作業に着手する前に、必ず最初に参照すること。"
 ---
 
 # telescope-picker スキル
@@ -95,9 +95,6 @@ ModalEditor (TELESCOPE モード追加)
         score: int
 ```
 
-`EditorCanvas` に `drawTelescopeOverlay()` を追加し、
-`paintComponent` の末尾（テキストの上）に半透明オーバーレイとして描画する。
-
 ### モード遷移
 
 ```
@@ -109,29 +106,58 @@ NORMAL
 TELESCOPE
   文字入力    → queryBuffer に追加 → リアルタイムフィルタ
   Backspace   → queryBuffer から削除
-  Ctrl+N / j  → 次候補へ
-  Ctrl+P / k  → 前候補へ
+  Ctrl+N      → 次候補へ
+  Ctrl+P      → 前候補へ
   Enter       → 選択候補を開く → NORMAL
   Escape      → キャンセル → NORMAL
 ```
 
-### UIレイアウト（EditorCanvas 上のオーバーレイ）
+### UIレイアウト：`\f`/`\g` と同じ疑似バッファ表示（3ペインオーバーレイは廃止）
 
-```
-canvasHeight = H, canvasWidth = W
+**2026-07 に設計変更**: 当初は `EditorCanvas.drawTelescopeOverlay()` による
+「半透明の3ペインフローティングウィンドウ（プロンプト＋Results 40%＋Preview 60%）」
+として実装していたが、ユーザーから「telescopeのウィンドウを廃止し、`\f`（ファイル名検索）・
+`\g`（grep）と同じ表示方法に揃えてほしい」という明示的な指示があり、表示方式のみを刷新した。
 
-オーバーレイ全体: 幅 W*0.85, 高さ H*0.75, 中央配置
-
-┌─────────────────────────────────────────────┐
-│ > query_text                                │  ← プロンプト（最上部 1行）
-├─────────────────┬───────────────────────────┤
-│ results (40%)   │ preview (60%)             │
-│  ▸ Foo.java     │  1: package dev.jte;      │
-│    Bar.java     │  2:                        │
-│    Baz.java     │  3: public class Foo {    │
-│    ...          │  ...                      │
-└─────────────────┴───────────────────────────┘
-```
+- **あいまい検索・スコアリング（FuzzyMatcher）自体は維持**。ユーザーへの確認の上、
+  「1行入力→Enterで一括実行」という `\f`/`\g` の実行モデルまでは真似せず、
+  1文字入力するたびに `TelescopePicker.filter(query)` を呼び直すリアルタイムフィルタは
+  そのまま残した（変わったのは結果の描画方法だけ）。
+- **結果は `EditorCanvas` の半透明オーバーレイではなく、`\f`（`*file-search*`）・
+  `\g`（`*grep*`）と全く同じ「ヘッダ行＋結果1行ずつ」の疑似バッファとして `buffer`
+  （実際のテキストバッファ）に直接描画する**（`ModalEditor.renderTelescopeBuffer()`）。
+  ヘッダ行の書式は `*<picker.title()>* <query> — N result(s)`。
+  プレビューペインは廃止し、`TelescopePicker.preview()` メソッド自体を
+  インタフェースおよび全実装（FilePicker/GrepPicker/BufferPicker/MainClassPicker）
+  から削除した（呼び出し元がなくなり死コードになるため）。
+- **選択中の候補は専用のハイライトではなく、実際のテキストカーソル（`cursorRow`）を
+  その行に合わせることで示す**。`moveTelescope()`（Ctrl+N/P）は結果リスト自体を
+  再構築せず `cursorRow` を動かすだけでよい（`telescopeSelectedIdx + 1`。+1は
+  ヘッダ行の分）。クエリが変わって結果リストが変化したとき（`refreshTelescope()`）
+  だけ `renderTelescopeBuffer()` で `buffer` を再構築する。
+- **入力中のクエリはステータス行（コマンドライン領域）に `title  > query` として表示する**
+  （`\f`/`\g` が `\f` + `fileSearchBuffer` を表示するのと同じ場所・同じ仕組み）。
+- **telescope 起動時は現在の `buffer`/`currentFilePath`/カーソル位置を
+  `telescopeSaved*` フィールドに退避し、Esc キャンセル時にそのまま復元する**
+  （`ModalEditor.beginTelescopeSession()` / `exitTelescope()`）。これは jdk-source
+  疑似バッファの `saved*` や `*cd候補*` の `cdSaved*` と同じ「一時退避→復元」パターンだが、
+  専用のフィールド群を持つ独立実装にした（3系統の相互作用は未定義のまま。
+  CLAUDE.md「既知の未接続・二重定義」参照）。
+  **telescope 起動時にたまたま `*grep*`/`*file-search*` 結果バッファの上にいた場合**、
+  `grepResults`/`grepBaseDir`/`fileNameResults` も退避・復元する
+  （telescope が `buffer` を上書きするため、退避しないと Esc 後にその疑似バッファの
+  Enter ジャンプが効かなくなる退行が起きるため。単なるテキストの巻き戻しだけでなく、
+  疑似バッファの「意味」まで含めて復元する必要があった）。
+- **F11 の `MainClassPicker`（複数 main クラスからの選択）も同じ疑似バッファ表示に統一した**。
+  `enterMainClassPicker()` は `beginTelescopeSession()` を共有し、Enter で選択した際は
+  `exitTelescope()` が退避済みの元バッファ（F11 を押した時点で開いていたソースファイル）を
+  先に復元してから `onRunMainClassSelected` コールバックを呼ぶため、実行対象のソース
+  バッファ自体は以前（オーバーレイ方式で `buffer` に一切触れなかった頃）と同じ状態に戻る。
+- **`EditorCanvas.setTelescopeState()`/`drawTelescopeOverlay()` 自体は削除していない**。
+  IMPORT_SELECT（未定義シンボルの import 選択）・FILER（`:cd` 後のディレクトリブラウザ）が
+  同じオーバーレイ描画を流用しているため、これらは変更対象外（今回廃止したのは
+  telescope-picker が使っていた「3ペイン・あいまい検索フローティングウィンドウ」という
+  UI パターンであり、EditorCanvas 側の汎用オーバーレイ描画インフラそのものではない）。
 
 ### FuzzyMatcher の実装
 
@@ -180,8 +206,7 @@ public static MatchResult match(String query, String target) {
 |---|---|
 | `FileNameSearcher` | FilePicker のベースとなるファイルリスト取得 |
 | `ProjectSearcher` | GrepPicker のgrep実行 |
-| `EditorCanvas` | オーバーレイ描画（`drawTelescopeOverlay()` 追加） |
-| `ModalEditor` | TELESCOPE モード追加・キー処理 |
+| `ModalEditor` | TELESCOPE モード追加・キー処理・`renderTelescopeBuffer()` で疑似バッファ描画（`EditorCanvas` のオーバーレイは使わない。上記「UIレイアウト」節参照） |
 
 `ModalEditor` は `List<ModalEditor>` 形式で開きバッファを保持しないため、
 BufferPicker は `Main.java` 側から `List<Leaf>` を `ModalEditor` に渡す形にする。

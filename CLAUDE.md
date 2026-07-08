@@ -99,7 +99,7 @@ project-root/
 | ⑰ | `font-and-statusline-animation` | ビットマップフォント埋め込み・ステータスラインの歩行キャラクターアニメーション | ✅ Skill追加（設計知識のみ・実装は⑤完了後） |
 | ⑱ | `text-search` | Vim式バッファ内文字列検索（/・*・#・n・N・正規表現・ハイライト） | ✅ 完了（34/34テスト） |
 | ⑲ | `file-search` | \fファイル名検索・\gファイル内容grep（NORMALモード・疑似バッファ表示） | ✅ 完了（43/43テスト） |
-| ⑳ | `telescope-picker` | telescope.vim風ファジーファインダー（SPC+f/SPC+//SPC+b・3ペインオーバーレイ） | ✅ 完了（28/28テスト・FilePicker/GrepPicker/BufferPicker・FuzzyMatcher） |
+| ⑳ | `telescope-picker` | telescope.vim風ファジーファインダー（SPC+f/SPC+//SPC+b・あいまい検索は維持しつつ`\f`/`\g`と同じ疑似バッファ表示） | ✅ 完了（28/28テスト・FilePicker/GrepPicker/BufferPicker・FuzzyMatcher。3ペインオーバーレイは2026-07に廃止、詳細はSkill参照） |
 | ㉑ | `simple-filer` | `:cd` 実行後に表示されるディレクトリ一覧・ファイルブラウザ（FILERモード） | ✅ 完了（46/46テスト） |
 | ㉒ | `editor-tutorial` | `:tutor`/`:tutorial` で開く vimtutor 形式の対話型チュートリアル | ✅ 完了（9/9テスト） |
 | ㉓ | `symbol-definition-navigation` | Shift+K（定義へジャンプ、Eclipse/IntelliJ流に統合）/Shift+J（一つ前の参照へ戻る）/`gr`（参照一覧、jdk-source疑似バッファ内では`lib/openjdk-native/`のネイティブ実装側を検索） | ✅ 完了（28/28テスト・`ProjectSymbolResolver`・⑩の`jumpToMethod`を`jumpToMember`に一般化してJDKフィールドにも対応。`gd`は`K`に統合し廃止。`executeGrep`/`jumpToGrepResult`をbaseDir一般化して⑫`openjdk-source-tracing`のnative参照検索を先行実装） |
@@ -226,7 +226,7 @@ project-root/
 
 - **対象は「エディタが現在開いている作業ディレクトリ（`:cd`で設定した`projectRoot`）配下の任意のJavaプロジェクト」**であり、JavaTextEditor自身を自己ビルドする専用機能ではない（汎用IDE的機能）。
 - **F10（コンパイル）**: `javax.tools.JavaCompiler` で `projectRoot` 配下の全 `.java` を走査してコンパイルし、`.class` を `projectRoot/bin`（`dev.javatexteditor.projectbuild.ProjectBuilder.OUTPUT_DIR_NAME`）に出力する。外部 `javac` プロセスは起動しない。ソース走査は `FileNameSearcher.SKIP_DIRS`（`.git`/`build`/`target`/`.gradle`/`node_modules`/`.idea`/`.vscode`）に加え出力先自身の `bin/` もスキップする。
-- **F11（実行）**: 対象クラスは `dev.javatexteditor.projectbuild.MainClassFinder` が `projectRoot` 配下を正規表現で走査し `public static void main(String[])` を持つクラスを索引化して決定する（javac AST解析は使わない。WordIndexと同じ「軽量な正規表現ベース」の理由づけ）。1件なら即実行、複数あれば ⑳ `telescope-picker` の3ペインオーバーレイ（`MainClassPicker`）を流用して選択させる。`bin/` に `.class` が1つもない（＝F10未実行）場合はエラー表示のみで実行しない。実行は `ProcessBuilder` による別プロセス起動（`java -cp <projectRoot>/bin <FQCN>`）とし、対象アプリのGUI/標準入出力がエディタ自身のJVMを汚染しないようにした。既に前回起動した実行プロセスが生きていれば `destroy()` してから起動し直す（多重実行防止）。
+- **F11（実行）**: 対象クラスは `dev.javatexteditor.projectbuild.MainClassFinder` が `projectRoot` 配下を正規表現で走査し `public static void main(String[])` を持つクラスを索引化して決定する（javac AST解析は使わない。WordIndexと同じ「軽量な正規表現ベース」の理由づけ）。1件なら即実行、複数あれば ⑳ `telescope-picker` の疑似バッファ選択UI（`MainClassPicker`。2026-07以降は`\f`/`\g`と同じ表示方式。旧: 3ペインオーバーレイ）を流用して選択させる。`bin/` に `.class` が1つもない（＝F10未実行）場合はエラー表示のみで実行しない。実行は `ProcessBuilder` による別プロセス起動（`java -cp <projectRoot>/bin <FQCN>`）とし、対象アプリのGUI/標準入出力がエディタ自身のJVMを汚染しないようにした。既に前回起動した実行プロセスが生きていれば `destroy()` してから起動し直す（多重実行防止）。
 - **F12**: F10を実行し、成功した場合のみ続けてF11相当（mainクラス解決→実行）を行う。F10が失敗した場合はF11側の処理を行わない。
 - **出力表示**: コンパイル結果・実行結果はいずれも既存の `:grep`/`:rename` と同じ「疑似バッファ」パターン（`*compile*`・`*run*`。`pushBuffer()`を呼ばず直接 `buffer` を差し替えるため、Ctrl+Uの履歴には積まれない）で表示する。専用のガター描画・オーバーレイは追加していない。
 - **有効モード**: NORMALモードのみ。`F2`（診断表示）と同様、`KeymapRegistry` を経由せず `Main.java` のグローバルキーイベントディスパッチャで直接ハードコード処理する（Fキー全般がこの方式）。

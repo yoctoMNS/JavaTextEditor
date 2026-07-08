@@ -182,6 +182,18 @@ public class ModalEditor {
     private enum TelescopePurpose { NAVIGATE, RUN_MAIN_CLASS }
     private TelescopePurpose telescopePurpose = TelescopePurpose.NAVIGATE;
     private Consumer<String> onRunMainClassSelected;
+    // telescope 疑似バッファ（\f/\g と同じ表示方式）の退避状態。
+    // jdk-source の saved*/*cd候補* の cdSaved* と同じ「一時退避→キャンセル時に復元」パターンを踏襲するが、
+    // 各セッションは独立したフィールド群を持つ（3系統の相互作用は未定義のまま。CLAUDE.md「既知の未接続・二重定義」参照）。
+    private String telescopeSavedBufferText = null;
+    private String telescopeSavedFilePath = null;
+    private int telescopeSavedCursorRow = 0;
+    private int telescopeSavedCursorCol = 0;
+    // telescope 起動時にたまたま grep/file-search 結果バッファの上にいた場合、その一覧も退避して復元する
+    // （telescope が buffer を上書きするため、退避しないと Esc キャンセル後に Enter ジャンプが効かなくなる）。
+    private List<SearchResult> telescopeSavedGrepResults = null;
+    private Path telescopeSavedGrepBaseDir = null;
+    private List<String> telescopeSavedFileNameResults = null;
     // telescope 起動時にバッファ一覧を供給するコールバック（Main.java から設定）
     private java.util.function.Supplier<List<BufferPicker.BufferEntry>> bufferListSupplier = null;
     // ファイルを開いたとき（telescope/`:e`）にバッファレジストリへ登録するコールバック
@@ -1559,6 +1571,8 @@ public class ModalEditor {
 
     // -------------------------------------------------------------------------
     // TELESCOPE モード処理（SPC+f / SPC+/ / SPC+b）
+    // \f（*file-search*）/ \g（*grep*）と同じ「疑似バッファに結果一覧を表示し、Enterでジャンプ」
+    // 方式で表示する（旧: EditorCanvas の3ペインオーバーレイ。あいまい検索・スコアリング自体は維持）。
     // -------------------------------------------------------------------------
 
     private void enterTelescope(String pickerType) {
@@ -1574,22 +1588,61 @@ public class ModalEditor {
             default -> { return; }
         }
         telescopePurpose = TelescopePurpose.NAVIGATE;
+        beginTelescopeSession();
+    }
+
+    /** F11: mainメソッドを持つクラスが複数見つかった場合、\f/\g と同じ疑似バッファ方式で選択させる。 */
+    public void enterMainClassPicker(List<String> fqcns) {
+        telescopePicker = new MainClassPicker(fqcns);
+        telescopePurpose = TelescopePurpose.RUN_MAIN_CLASS;
+        beginTelescopeSession();
+        statusMessage = "実行するmainクラスを選択してください（Enterで実行、Escでキャンセル）";
+    }
+
+    /**
+     * telescope セッション（SPC+f/SPC+//SPC+b・F11）を開始する共通処理。
+     * 現在のバッファ（grep/file-search結果バッファを含む）を telescopeSaved* に退避し、
+     * *picker* 疑似バッファに差し替える。キャンセル時（Esc）は退避した状態にそのまま戻す。
+     */
+    private void beginTelescopeSession() {
+        telescopeSavedBufferText = buffer.getText();
+        telescopeSavedFilePath = currentFilePath;
+        telescopeSavedCursorRow = cursorRow;
+        telescopeSavedCursorCol = cursorCol;
+        telescopeSavedGrepResults = grepResults;
+        telescopeSavedGrepBaseDir = grepBaseDir;
+        telescopeSavedFileNameResults = fileNameResults;
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
         telescopeResults = telescopePicker.filter("");
         mode = Mode.TELESCOPE;
         statusMessage = "";
+        renderTelescopeBuffer();
     }
 
-    /** F11: mainメソッドを持つクラスが複数見つかった場合、telescope-picker の3ペインオーバーレイで選択させる。 */
-    public void enterMainClassPicker(List<String> fqcns) {
-        telescopePicker = new MainClassPicker(fqcns);
-        telescopePurpose = TelescopePurpose.RUN_MAIN_CLASS;
-        telescopeQuery.setLength(0);
-        telescopeSelectedIdx = 0;
-        telescopeResults = telescopePicker.filter("");
-        mode = Mode.TELESCOPE;
-        statusMessage = "実行するmainクラスを選択してください（Enterで実行、Escでキャンセル）";
+    /**
+     * telescopeResults/telescopeSelectedIdx の現在値を \f（*file-search*）・\g（*grep*）と同じ
+     * 「ヘッダ行＋結果1行ずつ」の疑似バッファ形式で buffer に描画する。
+     * 選択中の候補は専用のハイライトではなく、cursorRow をその行に合わせることで示す
+     * （実際のテキストカーソルがそのまま選択マーカーになる）。
+     */
+    private void renderTelescopeBuffer() {
+        String title = (telescopePicker != null) ? telescopePicker.title() : "";
+        String query = telescopeQuery.toString();
+        StringBuilder sb = new StringBuilder();
+        sb.append('*').append(title).append('*');
+        if (!query.isEmpty()) sb.append(' ').append(query);
+        sb.append(" — ").append(telescopeResults.size()).append(" result(s)\n");
+        for (TelescopeItem item : telescopeResults) {
+            sb.append(item.display()).append('\n');
+        }
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        clearSearchHighlights();
+        cursorRow = telescopeResults.isEmpty() ? 0 : telescopeSelectedIdx + 1;
+        cursorCol = 0;
     }
 
     private void processTelescopeKey(int keyCode, char keyChar, int modifiers) {
@@ -1636,16 +1689,20 @@ public class ModalEditor {
         }
     }
 
+    /** 結果リスト自体は変わらないので、選択行に合わせて実カーソルを動かすだけでよい。 */
     private void moveTelescope(int delta) {
         if (telescopeResults.isEmpty()) return;
         telescopeSelectedIdx = Math.max(0, Math.min(telescopeResults.size() - 1,
             telescopeSelectedIdx + delta));
+        cursorRow = telescopeSelectedIdx + 1;
+        cursorCol = 0;
     }
 
     private void refreshTelescope() {
         if (telescopePicker == null) return;
         telescopeResults = telescopePicker.filter(telescopeQuery.toString());
         telescopeSelectedIdx = 0;
+        renderTelescopeBuffer();
     }
 
     private void openTelescopeSelection() {
@@ -1714,6 +1771,7 @@ public class ModalEditor {
         }
     }
 
+    /** telescope セッションを終了し、beginTelescopeSession() で退避した元バッファに戻す。 */
     private void exitTelescope() {
         mode = Mode.NORMAL;
         telescopePicker = null;
@@ -1721,7 +1779,18 @@ public class ModalEditor {
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
-        if (canvas != null) canvas.setTelescopeState(false, "", "", List.of(), 0, "");
+        buffer = new UndoablePieceTable(telescopeSavedBufferText != null ? telescopeSavedBufferText : "");
+        currentFilePath = telescopeSavedFilePath;
+        cursorRow = telescopeSavedCursorRow;
+        cursorCol = telescopeSavedCursorCol;
+        grepResults = telescopeSavedGrepResults;
+        grepBaseDir = telescopeSavedGrepBaseDir;
+        fileNameResults = telescopeSavedFileNameResults;
+        telescopeSavedBufferText = null;
+        telescopeSavedFilePath = null;
+        telescopeSavedGrepResults = null;
+        telescopeSavedGrepBaseDir = null;
+        telescopeSavedFileNameResults = null;
     }
 
     private void executeFileNameSearch(String pattern) {
@@ -3808,19 +3877,17 @@ public class ModalEditor {
             } else if (mode == Mode.FILESEARCH) {
                 String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
                 canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
+            } else if (mode == Mode.TELESCOPE && telescopePicker != null) {
+                canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
             } else if (!statusMessage.isEmpty()) {
                 canvas.setCommandLineText(statusMessage);
             } else {
                 canvas.setCommandLineText(null);
             }
 
-            // telescope オーバーレイ更新
-            if (mode == Mode.TELESCOPE && telescopePicker != null) {
-                String preview = telescopeResults.isEmpty() ? "" :
-                    telescopePicker.preview(telescopeResults.get(telescopeSelectedIdx));
-                canvas.setTelescopeState(true, telescopePicker.title(),
-                    telescopeQuery.toString(), telescopeResults, telescopeSelectedIdx, preview);
-            } else if (mode == Mode.IMPORT_SELECT) {
+            // TELESCOPE は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
+            // オーバーレイは使わない。IMPORT_SELECT/FILER は従来どおりオーバーレイを使う。
+            if (mode == Mode.IMPORT_SELECT) {
                 // import 候補選択モーダル: TelescopeItem リストとして表示する
                 List<TelescopeItem> items = new ArrayList<>();
                 for (String fqn : importSelectFqns) {
