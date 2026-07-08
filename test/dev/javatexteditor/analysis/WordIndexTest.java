@@ -27,6 +27,7 @@ public class WordIndexTest {
         testExtraWordsMerged();
         testExactMatchIncluded();
         testExtractWords();
+        testCaseInsensitivePrefix();
         testBuildTimeOnProjectSrc();
 
         System.out.println("=== " + passed + "/" + (passed + failed) + " PASSED ===");
@@ -150,6 +151,32 @@ public class WordIndexTest {
         assertTrue("damage_value が抽出される", words.contains("damage_value"));
         assertTrue("int が抽出される（キーワードも区別しない）", words.contains("int"));
         assertTrue("数値リテラルは抽出されない", !words.contains("10"));
+    }
+
+    private static void testCaseInsensitivePrefix() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_ci_");
+        try {
+            Files.writeString(tmp.resolve("Sample.java"), "class ArrayListWrapper { int arraySize; }");
+            WordIndex idx = WordIndex.buildSync(tmp);
+
+            List<String> lower = idx.query("array", 10, null);
+            assertTrue("小文字プレフィックスで大文字始まりの単語もヒットする", lower.contains("ArrayListWrapper"));
+            assertTrue("小文字プレフィックスで小文字始まりの単語もヒットする", lower.contains("arraySize"));
+
+            List<String> upper = idx.query("ARRAY", 10, null);
+            assertTrue("大文字プレフィックスでも大文字始まりの単語がヒットする", upper.contains("ArrayListWrapper"));
+            assertTrue("大文字プレフィックスでも小文字始まりの単語がヒットする", upper.contains("arraySize"));
+
+            // extraWords（現在編集中バッファの単語）側も大文字小文字を区別しない
+            List<String> extra = idx.query("hit", 10, Set.of("HitPoint"));
+            assertTrue("extraWords も大文字小文字を区別せずマッチする", extra.contains("HitPoint"));
+
+            // extractWordsByProximity 側も大文字小文字を区別しない
+            List<String> proximity = WordIndex.extractWordsByProximity("int HitPoint = 1;", 0, "hit");
+            assertTrue("extractWordsByProximity も大文字小文字を区別しない", proximity.contains("HitPoint"));
+        } finally {
+            deleteDir(tmp);
+        }
     }
 
     private static void testBuildTimeOnProjectSrc() {
