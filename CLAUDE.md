@@ -290,7 +290,14 @@ project-root/
   - キー割り当て自体は変更していない（Ctrl+U=前方向/`:bprev`相当、Ctrl+P=次方向/`:bnext`相当のまま）。
 - **`switchToRelativeBuffer()` の副変更**: 開いているファイルバッファが自分1件のみ（＝他に切替先がない）場合に何もフィードバックせず無反応だった挙動を、「他に開いているファイルバッファがありません」という `statusMessage` を出すように変更した。
 - **意図的に変更しなかった点**: `switchToRelativeBuffer()` は既存同様、切替先ファイルを毎回ディスクから読み直す（`Files.readString`）。未保存の編集内容を保持したままバッファを切り替える仕組みは元から無く、今回もスコープ外（`openTelescopeSelection()` も同じ挙動）。
-- **テスト**: `test/dev/javatexteditor/editor/BufferSwitchTest.java`（新設・9テスト）。`Main.java` の `BUFFER_REGISTRY`/`registerBuffer` 相当をテスト内に最小限のフェイク実装として再現し、複数ファイルを開いた状態での Ctrl+P（前方循環・折り返し）・Ctrl+U（後方循環・折り返し）と、`:enew` のようなファイルパスなしバッファでの Ctrl+U フォールバックの両方を検証している。
+- **テスト**: `test/dev/javatexteditor/editor/BufferSwitchTest.java`（当初9テスト）。`Main.java` の `BUFFER_REGISTRY`/`registerBuffer` 相当をテスト内に最小限のフェイク実装として再現し、複数ファイルを開いた状態での Ctrl+P（前方）・Ctrl+U（後方）と、`:enew` のようなファイルパスなしバッファでの Ctrl+U フォールバックの両方を検証している。
+
+### `:bnext`/`:bprev`/`:bn`/`:bp` コマンド追加とラップアラウンド廃止（後日変更）
+
+- **経緯**: 「Vim完全互換ではなく複数バッファ間を`:bnext`/`:bprev`で移動できるだけのシンプル実装がほしい。末尾/先頭ではラップアラウンドしない」という依頼があったが、既存の `switchToRelativeBuffer()`（上記節）は `Math.floorMod` で末尾→先頭に循環する実装済みだった。新規に `id`/`name`/`content` を持つ独立の配列とAPIを作る案（依頼の字面どおり）は、この既存のCtrl+U/Ctrl+P実装と直接衝突するため、着手前にユーザーに確認し「既存を仕様変更（ラップアラウンド廃止）」を選択してもらった。
+- **変更内容**: `switchToRelativeBuffer(delta)` の境界処理を `Math.floorMod` から `Math.max(0, Math.min(entries.size() - 1, currentIdx + delta))` のクランプ方式に変更し、末尾で`:bnext`/Ctrl+P・先頭で`:bprev`/Ctrl+Uを行ってもその場に留まるようにした（境界到達時は `statusMessage` で「これ以上次/前のバッファはありません」と表示）。`executeCommand()` に `bnext`/`bn`（`switchToRelativeBuffer(+1)`）と `bprev`/`bp`（`switchToRelativeBuffer(-1)`）を追加し、Ctrl+P/Ctrl+Uキーと同じ内部メソッドを呼ぶ形にした（新規の `Buffer{id,name,content}` 配列・`addBuffer()`等のAPIは作っていない。既存の `BUFFER_REGISTRY`/`BufferPicker.BufferEntry` 構造をそのまま利用）。
+- **意図的に変更しなかった点**: `currentFilePath == null`（`:enew`等の疑似バッファ）時の `bufferHistory` フォールバック方式・Ctrl+U/Ctrl+Pのキー割り当てそのもの・ファイル内容をディスクから読み直す挙動（未保存編集を保持しない）は変更していない。
+- **テスト**: `BufferSwitchTest` に4テスト追加（計18テスト）。既存2テストは循環（wrap）を前提にしていたためクランプ挙動に合わせて更新し、新規4テストで `:bnext`/`:bprev`/`:bn`/`:bp` コマンドの前進・後退・境界クランプを検証した。
 
 ## `:wa` / `:qa` / `:qa!`（Vim互換の全保存・全終了コマンド）の設計決定事項
 

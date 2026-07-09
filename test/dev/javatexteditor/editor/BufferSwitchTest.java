@@ -9,8 +9,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Ctrl+U(:bprev相当)/Ctrl+P(:bnext相当)で、開いている複数のファイルバッファを
- * BUFFER_REGISTRY（Main.java相当）経由で循環できることを検証する。
+ * Ctrl+U(:bprev相当)/Ctrl+P(:bnext相当)、および:bnext/:bprev/:bn/:bpコマンドで、
+ * 開いている複数のファイルバッファをBUFFER_REGISTRY（Main.java相当）経由で
+ * 移動できることを検証する。末尾/先頭ではラップアラウンドせず留まる。
  * mainメソッド形式のテストハーネス（JUnit不使用）。
  */
 public class BufferSwitchTest {
@@ -22,6 +23,10 @@ public class BufferSwitchTest {
         testCtrlPCyclesThroughOpenedFileBuffers();
         testCtrlUCyclesBackward();
         testCtrlUFallsBackToHistoryWithoutFilePath();
+        testBnextCommandMovesForward();
+        testBprevCommandMovesBackward();
+        testBnextStaysAtLastBuffer();
+        testBprevStaysAtFirstBuffer();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -92,9 +97,14 @@ public class BufferSwitchTest {
         assertEquals("registry has 3 entries", 3, reg.entries.size());
         assertEquals("current file is C after opening 3 files", c.toString(), ed.getCurrentFilePath());
 
-        // 修正前は bufferHistory に1件しか積まれず、Ctrl+P/Ctrl+U は何も動かなかった。
-        ctrlP(ed); // wraps around to A (bnext)
-        assertEquals("Ctrl+P wraps to first file (A)", a.toString(), ed.getCurrentFilePath());
+        // 末尾(C)にいる状態でCtrl+Pを押してもラップアラウンドせず留まる。
+        ctrlP(ed);
+        assertEquals("Ctrl+P at last buffer stays at C", c.toString(), ed.getCurrentFilePath());
+
+        // Ctrl+Uで先頭方向へ戻ってからCtrl+Pで前進できることを確認する。
+        ctrlU(ed);
+        ctrlU(ed);
+        assertEquals("Ctrl+U twice moves to A", a.toString(), ed.getCurrentFilePath());
 
         ctrlP(ed);
         assertEquals("Ctrl+P moves to B", b.toString(), ed.getCurrentFilePath());
@@ -116,8 +126,9 @@ public class BufferSwitchTest {
         ctrlU(ed); // :bprev
         assertEquals("Ctrl+U moves back to A", a.toString(), ed.getCurrentFilePath());
 
-        ctrlU(ed); // wraps around backward to B
-        assertEquals("Ctrl+U wraps back to B", b.toString(), ed.getCurrentFilePath());
+        // 先頭(A)にいる状態でCtrl+Uを押してもラップアラウンドせず留まる。
+        ctrlU(ed);
+        assertEquals("Ctrl+U at first buffer stays at A", a.toString(), ed.getCurrentFilePath());
     }
 
     static void testCtrlUFallsBackToHistoryWithoutFilePath() {
@@ -132,5 +143,79 @@ public class BufferSwitchTest {
 
         ctrlU(ed);
         assertEquals("Ctrl+U restores original buffer text", "original text", ed.getText());
+    }
+
+    private static void colonCommand(ModalEditor ed, String cmd) {
+        ed.processKey(KeyEvent.VK_UNDEFINED, ':', 0);
+        for (char c : cmd.toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+    }
+
+    static void testBnextCommandMovesForward() throws IOException {
+        Path a = Files.createTempFile("bswitch3-a", ".txt");
+        Path b = Files.createTempFile("bswitch3-b", ".txt");
+        Files.writeString(a, "AAA");
+        Files.writeString(b, "BBB");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        openViaCommand(ed, a.toString());
+        openViaCommand(ed, b.toString());
+
+        colonCommand(ed, "bprev");
+        assertEquals(":bprev moves to A", a.toString(), ed.getCurrentFilePath());
+
+        colonCommand(ed, "bnext");
+        assertEquals(":bnext moves to B", b.toString(), ed.getCurrentFilePath());
+    }
+
+    static void testBprevCommandMovesBackward() throws IOException {
+        Path a = Files.createTempFile("bswitch4-a", ".txt");
+        Path b = Files.createTempFile("bswitch4-b", ".txt");
+        Files.writeString(a, "AAA");
+        Files.writeString(b, "BBB");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        openViaCommand(ed, a.toString());
+        openViaCommand(ed, b.toString());
+        assertEquals("current file is B", b.toString(), ed.getCurrentFilePath());
+
+        colonCommand(ed, "bp");
+        assertEquals(":bp moves to A", a.toString(), ed.getCurrentFilePath());
+    }
+
+    static void testBnextStaysAtLastBuffer() throws IOException {
+        Path a = Files.createTempFile("bswitch5-a", ".txt");
+        Path b = Files.createTempFile("bswitch5-b", ".txt");
+        Files.writeString(a, "AAA");
+        Files.writeString(b, "BBB");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        openViaCommand(ed, a.toString());
+        openViaCommand(ed, b.toString());
+        assertEquals("current file is B (last)", b.toString(), ed.getCurrentFilePath());
+
+        colonCommand(ed, "bn");
+        assertEquals(":bn at last buffer stays at B", b.toString(), ed.getCurrentFilePath());
+    }
+
+    static void testBprevStaysAtFirstBuffer() throws IOException {
+        Path a = Files.createTempFile("bswitch6-a", ".txt");
+        Path b = Files.createTempFile("bswitch6-b", ".txt");
+        Files.writeString(a, "AAA");
+        Files.writeString(b, "BBB");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        openViaCommand(ed, a.toString());
+        openViaCommand(ed, b.toString());
+
+        colonCommand(ed, "bprev");
+        assertEquals("current file is A (first)", a.toString(), ed.getCurrentFilePath());
+
+        colonCommand(ed, "bprev");
+        assertEquals(":bprev at first buffer stays at A", a.toString(), ed.getCurrentFilePath());
     }
 }
