@@ -258,3 +258,9 @@ int b = pixel & 0xFF;
 - **グリフキャッシュ**: 本文用の `glyphCacheFg`/`glyphCacheBg` は色が `theme.foreground`/`theme.background` 固定の前提でキャッシュしているため流用できない（telescope選択行やkindラベルは `theme.accent` 等、任意の色を使う）。そのため `UiGlyphKey(codePoint, cellW, cellH, rgb)` をキーとする別キャッシュ `uiGlyphCache` を新設し、`invalidateGlyphCache()`（セルサイズ・テーマ変更時）で一緒にクリアするようにした。
 - **telescope選択行マーカーの変更**: 選択行マーカーを `"▸ "`（Unicode矢印、ASCII範囲外でSwingフォールバックが必要）から `"> "`（ASCII）に変更した。これにより選択行のマーカー込みで完全にビットマップフォントのセル幅グリッドに収まり、フォールバックによる幅ズレが起きない。
 - **意図的に対象外としたもの**: スプラッシュ画面（`drawSplashScreen`）は日本語主体の説明文とキーバインド一覧が混在しており、センタリング計算が `FontMetrics` に強く依存しているため今回は変更していない。英語のみのUI要素（telescope・ステータス行・補完ポップアップ）に限定した。
+
+## 非ASCIIフォールバック文字（Swingフォント）にアンチエイリアスが効いていなかった問題の修正
+
+- **症状**: 半角ASCII本文は `TtfMonoFont`（IBM Plex Mono TTFをラスタライズしてキャッシュしたビットマップグリフ）で描画されており、ラスタライズ時点で `RenderingHints.KEY_TEXT_ANTIALIASING`/`KEY_ANTIALIASING` を`ON`にして生成していたため滑らかだった。一方、日本語等の非ASCIIフォールバック文字（`getSwingFont()` で生成する `Font(Font.MONOSPACED, ...)`）や、スプラッシュ画面・ステータス行・telescope/補完ポップアップの `drawUiText()`/直接 `g2.drawString()` 呼び出しは、`paintContent()` に渡される `Graphics2D` 自体にアンチエイリアスのヒントを一切設定していなかった。Swingのデフォルトはデスクトップのフォントレンダリングヒント（`awt.font.desktophints`）依存で、環境によってはOFF相当になり、本文のビットマップフォントと非ASCII部分とでギザギザ具合が異なって見えていた。
+- **修正**: `EditorCanvas.paintContent(Graphics2D g2)` の冒頭（本文セルサイズを読む前）で、`KEY_ANTIALIASING`/`KEY_TEXT_ANTIALIASING`/`KEY_FRACTIONALMETRICS`/`KEY_STROKE_CONTROL` の4つのヒントを一度だけ設定するようにした（`TtfMonoFont` のグリフラスタライズ時に使っているのと同じ4つの値）。`paintContent()` 配下の `drawSplashScreen`/`drawStatusLine`/`drawTelescopeOverlay`/`drawCompletionPopup`/`drawGutter`/`drawUiText`/`drawLineWithFullWidthSupport` 等は全て同じ `g2` インスタンスを引数として使い回す設計（本ファイル冒頭の「telescope・ステータス行・補完ポップアップの文字描画を MiscFixed ビットマップフォントに統一」節参照）のため、呼び出しの起点1箇所にヒントを設定するだけで画面内の全描画経路に反映される。
+- **意図的に選ばなかった対策**: 個々の `drawString` 呼び出し箇所（10箇所以上）にそれぞれヒント設定を追加する案は、呼び出し漏れのリスクがあり、かつ本ファイルにある「共有 `g2` を使い回す」という既存設計の意図とも逆行するため採用しなかった。

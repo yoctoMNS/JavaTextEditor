@@ -476,6 +476,15 @@ public class EditorCanvas extends JPanel {
     }
 
     private void paintContent(Graphics2D g2) {
+        // ビットマップフォント(TtfMonoFont)のグリフはラスタライズ時に既にアンチエイリアス済みだが、
+        // 非ASCIIフォールバック（Swingフォント）でのdrawString呼び出し（ステータス行・スプラッシュ・
+        // telescope・補完ポップアップ等）にはヒントが効いていなかったため、この g2 を使う全描画に
+        // 共通で適用されるようここで一度だけ設定する（以下の draw* メソッドは全て同じ g2 を共有する）。
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+        g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+
         // ビットマップフォントのセルサイズを使用する
         int charWidth  = cellW;
         int lineHeight = cellH;
