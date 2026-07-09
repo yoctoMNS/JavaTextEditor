@@ -1765,7 +1765,10 @@ public class ModalEditor {
         }
     }
 
-    /** Ctrl+U / Ctrl+P: バッファレジストリ内で delta 分移動したバッファを開く。 */
+    /**
+     * Ctrl+U / Ctrl+P / :bprev / :bnext: バッファレジストリ内で delta 分移動したバッファを開く。
+     * 端（先頭/末尾）に達している場合はラップアラウンドせずそのまま留まる（vimの:bnext/:bprevと同じ）。
+     */
     private void switchToRelativeBuffer(int delta) {
         if (bufferListSupplier == null) return;
         List<BufferPicker.BufferEntry> entries = bufferListSupplier.get();
@@ -1783,7 +1786,11 @@ public class ModalEditor {
         }
         int nextIdx = (currentIdx == -1)
             ? (delta > 0 ? 0 : entries.size() - 1)
-            : Math.floorMod(currentIdx + delta, entries.size());
+            : Math.max(0, Math.min(entries.size() - 1, currentIdx + delta));
+        if (nextIdx == currentIdx) {
+            statusMessage = delta > 0 ? "これ以上次のバッファはありません" : "これ以上前のバッファはありません";
+            return;
+        }
         BufferPicker.BufferEntry target = entries.get(nextIdx);
         if (target.filePath() == null) return;
         try {
@@ -2080,6 +2087,10 @@ public class ModalEditor {
             statusMessage = getProjectRoot().toString();
         } else if (cmd.startsWith("cd ")) {
             changeDirectory(cmd.substring(3).trim());
+        } else if (cmd.equals("bnext") || cmd.equals("bn")) {
+            switchToRelativeBuffer(+1);
+        } else if (cmd.equals("bprev") || cmd.equals("bp")) {
+            switchToRelativeBuffer(-1);
         } else if (cmd.equals("sp") || cmd.equals("split")) {
             if (splitVerticalCallback != null) splitVerticalCallback.run();
         } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
