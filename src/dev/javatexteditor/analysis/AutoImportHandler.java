@@ -2,6 +2,7 @@ package dev.javatexteditor.analysis;
 
 import dev.javatexteditor.buffer.PieceTable;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -80,39 +81,34 @@ public class AutoImportHandler {
 
     /**
      * buffer の source を解析して import 行を挿入する。
+     * 挿入後、import ブロック全体（既存 + 新規）を Eclipse の Organize Imports と
+     * 同じアルゴリズムで並べ替える（{@link #insertAndReorganize}参照）。
      * 重複チェックのために SourceAnalyzer でソースを parse する。
      * parse に失敗した場合（JDK なし等）は重複チェックなしで挿入する。
      *
      * @return 実際に挿入された FQN リスト（重複でスキップされたものは含まない）
      */
     public List<String> applyImports(List<String> fqns, PieceTable buffer) {
-        String source = buffer.getText();
-        List<String> alreadyImported = getAlreadyImported(source);
-        List<String> inserted = new ArrayList<>();
-
+        List<String> alreadyImported = getAlreadyImported(buffer.getText());
+        List<String> toInsert = new ArrayList<>();
         for (String fqn : fqns) {
-            if (alreadyImported.contains(fqn)) continue;
-            int offset = findImportInsertOffset(buffer.getText());
-            String line = "import " + fqn + ";\n";
-            buffer.insert(offset, line);
-            alreadyImported.add(fqn); // update for subsequent iterations
-            inserted.add(fqn);
+            if (!alreadyImported.contains(fqn) && !toInsert.contains(fqn)) toInsert.add(fqn);
         }
-        if (!inserted.isEmpty()) ensureBlankLineAfterImports(buffer);
-        return List.copyOf(inserted);
+        if (!toInsert.isEmpty()) insertAndReorganize(toInsert, buffer);
+        return List.copyOf(toInsert);
     }
 
     /**
      * 単一 FQN をバッファに挿入する。重複の場合は挿入しない。
+     * 挿入後、import ブロック全体を Eclipse の Organize Imports と同じ
+     * アルゴリズムで並べ替える（{@link #insertAndReorganize}参照）。
      *
      * @return 挿入したなら true、すでに存在したなら false
      */
     public boolean applyImport(String fqn, PieceTable buffer) {
         List<String> alreadyImported = getAlreadyImported(buffer.getText());
         if (alreadyImported.contains(fqn)) return false;
-        int offset = findImportInsertOffset(buffer.getText());
-        buffer.insert(offset, "import " + fqn + ";\n");
-        ensureBlankLineAfterImports(buffer);
+        insertAndReorganize(List.of(fqn), buffer);
         return true;
     }
 
@@ -200,6 +196,95 @@ public class AutoImportHandler {
         }
         ensureBlankLineAfterImports(buffer);
         return List.copyOf(removed);
+    }
+
+    // ----- Eclipse Organize Imports 互換の並べ替え -----
+
+    /**
+     * Eclipse のデフォルト import グループ順（Preferences &gt; Java &gt; Code Style &gt;
+     * Organize Imports の既定値）。この順に並べ、一致しないパッケージは末尾の
+     * 「その他」グループに入れる。各グループ内は FQN のアルファベット順（{@link String#compareTo}）。
+     */
+    private static final List<String> IMPORT_GROUP_ORDER = List.of("java", "javax", "org", "com");
+
+    private static final Pattern IMPORT_LINE_PATTERN =
+        Pattern.compile("^import\\s+(static\\s+)?(.+?)\\s*;\\s*$");
+
+    private record ImportLine(String fqn, boolean isStatic) {}
+
+    private static final Comparator<ImportLine> IMPORT_LINE_COMPARATOR =
+        Comparator.comparingInt((ImportLine i) -> groupIndex(i.fqn())).thenComparing(ImportLine::fqn);
+
+    /** 新規 import を既存 import 群に混ぜ、ブロック全体を Eclipse 互換の順序で書き直す。 */
+    private void insertAndReorganize(List<String> newFqns, PieceTable buffer) {
+        String source = buffer.getText();
+        String[] lines = source.split("\n", -1);
+
+        List<ImportLine> existing = new ArrayList<>();
+        int firstImportLine = -1;
+        int lastImportLine = -1;
+        for (int i = 0; i < lines.length; i++) {
+            Matcher m = IMPORT_LINE_PATTERN.matcher(lines[i].strip());
+            if (m.matches()) {
+                existing.add(new ImportLine(m.group(2), m.group(1) != null));
+                if (firstImportLine < 0) firstImportLine = i;
+                lastImportLine = i;
+            }
+        }
+
+        List<ImportLine> all = new ArrayList<>(existing);
+        for (String fqn : newFqns) all.add(new ImportLine(fqn, false));
+        String block = formatImportBlock(all);
+
+        if (firstImportLine < 0) {
+            int offset = findImportInsertOffset(source);
+            buffer.insert(offset, block);
+        } else {
+            int startOffset = 0;
+            for (int i = 0; i < firstImportLine; i++) startOffset += lines[i].length() + 1;
+            int endOffset = 0;
+            for (int i = 0; i <= lastImportLine; i++) endOffset += lines[i].length() + 1;
+            buffer.delete(startOffset, endOffset - startOffset);
+            buffer.insert(startOffset, block);
+        }
+        ensureBlankLineAfterImports(buffer);
+    }
+
+    /**
+     * import 群を Eclipse 互換の順序でテキスト化する。
+     * static import は非 static のブロックより前に置き、両ブロックの間・
+     * 各グループの間にそれぞれ空行を1行入れる（グループ内は空行なし）。
+     */
+    private static String formatImportBlock(List<ImportLine> imports) {
+        List<ImportLine> statics = imports.stream()
+            .filter(ImportLine::isStatic).sorted(IMPORT_LINE_COMPARATOR).toList();
+        List<ImportLine> normals = imports.stream()
+            .filter(i -> !i.isStatic()).sorted(IMPORT_LINE_COMPARATOR).toList();
+
+        StringBuilder sb = new StringBuilder();
+        appendGroupedLines(sb, statics, true);
+        if (!statics.isEmpty() && !normals.isEmpty()) sb.append('\n');
+        appendGroupedLines(sb, normals, false);
+        return sb.toString();
+    }
+
+    private static void appendGroupedLines(StringBuilder sb, List<ImportLine> group, boolean isStatic) {
+        int prevGroup = -1;
+        for (ImportLine imp : group) {
+            int g = groupIndex(imp.fqn());
+            if (prevGroup >= 0 && g != prevGroup) sb.append('\n');
+            sb.append("import ").append(isStatic ? "static " : "").append(imp.fqn()).append(";\n");
+            prevGroup = g;
+        }
+    }
+
+    /** IMPORT_GROUP_ORDER 内での位置を返す。一致しなければ末尾（その他）扱いのインデックス。 */
+    private static int groupIndex(String fqn) {
+        for (int i = 0; i < IMPORT_GROUP_ORDER.size(); i++) {
+            String prefix = IMPORT_GROUP_ORDER.get(i);
+            if (fqn.equals(prefix) || fqn.startsWith(prefix + ".")) return i;
+        }
+        return IMPORT_GROUP_ORDER.size();
     }
 
     // ----- private helpers -----

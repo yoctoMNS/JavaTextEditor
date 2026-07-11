@@ -329,3 +329,15 @@ project-root/
 - **`allEditorsSupplier`**: `Supplier<List<ModalEditor>>` フィールドで、既定値は `() -> List.of(this)`（自分自身のみ）。単一ペイン運用時はこれで「全保存＝現在保存」「全終了＝現在の終了判定」という後方互換な近似になる。`Main.java` の `refreshCallbacks()` で `setMovePanePrevCallback` 等と同じ配線パターンにより `() -> allLeaves(root[0]).stream().map(Leaf::editor).toList()` に差し替え、画面分割中は実際に全ペインを対象にする（分割構成が変わるたびに再評価されるようSupplierの中で都度 `allLeaves(root[0])` を呼ぶ。固定リストをキャプチャしない）。
 - **コマンド解析**: `executeCommand(String cmd)` 内の `if-else` チェーンに `cmd.equals("wa")`/`cmd.equals("wall")`（`:w`/`:w `より前）、`cmd.equals("qa")`/`cmd.equals("qall")`、`cmd.equals("qa!")`/`cmd.equals("qall!")`（`:q`/`:wq`より前）を追加した。すべて完全一致（`equals`）判定のため、`:q`（1文字）・`:q!`（未実装のまま、影響なし）・`:wq` と文字列としても衝突しない。`vim`の`:qall`/`:wall`エイリアスも合わせて実装した。
 - **テスト**: `test/dev/javatexteditor/editor/WaQaCommandTest.java`（新設・14テスト）。単一バッファでの `:wa`（保存成功/変更なし/ファイル名未設定時の失敗報告）、複数 `ModalEditor`（`allEditorsSupplier` 差し替え）をまたいだ `:wa`（変更のあるものだけ保存）・`:qa`（いずれかに未保存があれば拒否）、`:qa!` の強制終了、既存 `:w`/`:q`（無条件終了という既存の未チェック挙動が変わっていないこと）との非衝突・非デグレを確認済み。
+
+## 自動 import 挿入（⑯ auto-import-handler）の並び順を Eclipse 互換に修正
+
+- **不具合**: `AutoImportHandler.applyImport()`/`applyImports()` は、新規 import 行を常に「既存 import 群の最後」に単純追記するだけで、並び替えを一切行っていなかった。そのため自動挿入を繰り返すと `java.util.Map` の後に `java.util.List` が来る、といったEclipseの「Organize Imports」とは異なる順序になっていた。
+- **修正方針**: 新規 import を追加する際、既存 import 行もすべて解析し直し、import ブロック全体を Eclipse のデフォルト設定（Preferences > Java > Code Style > Organize Imports の既定値）と同じアルゴリズムで書き直す方式にした（単純追記ではなく「ブロック全体の再構築」）。
+  - **グループ順**: `java` → `javax` → `org` → `com` → どれにも一致しない「その他」の順（`AutoImportHandler.IMPORT_GROUP_ORDER`）。パッケージ名の前方一致（完全一致 or `prefix + "."` で始まる）でグループを判定する。
+  - **グループ内の並び**: FQN の `String#compareTo` によるアルファベット順（Eclipseの既定と同じ単純な文字列比較。大文字が小文字より前に来る）。
+  - **static import**: 非 static のブロックより前に独立したブロックとして配置し、static ブロック自身も同じグループ順・アルファベット順で並べる。
+  - **空行**: グループとグループの間には空行を1行だけ入れ（グループ内には入れない）、static ブロックと非 static ブロックの間にも同様に空行を1行入れる。
+  - 実装は `AutoImportHandler.insertAndReorganize()`（新設・private）が担う。既存 import 行を正規表現（`IMPORT_LINE_PATTERN`）で再解析し、新規 fqn を加えた全 `ImportLine` 集合を `formatImportBlock()` で整形した文字列に組み立て、既存の import ブロック区間（最初の import 行〜最後の import 行）をまるごと delete して置き換える。既存の import が1件も無い場合は従来どおり `findImportInsertOffset()` の位置に新規ブロックを挿入する。
+- **意図的にスコープ外とした点**: このアルゴリズムは `applyImport`/`applyImports`（新規 import 挿入時）にのみ適用した。`removeImport`/`removeUnusedImports`（既存 import の削除のみ）は並び替えを伴わないため変更していない。また、ユーザーが手で書いた import の並びを能動的に「整理」する `:organize-imports` 相当のコマンドは現状存在しない（`Ctrl+Shift+O` の `onOrganizeImports` は未使用 import の削除のみを行うコマンドで、並び替えは行わない。混同しないこと）。
+- **テスト**: `test/dev/javatexteditor/analysis/AutoImportHandlerTest.java` に3テスト追加（計51テスト）。同一グループ内でのアルファベット順（`testApplyImportAfterExistingImport`、既存のアサーションを新仕様に合わせて更新）、`java`/`javax`/`com`混在時のグループ順＋グループ間空行（`testApplyImportEclipseGroupOrder`）、複数 import 一括追加時の同一グループ内ソート（`testApplyImportsSortsWithinSameGroup`）、static import が非 static より前に来ること＋境界の空行（`testApplyImportStaticBeforeNormal`）を検証。

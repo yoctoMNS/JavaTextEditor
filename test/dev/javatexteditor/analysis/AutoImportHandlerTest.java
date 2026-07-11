@@ -31,6 +31,9 @@ public class AutoImportHandlerTest {
         testFindImportInsertOffset(handler);
         testApplyImportNoImports(handler);
         testApplyImportAfterExistingImport(handler);
+        testApplyImportEclipseGroupOrder(handler);
+        testApplyImportsSortsWithinSameGroup(handler);
+        testApplyImportStaticBeforeNormal(handler);
         testApplyImportDuplicateSkipped(handler);
         testApplyImports(handler);
         testResolveCandidates(handler, index);
@@ -126,11 +129,67 @@ public class AutoImportHandlerTest {
         PieceTable buf = new PieceTable(src);
         handler.applyImport("java.util.List", buf);
         String result = buf.getText();
-        // 新しい import は最後の import の後
+        // 同一グループ(java)内はEclipse同様アルファベット順: List < Map
         int mapIdx = result.indexOf("import java.util.Map;");
         int listIdx = result.indexOf("import java.util.List;");
         assertTrue("List import present", listIdx >= 0);
-        assertTrue("List after Map", listIdx > mapIdx);
+        assertTrue("List before Map (alphabetical within group)", listIdx < mapIdx);
+    }
+
+    private static void testApplyImportEclipseGroupOrder(AutoImportHandler handler) {
+        // java -> javax -> org -> com -> その他 の順、グループ間は空行1行
+        String src = "package foo;\nimport javax.swing.JFrame;\nimport com.example.Foo;\nclass X {}";
+        PieceTable buf = new PieceTable(src);
+        handler.applyImport("java.util.List", buf);
+        String result = buf.getText();
+
+        int listIdx = result.indexOf("import java.util.List;");
+        int swingIdx = result.indexOf("import javax.swing.JFrame;");
+        int comIdx = result.indexOf("import com.example.Foo;");
+        assertTrue("java group before javax group", listIdx < swingIdx);
+        assertTrue("javax group before com group", swingIdx < comIdx);
+
+        // グループの切れ目には空行が1行入る
+        String expectedBlock =
+            "import java.util.List;\n" +
+            "\n" +
+            "import javax.swing.JFrame;\n" +
+            "\n" +
+            "import com.example.Foo;\n";
+        assertTrue("blank line separates each group", result.contains(expectedBlock));
+    }
+
+    private static void testApplyImportsSortsWithinSameGroup(AutoImportHandler handler) {
+        String src = "package foo;\nclass X {}";
+        PieceTable buf = new PieceTable(src);
+        handler.applyImports(List.of("java.util.Map", "java.util.List", "java.io.File"), buf);
+        String result = buf.getText();
+        // java グループ内はアルファベット順(File, List, Map)にまとまり、空行を挟まない
+        String expectedBlock =
+            "import java.io.File;\n" +
+            "import java.util.List;\n" +
+            "import java.util.Map;\n";
+        assertTrue("same-group imports sorted alphabetically without blank line", result.contains(expectedBlock));
+    }
+
+    private static void testApplyImportStaticBeforeNormal(AutoImportHandler handler) {
+        String src = "package foo;\nimport static java.util.Collections.emptyList;\nimport java.util.Map;\nclass X {}";
+        PieceTable buf = new PieceTable(src);
+        handler.applyImport("java.util.List", buf);
+        String result = buf.getText();
+        int staticIdx = result.indexOf("import static java.util.Collections.emptyList;");
+        int listIdx = result.indexOf("import java.util.List;");
+        int mapIdx = result.indexOf("import java.util.Map;");
+        assertTrue("static import present", staticIdx >= 0);
+        assertTrue("static import block precedes normal imports", staticIdx < listIdx);
+        assertTrue("static import block precedes normal imports (Map)", staticIdx < mapIdx);
+        assertTrue("List before Map within normal group", listIdx < mapIdx);
+
+        String expectedBoundary =
+            "import static java.util.Collections.emptyList;\n" +
+            "\n" +
+            "import java.util.List;\n";
+        assertTrue("blank line between static block and normal block", result.contains(expectedBoundary));
     }
 
     private static void testApplyImportDuplicateSkipped(AutoImportHandler handler) {
