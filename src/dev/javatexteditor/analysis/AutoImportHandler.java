@@ -122,11 +122,25 @@ public class AutoImportHandler {
      */
     public Map<String, List<String>> resolveCandidates(
             List<CompileDiagnostic> diags, String source) {
+        return resolveCandidates(diags, source, null);
+    }
+
+    /**
+     * baseDir 配下の自プロジェクトのクラスも候補に含める版。
+     * baseDir が null の場合は {@link #resolveCandidates(List, String)} と同じ（JDK のみ）。
+     *
+     * @param diags    コンパイル診断
+     * @param source   現在のソースコード（重複チェック用）
+     * @param baseDir  自プロジェクトのクラスを探す起点ディレクトリ（null 可）
+     * @return 単純名 → FQN 候補リスト のマップ（候補ゼロの単純名は含まない）
+     */
+    public Map<String, List<String>> resolveCandidates(
+            List<CompileDiagnostic> diags, String source, java.nio.file.Path baseDir) {
         List<String> missing = findMissingSymbols(diags);
         List<String> alreadyImported = getAlreadyImported(source);
         Map<String, List<String>> result = new LinkedHashMap<>();
         for (String name : missing) {
-            List<String> candidates = suggester.suggest(name).stream()
+            List<String> candidates = suggester.suggest(name, baseDir).stream()
                 .filter(fqn -> !alreadyImported.contains(fqn))
                 .toList();
             if (!candidates.isEmpty()) result.put(name, candidates);

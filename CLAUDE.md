@@ -341,3 +341,88 @@ project-root/
   - 実装は `AutoImportHandler.insertAndReorganize()`（新設・private）が担う。既存 import 行を正規表現（`IMPORT_LINE_PATTERN`）で再解析し、新規 fqn を加えた全 `ImportLine` 集合を `formatImportBlock()` で整形した文字列に組み立て、既存の import ブロック区間（最初の import 行〜最後の import 行）をまるごと delete して置き換える。既存の import が1件も無い場合は従来どおり `findImportInsertOffset()` の位置に新規ブロックを挿入する。
 - **意図的にスコープ外とした点**: このアルゴリズムは `applyImport`/`applyImports`（新規 import 挿入時）にのみ適用した。`removeImport`/`removeUnusedImports`（既存 import の削除のみ）は並び替えを伴わないため変更していない。また、ユーザーが手で書いた import の並びを能動的に「整理」する `:organize-imports` 相当のコマンドは現状存在しない（`Ctrl+Shift+O` の `onOrganizeImports` は未使用 import の削除のみを行うコマンドで、並び替えは行わない。混同しないこと）。
 - **テスト**: `test/dev/javatexteditor/analysis/AutoImportHandlerTest.java` に3テスト追加（計51テスト）。同一グループ内でのアルファベット順（`testApplyImportAfterExistingImport`、既存のアサーションを新仕様に合わせて更新）、`java`/`javax`/`com`混在時のグループ順＋グループ間空行（`testApplyImportEclipseGroupOrder`）、複数 import 一括追加時の同一グループ内ソート（`testApplyImportsSortsWithinSameGroup`）、static import が非 static より前に来ること＋境界の空行（`testApplyImportStaticBeforeNormal`）を検証。
+
+## 自動 import 挿入がプロジェクト内の別パッケージのクラスに対して働かない不具合の修正
+
+- **不具合**: JDK標準APIクラス（例: `List`）は未定義シンボルとして自動でimport文が挿入されるが、
+  自分のプロジェクトの別パッケージに作成した自作クラスは候補にすら出ず、自動挿入されなかった。
+- **原因**: `AutoImportHandler.resolveCandidates()` が呼ぶ `ImportSuggester.suggest(simpleName)` は
+  `JdkClassIndex.lookup(simpleName)` のみを見ており、そもそも自プロジェクトのクラスを探す経路が
+  存在しなかった（JDKクラス索引はJDKのjrt:/を走査するもので、プロジェクトのソースは対象外）。
+- **修正**: `dev.javatexteditor.analysis.ProjectClassSuggester`（新設）を追加した。`ProjectSearcher`
+  で baseDir 配下を `\b(?:class|interface|enum|record)\s+SimpleName\b` にgrepし、ヒットしたファイルの
+  うち「ファイル名がsimpleNameと一致するもの」（＝Javaの「publicトップレベル型はファイル名と一致する」
+  慣例を利用し、内部クラス等の誤検出を避ける）だけを対象に、そのファイルの `package` 宣言を正規表現で
+  読んでFQNを組み立てる。`ImportSuggester` に `suggest(String simpleName, Path baseDir)` オーバーロードを
+  追加し、JDK候補と`ProjectClassSuggester`候補を`LinkedHashSet`でマージして返すようにした（`baseDir`が
+  `null`の場合は従来どおりJDKのみを返す`suggest(String)`と同じ結果になる後方互換オーバーロード）。
+  `AutoImportHandler.resolveCandidates()`にも同様に`baseDir`を取るオーバーロードを追加し、
+  `ModalEditor.handleAutoImport()`から`getProjectRoot()`を渡すようにした。
+- **キャッシュを持たない設計にした理由**: `WordIndex`/`CompletionIndex`のような起動時1回きりの索引ではなく、
+  呼び出しの都度`ProjectSearcher`でディスクを検索する設計にした。これにより新規作成したばかりのファイル・
+  別パッケージのファイルもインデックス再構築なしに即座に候補へ反映される（後述の「新規作成ファイルの
+  コンパイル結果反映」不具合と同種の「作ってすぐ使える」という要件のため）。プロジェクト規模が大きい場合の
+  性能劣化は、既存の`gr`/`Shift+K`と同じ`ProjectSearcher`を使うため同じ特性（2MB超のファイルはスキップ、
+  タイムアウトは掛かっていない）を引き継ぐ。今回はauto-import自体がバックグラウンド仮想スレッドで実行
+  されるため（`Main.runCompileAnalysis`）、既存のShift+K/grepで問題になったEDTブロッキングの心配はない。
+
+## `currentFilePath` の絶対パス統一と新規ファイル作成時の不具合修正
+
+複数の不具合報告（「新しく作ったファイルが再度開かないと正しくコンパイル結果が反映されない」
+「新しくファイルを作ったらバッファの遷移が0個になってしまう」）を調査したところ、共通の原因が
+`currentFilePath`のパス形式の不整合にあると判明した。
+
+- **原因1（コンパイル結果の不具合）**: `:w path`（相対パス指定の保存）は`resolveSavePath()`で
+  `getProjectRoot()`を基準に絶対パスへ解決してディスクに書き込んでいたが、保存後に
+  `currentFilePath`へ代入していたのは解決前の生の相対パス文字列だった（`saveToFile()`内で
+  `currentFilePath`を更新する処理自体が存在しなかった）。一方 `CompileAnalyzer.analyzeSourceWithProject()`
+  はプロジェクト全体を`Files.walk(projectRoot)`で絶対パス列として読み直し、
+  `!filePath.equals(p.toString())`で「現在編集中のファイル」をディスク再読込対象から除外している。
+  `filePath`（＝相対パスのままの`currentFilePath`）と`p.toString()`（絶対パス）は文字列として
+  一致しないため、この除外が機能せず、同じクラスがバッファ内容とディスク内容の二重で解析対象に
+  含まれてしまい、"duplicate class"等の誤ったコンパイルエラーが出ていた。FILER/telescope等
+  「絶対パスで`currentFilePath`を設定する」経路でファイルを開き直す（＝ユーザー報告の「再度開く」）と
+  この不一致が解消されて正しく直る、という現象だった。
+- **原因2（バッファ遷移0個の不具合）**: `loadFromFile()`は「ファイルがまだ存在しない（＝新規ファイル）」
+  分岐で`onFileOpened`コールバックを呼んでいなかった（既存ファイルを開く分岐だけ呼んでいた）。
+  そのため新規作成したファイルは`Main.BUFFER_REGISTRY`に一切登録されず、`currentFilePath != null`に
+  なった時点でCtrl+U/Ctrl+Pが`switchToRelativeBuffer()`（`BUFFER_REGISTRY`循環方式）に切り替わる
+  設計（「Ctrl+U/Ctrl+Pのバッファ切替」節参照）と組み合わさり、`BUFFER_REGISTRY`のエントリ数が
+  実質的に「新規ファイルを開く前から開いていたファイルの数」のまま変わらないにもかかわらず、
+  現在のファイルがそこに存在しないため`entries.size() <= 1`等の条件で「他に開いているファイル
+  バッファがありません」となり、元々開いていたファイルへ戻れなくなっていた。
+- **修正**:
+  1. `saveToFile()`成功時に`currentFilePath`を常に解決後の絶対パス（`targetPath.toString()`）へ
+     更新するようにした。これにより`:w`で新規保存・別名保存したファイルも、以後は他のファイルを
+     開く経路（FILER/telescope/`switchToRelativeBuffer()`等）と同じ絶対パス形式で統一される。
+  2. `executeCommand()`の`"w "`分岐にあった`currentFilePath = path`（相対パスのままの誤った代入）を
+     削除した（`saveToFile()`側で正しく絶対パスに更新されるため冗長かつ不正確だった）。
+  3. `executeCommand()`の`"e "`分岐は`resolveRelativeToProjectRoot()`（`resolveSavePath()`から
+     共通化・新設）で解決した絶対パスを`loadFromFile()`に渡すようにした。
+  4. `loadFromFile()`の「新規ファイル」分岐にも、既存ファイル分岐と同様の`onFileOpened`呼び出しを
+     追加し、保存前の新規ファイルも`BUFFER_REGISTRY`に登録されるようにした。
+  5. `saveToFile()`成功時にも`onFileOpened`を呼ぶようにした（`:enew`で作った無名バッファを
+     初めて`:w`で保存した場合など、`loadFromFile()`を経由しないケースを補うため）。
+- **意図的に変更しなかった点**: 「切替先ファイルを毎回ディスクから読み直す」「未保存の編集内容を
+  保持したままバッファを切り替える仕組みは持たない」という`switchToRelativeBuffer()`の既存の
+  トレードオフ（「Ctrl+U/Ctrl+Pのバッファ切替」節参照）は変更していない。保存前の新規ファイルを
+  `BUFFER_REGISTRY`に登録したことで、保存前に他のバッファへ切り替えると`switchToRelativeBuffer()`
+  が存在しないパスを`Files.readString()`しようとして`IOException`になるが、これは既存のエラー
+  表示パターン（`statusMessage`に`"E: " + e.getMessage()`）にそのまま乗るため、新規のエラー処理は
+  追加していない。
+
+## Shift+Enter が INSERT モードで何も入力できない不具合の修正
+
+- **不具合**: INSERTモードでShift+Enterを押しても改行できなかった（Enterキー単体は改行できる）。
+- **原因**: `KeymapRegistry`のINSERTモード用バインドは`KeyBinding.ofCode(KeyEvent.VK_ENTER, 0, "insert.newline")`
+  のように修飾キーなし（`modifiers=0`）でのみ登録されていた。`KeymapRegistry.resolve()`はkeyCodeベースの
+  完全一致（`"VK" + keyCode + ":" + modifiers`）を先に試すため、Shift+Enter（`modifiers=SHIFT_DOWN_MASK`）は
+  一致せずアクション解決に失敗する。keyCharベースのフォールバックも、Enterキーの`keyChar`（`'\n'`、0x0A）は
+  `ofChar()`で登録されたバインドが存在しないため空振りし、最終的に`processInsertKey()`の
+  「印字可能文字を挿入する」分岐（`keyChar >= ' '`）にも該当しない（0x0A < 0x20）ため、
+  結果的に何も起きなかった。
+- **修正**: `KeymapRegistry.loadDefaults()`に
+  `bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ENTER, KeyEvent.SHIFT_DOWN_MASK, "insert.newline"), "insert.newline")`
+  を追加し、Shift+Enterも通常のEnterと同じ`"insert.newline"`アクションに解決されるようにした。
+  NORMAL/COMMAND/VISUAL系モードのEnter（ジャンプ・コマンド実行等）は今回のバグ報告の対象外のため
+  変更していない。

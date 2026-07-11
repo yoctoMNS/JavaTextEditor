@@ -82,6 +82,18 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
 - `yy`/`dd`/`V`（行単位） → `"line"`、`p` は**次の行**に行として挿入
 - ペースト処理は必ず `yankType` で分岐する。片方だけ変更すると Vim との挙動差になる。
 
+### ヤンクレジスタはペイン（ModalEditorインスタンス）をまたいで共有する（`static`）
+
+- **不具合**: `:split`/`:vsplit` で複数ペインに分かれている状態で、一方のペインでヤンクしたテキストが
+  もう一方のペインで貼り付けられなかった。
+- **原因**: `ModalEditor` は1ペイン=1インスタンスであり（`Main.java` の `buildComponent` が
+  ペインごとに `new ModalEditor(...)` を生成する）、`yankRegister`/`yankType` がインスタンスフィールド
+  だったため、ペインごとに独立したレジスタを持ってしまっていた。Vim のレジスタはウィンドウ単位ではなく
+  エディタプロセス単位で共有されるのが本来の意味論。
+- **修正**: `yankRegister`/`yankType` を `private static` に変更し、全 `ModalEditor` インスタンス
+  （＝全ペイン）で共有するようにした。マクロ専用レジスタ（`macroRegisters`）はこの変更の対象外
+  （マクロは記録・再生ともに単一ペインで完結する操作のため、共有する理由がない）。
+
 ## 疑似バッファの割り込みキー処理（確立済みの並び）
 
 `:grep`・`*cd候補*`・jdk-source 等の疑似バッファ表示中は、NORMAL モードのまま

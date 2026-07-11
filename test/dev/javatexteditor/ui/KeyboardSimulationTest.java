@@ -87,6 +87,9 @@ public class KeyboardSimulationTest {
         section("INSERTモード: Enter で改行挿入");
         testInsertEnter();
 
+        section("INSERTモード: Shift+Enter も Enter と同じく改行挿入");
+        testInsertShiftEnter();
+
         section("INSERTモード: Escape でNORMALへ戻る");
         testInsertEscape();
 
@@ -382,6 +385,20 @@ public class KeyboardSimulationTest {
         check("Enter後: hello\\nworld", "hello\nworld", ed.getText());
         check("Enter後 row==1", 1, ed.getCursorRow());
         check("Enter後 col==0", 0, ed.getCursorCol());
+        esc();
+    }
+
+    static void testInsertShiftEnter() {
+        // 不具合修正の回帰テスト: Shift+Enter が VK_ENTER:0 のバインドに一致せず
+        // 何も入力できなかった（改行できなかった）不具合。
+        reset("helloworld");
+        key('i');
+        ctrlKey(KeyEvent.VK_F); ctrlKey(KeyEvent.VK_F); ctrlKey(KeyEvent.VK_F);
+        ctrlKey(KeyEvent.VK_F); ctrlKey(KeyEvent.VK_F);
+        keyWithModifiers(KeyEvent.VK_ENTER, '\n', KeyEvent.SHIFT_DOWN_MASK);
+        check("Shift+Enter後: hello\\nworld", "hello\nworld", ed.getText());
+        check("Shift+Enter後 row==1", 1, ed.getCursorRow());
+        check("Shift+Enter後 col==0", 0, ed.getCursorCol());
         esc();
     }
 

@@ -162,6 +162,9 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_P, KeyEvent.CTRL_DOWN_MASK, "cursor.up"), "cursor.up");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_BACK_SPACE, 0, "delete.before"), "delete.before");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ENTER, 0, "insert.newline"), "insert.newline");
+        // Shift+Enter も通常の Enter と同じ改行として扱う（Shift 修飾があると
+        // VK_ENTER:0 のバインドに一致せず何も入力できなくなっていた不具合の修正）。
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ENTER, KeyEvent.SHIFT_DOWN_MASK, "insert.newline"), "insert.newline");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_TAB, 0, "insert.tab"), "insert.tab");
         // INSERT → NORMAL + 保存（Ctrl+] / Ctrl+[）
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_CLOSE_BRACKET, KeyEvent.CTRL_DOWN_MASK, "save.from.insert"), "save.from.insert");

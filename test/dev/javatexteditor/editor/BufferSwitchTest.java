@@ -27,6 +27,8 @@ public class BufferSwitchTest {
         testBprevCommandMovesBackward();
         testBnextStaysAtLastBuffer();
         testBprevStaysAtFirstBuffer();
+        testNewFileCreatedViaColonEIsRegistered();
+        testSaveNewBufferRegistersAbsolutePath();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -217,5 +219,64 @@ public class BufferSwitchTest {
 
         colonCommand(ed, "bprev");
         assertEquals(":bprev at first buffer stays at A", a.toString(), ed.getCurrentFilePath());
+    }
+
+    /**
+     * 不具合修正の回帰テスト: `:e newfile.txt`（存在しない相対パス＝新規ファイル）で
+     * 開いたバッファが BUFFER_REGISTRY に登録されず、Ctrl+U で元々開いていたファイルへ
+     * 戻れなくなっていた（バッファ遷移が0個になる）不具合。
+     */
+    static void testNewFileCreatedViaColonEIsRegistered() throws IOException {
+        Path dir = Files.createTempDirectory("bswitch-newfile");
+        Path a = dir.resolve("a.txt");
+        Files.writeString(a, "AAA");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        ed.setProjectRoot(dir);
+
+        openViaCommand(ed, a.toString());
+        assertEquals("registry has 1 entry after opening A", 1, reg.entries.size());
+
+        colonCommand(ed, "e newfile.txt");
+        assertEquals("registry has 2 entries after creating new file", 2, reg.entries.size());
+
+        ctrlU(ed);
+        assertEquals("Ctrl+U returns to originally-open file A", a.toString(), ed.getCurrentFilePath());
+    }
+
+    /**
+     * 不具合修正の回帰テスト: `:enew` で作った無名バッファを相対パスで `:w` 保存すると、
+     * currentFilePath が絶対パスへ更新されず（ディスクへの書き込み先とcurrentFilePathの
+     * パス形式が食い違い）、BUFFER_REGISTRY にも登録されなかった不具合。
+     */
+    static void testSaveNewBufferRegistersAbsolutePath() throws IOException {
+        Path dir = Files.createTempDirectory("bswitch-savenew");
+        Path a = dir.resolve("a.txt");
+        Files.writeString(a, "AAA");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        ed.setProjectRoot(dir);
+
+        openViaCommand(ed, a.toString());
+        assertEquals("registry has 1 entry after opening A", 1, reg.entries.size());
+
+        colonCommand(ed, "enew");
+        assertEquals("new buffer has no file path", null, ed.getCurrentFilePath());
+
+        ed.processKey(KeyEvent.VK_UNDEFINED, 'i', 0);
+        for (char c : "hello".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+
+        colonCommand(ed, "w newname.txt");
+
+        Path expected = dir.resolve("newname.txt").toAbsolutePath();
+        assertEquals("currentFilePath is resolved to an absolute path", expected.toString(), ed.getCurrentFilePath());
+        assertEquals("registry has 2 entries after saving new buffer", 2, reg.entries.size());
+        assertEquals("file content written to disk", "hello", Files.readString(expected));
+
+        ctrlU(ed);
+        assertEquals("Ctrl+U returns to originally-open file A", a.toString(), ed.getCurrentFilePath());
     }
 }
