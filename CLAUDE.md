@@ -249,6 +249,17 @@ project-root/
 - **サブプロセス起動・待機・エンコーディング処理は`runCommand(String... command)`ヘルパーに集約している**（GPU使用率取得の`nvidia-smi`呼び出しのみで使用）。`native.encoding`での読み取りは`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠（Windows環境でのnvidia-smi出力の文字化け対策）。
 - **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）はJDK標準APIで元からクロスプラットフォームに動作するため変更していない。2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
 
+## 検索・補完機能の大文字小文字区別に関する設計決定事項
+
+ユーザーから「単語検索・ファイル検索・グレップ検索・入力補完はすべて大文字小文字を区別せずヒットさせてほしい」という要望があり、各機能の実装を横断的に確認した。
+
+- **`\g`/`gr`/`gR`/`:grep`/`:grep!`（`ProjectSearcher.search()`）**: 変更前は `Pattern.compile(pattern)` で大文字小文字を区別していた。`Pattern.CASE_INSENSITIVE` を追加した（`src/dev/javatexteditor/search/ProjectSearcher.java`）。
+- **`/` パターン検索・`*`/`#` 単語検索（`ModalEditor.executeSearch()`）**: 同様に `Pattern.CASE_INSENSITIVE` を追加した。詳細・注意点は `.claude/skills/text-search/SKILL.md` の「注意点」節を参照。
+- **`\f`（`FileNameSearcher`）は変更不要だった**: 実装当初から `Pattern.compile(pattern, Pattern.CASE_INSENSITIVE)` で大文字小文字を区別しない設計になっていた。
+- **Alt+/ 単語補完（`WordIndex`）は変更不要だった**: `TreeMap` のキーを `word.toLowerCase(Locale.ROOT)` に正規化してプレフィックス検索する設計になっており、元から大文字小文字を区別しない。
+- **Ctrl+Space 補完（`CompletionIndex`/`CompletionScorer`）・SPC+f/SPC+//SPC+b（telescope `FuzzyMatcher`）は変更不要だった**: `CompletionScorer` は大文字小文字区別なしプレフィックス一致をスコアリング対象に含み、`FuzzyMatcher` は `query.toLowerCase()`/`target.toLowerCase()` で比較しており、いずれも元から大文字小文字を区別しない。
+- **`:s` 置換コマンドは対象外**: `g`/`i` フラグで大文字小文字区別を明示的に切り替えられる設計（`.claude/skills/vim-substitution/SKILL.md`）であり、Vim互換の意味論を保つため既定を無条件で大文字小文字無視には変更していない。
+
 ## 作業時の方針
 
 - 何かを実装・設計する前に、関連する`.claude/skills/`配下のSKILL.mdを必ず確認すること。

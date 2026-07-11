@@ -18,6 +18,7 @@ import java.util.regex.PatternSyntaxException;
  * 指定ディレクトリ配下のファイルを正規表現で全文検索する。
  * Java SE 標準の Files.walkFileTree() と java.util.regex を使用。
  * バイナリファイルや読み取れないファイルは静かにスキップする。
+ * マッチは大文字小文字を区別しない（CASE_INSENSITIVE。FileNameSearcher と同じ方針）。
  */
 public class ProjectSearcher {
 
@@ -67,7 +68,7 @@ public class ProjectSearcher {
      * @throws PatternSyntaxException 正規表現が不正な場合
      */
     public List<SearchResult> search(Path baseDir, String pattern, boolean fullScan) {
-        Pattern regex = Pattern.compile(pattern);
+        Pattern regex = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);
         List<SearchResult> results = new ArrayList<>();
 
         if (!Files.isDirectory(baseDir)) {
