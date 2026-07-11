@@ -1,6 +1,8 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.analysis.CompletionIndex;
 import dev.javatexteditor.analysis.CompletionItem;
+import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.WordIndex;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
@@ -29,6 +31,7 @@ public class WordCompletionTest {
         testCtrlNStillMovesCursorDown();
         testBufferOnlyWordIsCandidate();
         testNoCandidatesShowsNothing();
+        testCtrlSpaceIncludesJdkClassEvenWhenWordMatchesFillBudget();
 
         System.out.println("=== " + passed + "/" + (passed + failed) + " PASSED ===");
         if (failed > 0) System.exit(1);
@@ -165,6 +168,39 @@ public class WordCompletionTest {
             editor.processKey(KeyEvent.VK_E, KeyEvent.CHAR_UNDEFINED, InputEvent.CTRL_DOWN_MASK);
             pressAltSlash(editor);
             assertTrue("一致候補がなければ補完は開かない", !editor.isCompletionActive());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    /**
+     * Ctrl+Space の統合クエリで、wordIndex側の一致件数が COMPLETION_MAX_RESULTS(10) を
+     * 埋め尽くすほど多い場合でも、JDK クラス名（CompletionIndex, kind="cls"）が
+     * 候補から締め出されずに表示されることを確認する。
+     */
+    private static void testCtrlSpaceIncludesJdkClassEvenWhenWordMatchesFillBudget() throws IOException {
+        Path tmp = Files.createTempDirectory("wordcomp_ctrlspace_");
+        try {
+            // "St" で始まる単語を12個用意し、wordIndex 単独で10件枠を埋め尽くす状況を作る
+            StringBuilder sample = new StringBuilder();
+            for (int i = 0; i < 12; i++) {
+                sample.append("int StWord").append(i).append(" = 0;\n");
+            }
+            Files.writeString(tmp.resolve("Sample.java"), sample.toString());
+
+            ModalEditor editor = makeEditorWithWords(tmp, "St");
+            JdkClassIndex jdkIndex = JdkClassIndex.buildSync();
+            editor.setJdkClassIndex(jdkIndex);
+            editor.setCompletionIndex(CompletionIndex.buildSync(jdkIndex));
+
+            enterInsertMode(editor);
+            editor.processKey(KeyEvent.VK_E, KeyEvent.CHAR_UNDEFINED, InputEvent.CTRL_DOWN_MASK);
+            editor.processKey(KeyEvent.VK_SPACE, ' ', InputEvent.CTRL_DOWN_MASK);
+
+            assertTrue("Ctrl+Space で補完がアクティブになる", editor.isCompletionActive());
+            List<CompletionItem> items = editor.getCompletionItems();
+            assertTrue("String などの JDK クラス名が候補に含まれる（wordIndex に枠を独占されない）",
+                items.stream().anyMatch(it -> "cls".equals(it.kind()) && it.label().startsWith("St")));
         } finally {
             deleteDir(tmp);
         }

@@ -66,6 +66,13 @@ public class ModalEditor {
     private static final String INDENT_UNIT = " ".repeat(TAB_WIDTH);
     /** 補完ポップアップに出す最大候補数（Ctrl+Space / Alt+/ 共通）。 */
     private static final int COMPLETION_MAX_RESULTS = 10;
+    /**
+     * Ctrl+Space の統合クエリで JDK クラス名（CompletionIndex）用に必ず確保する最小枠。
+     * wordIndex 側の一致件数が多い識別子（"get"/"S" 等）だと単語だけで COMPLETION_MAX_RESULTS を
+     * 埋め尽くしてしまい、JDK クラス名が一切候補に出てこない不具合があったため、
+     * wordIndex への問い合わせ自体をこの枠の分だけ小さくして JDK クラス名の表示機会を保証する。
+     */
+    private static final int COMPLETION_CLASS_RESERVED_SLOTS = 3;
 
     private UndoablePieceTable buffer;
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
@@ -896,12 +903,18 @@ public class ModalEditor {
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryMergedCompletion(String prefix) {
         java.util.List<dev.javatexteditor.analysis.CompletionItem> merged = new java.util.ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
+        boolean classAvailable = completionIndex != null && completionIndex.isReady();
+        // JDK クラス名の枠を確保するため、wordIndex 側にはあらかじめ縮小した上限を渡す
+        // （classAvailable が false の場合は満枠まで使ってよい）。
+        int wordBudget = classAvailable
+            ? Math.max(0, COMPLETION_MAX_RESULTS - COMPLETION_CLASS_RESERVED_SLOTS)
+            : COMPLETION_MAX_RESULTS;
         if (wordIndex != null && wordIndex.isReady()) {
-            for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix)) {
+            for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix, wordBudget)) {
                 if (seen.add(item.label())) merged.add(item);
             }
         }
-        if (completionIndex != null && completionIndex.isReady() && merged.size() < COMPLETION_MAX_RESULTS) {
+        if (classAvailable && merged.size() < COMPLETION_MAX_RESULTS) {
             for (dev.javatexteditor.analysis.CompletionItem item
                     : completionIndex.query(prefix, COMPLETION_MAX_RESULTS)) {
                 if (merged.size() >= COMPLETION_MAX_RESULTS) break;
@@ -943,10 +956,15 @@ public class ModalEditor {
      * extractWordsByProximity 側で除外済み。
      */
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
+        return queryWordCompletion(prefix, COMPLETION_MAX_RESULTS);
+    }
+
+    /** maxResults を明示的に指定する版。Ctrl+Space 統合クエリが JDK クラス名の枠を確保するために使う。 */
+    private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix, int maxResults) {
         int cursorOffset = prefixStartOffset();
         java.util.List<String> bufferWordsOrdered = dev.javatexteditor.analysis.WordIndex
             .extractWordsByProximity(buffer.getText(), cursorOffset, prefix);
-        java.util.List<String> words = wordIndex.query(prefix, COMPLETION_MAX_RESULTS, bufferWordsOrdered);
+        java.util.List<String> words = wordIndex.query(prefix, maxResults, bufferWordsOrdered);
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = new java.util.ArrayList<>(words.size());
         for (String w : words) {
             items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));

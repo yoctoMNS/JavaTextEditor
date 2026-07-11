@@ -188,6 +188,14 @@ project-root/
 - **ディスク索引（他ファイル）側の並びは変更していない**: `words.subSet()` によるアルファベット順のまま。Vim の `'complete'` も他バッファ/タグ/includeファイルの探索順は「近接」ではなく別の基準（読み込み順など）であり、ディスク全体走査には位置の概念がそもそも存在しないため、無理に近接順を模倣せず現状維持とした。
 - **意図的に見送った拡張**: `CompletionIndex`（JDKクラス名、`CompletionScorer` によるスコアリング）側の並び順は今回変更していない。`queryMergedCompletion()` は「`wordIndex` の近接順結果を先頭に、残り枠だけ `completionIndex` のスコア順結果を追加する」という継ぎ接ぎ構造のままであり、2つの異なるランキング方式を単一の統一スコアに揃える改修は本タスクのスコープ外（要望はあくまで「単語補完の並び順を Vim に合わせる」ことだったため）。
 
+### Ctrl+Space で JDK クラス名が候補に出ない不具合の修正（`COMPLETION_CLASS_RESERVED_SLOTS` 新設）
+
+- **症状**: Ctrl+Space の補完ポップアップに JDK API クラス（`"cls"`、`CompletionIndex` 由来）がまったく出てこない、という報告があった。
+- **原因**: `queryMergedCompletion()` は `wordIndex`（作業ディレクトリ配下の単語 + 現在バッファ）を最優先で `COMPLETION_MAX_RESULTS`（10件）まるごとの上限で問い合わせていた。実プロジェクトでは大半のプレフィックスに対して単語一致だけで10件埋まってしまうため、`completionIndex`（JDKクラス名）を問い合わせる分岐（`merged.size() < COMPLETION_MAX_RESULTS`）に到達する前に枠が尽き、JDK クラス名が実質的に一切表示されなくなっていた（上記「意図的に見送った拡張」の順序自体は既存方針どおりだが、wordIndex 側に上限を掛けていなかったのは見落としだった）。
+- **修正**: `COMPLETION_CLASS_RESERVED_SLOTS`（3）を新設し、`completionIndex` が利用可能な場合は `wordIndex` への問い合わせ上限を `COMPLETION_MAX_RESULTS - COMPLETION_CLASS_RESERVED_SLOTS`（7件）に縮小してから `completionIndex` に残り枠（wordIndex が7件未満しか返さなければその分JDKクラス名が増える）を渡すようにした。`queryWordCompletion(String)` はオーバーロード `queryWordCompletion(String, int maxResults)` を追加する形にし、Alt+/ 専用の `triggerWordCompletion()`/`recheckWordCompletion()` は従来どおり `COMPLETION_MAX_RESULTS` フル件数のまま変更していない（Alt+/ はそもそも `wordIndex` 単独の機能であり、JDKクラス名と競合する場面がないため）。
+- **意図的に変更しなかった点**: 「wordIndex優先・JDKクラス名は残り枠」という基本方針（上記「Ctrl+Space 補完を WordIndex に一本化」節）自体は変更していない。あくまで wordIndex 側が枠を独占して JDK クラス名の表示機会が事実上ゼロになる、という副作用だけを解消した。
+- **テスト**: `test/dev/javatexteditor/editor/WordCompletionTest.java` に `testCtrlSpaceIncludesJdkClassEvenWhenWordMatchesFillBudget()` を追加。同一プレフィックスの単語を12個用意して wordIndex 単独で10件枠を埋め尽くす状況を作り、それでも Ctrl+Space の候補に `kind=="cls"` の JDK クラス名が含まれることを確認する。
+
 ## `dev.javatexteditor.completion2` パッケージ（未接続の独立コンポーネント）
 
 - **経緯**: 「Vimの `i_CTRL-N` 相当の単語補完を `CompletionCandidate`/`CompletionSession`/`CompletionEngine`/`TokenScanner`/`EditorKeyHandler`/`CompletionController`/`CompletionPopupModel` という指定クラス構成で実装してほしい」という依頼があったが、既に本エディタの `Alt+/` 単語補完は `WordIndex`/`CompletionIndex`/`ModalEditor`/`EditorCanvas` を使う設計として完成済み（上記「単語補完（Alt+/）の設計決定事項」節）であり、指定構成は既存実装と矛盾する。CLAUDE.mdの方針（既存設計と矛盾する実装は着手前に確認）に従い確認を試みたが、確認手段が使えない状況だったため、既存の本番経路（`ModalEditor`/`EditorCanvas`/`WordIndex`/`CompletionIndex`、Alt+/ キーの実際の割り当て）には一切手を入れず、`src/dev/javatexteditor/completion2/` に独立パッケージとして指定クラス構成をそのまま実装する形で対応した。
