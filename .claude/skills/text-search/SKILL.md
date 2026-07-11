@@ -133,6 +133,7 @@ for (int[] h : searchHighlights) {
 
 ## 注意点
 
+- **`executeSearch()` は `Pattern.compile(pattern, Pattern.CASE_INSENSITIVE)` で大文字小文字を区別しない**（ユーザー要望により追加。`/` パターン検索・`*`/`#` 単語検索のいずれもこのメソッド経由のため自動的に両方に反映される）。`\g`/`gr`/`:grep`（`ProjectSearcher`）・`\f`（`FileNameSearcher`、元々CASE_INSENSITIVE）・Alt+/ 単語補完（`WordIndex`、元々大文字小文字無視）・Ctrl+Space 補完（`CompletionIndex`/`CompletionScorer`、元々大文字小文字無視プレフィックスをスコアリング対象に含む）と足並みを揃えた形。大文字小文字を区別する検索が必要になった場合は、既存の `Pattern.compile(pattern)` に戻すのではなく、`(?-i)` インラインフラグや専用の切替オプションを検討すること（挙動を後退させる形の変更はしない）。
 - `searchMatches` はバッファ内容が変わっても自動更新しない（`n` 押下時に再計算するため表示がずれることがある。Vim も同様の挙動）
 - `lastSearchPattern` はファイルロード時にはクリアしない（Vim 同様、別ファイルを開いても検索を継続できる）
 - ただしハイライト（`searchMatches` の内容および `EditorCanvas.searchHighlights`）はファイルロード時・バッファ切替時に `clearSearchHighlights()` 経由でクリアする

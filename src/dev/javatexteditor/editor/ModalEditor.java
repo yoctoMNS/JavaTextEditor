@@ -1915,7 +1915,7 @@ public class ModalEditor {
     private void executeSearch(String pattern, boolean forward) {
         Pattern p;
         try {
-            p = Pattern.compile(pattern);
+            p = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);
         } catch (PatternSyntaxException e) {
             statusMessage = "E: bad pattern: " + e.getDescription();
             return;

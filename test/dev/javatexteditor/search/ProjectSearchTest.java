@@ -27,7 +27,7 @@ public class ProjectSearchTest {
         testSearchEmptyDirectory();
         testSearchMissingDirectory();
         testSearchMultipleMatchesPerFile();
-        testSearchCaseSensitive();
+        testSearchCaseInsensitive();
 
         // --- ModalEditor 統合テスト ---
         testGrepCommandLoadsResults();
@@ -140,13 +140,15 @@ public class ProjectSearchTest {
         passed("testSearchMultipleMatchesPerFile");
     }
 
-    static void testSearchCaseSensitive() throws Exception {
+    static void testSearchCaseInsensitive() throws Exception {
         Path dir = createTempDir();
         writeFile(dir, "case.txt", "Hello\nhello\nHELLO\n");
         var results = new ProjectSearcher().search(dir, "hello");
-        assertEquals("case sensitive: only lowercase", 1, results.size());
-        assertEquals("line 2", 2, results.get(0).lineNumber());
-        passed("testSearchCaseSensitive");
+        assertEquals("case insensitive: all three lines match", 3, results.size());
+        assertEquals("line 1", 1, results.get(0).lineNumber());
+        assertEquals("line 2", 2, results.get(1).lineNumber());
+        assertEquals("line 3", 3, results.get(2).lineNumber());
+        passed("testSearchCaseInsensitive");
     }
 
     // -------------------------------------------------------------------------
