@@ -223,6 +223,7 @@ public class EditorCanvas extends JPanel {
     public int getScrollCol() { return scrollCol; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
+    public String getCommandLineText() { return commandLineText; }
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
     public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
     public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; repaint(); }

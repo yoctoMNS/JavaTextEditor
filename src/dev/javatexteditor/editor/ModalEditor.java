@@ -1698,6 +1698,10 @@ public class ModalEditor {
         classpathInputBuffer.setLength(0);
         mode = Mode.CLASSPATH_INPUT;
         statusMessage = "";
+        // F10/F11/F12はMain.javaのグローバルキーディスパッチャから直接呼ばれ、processKey()経由の
+        // syncCanvas()呼び出しを通らない。ここで呼ばないとキー入力が来るまでステータス行の
+        // プロンプト文言が描画されない（実際に報告されたバグ）。
+        syncCanvas();
     }
 
     private void processClasspathInputKey(int keyCode, char keyChar) {
@@ -1772,6 +1776,9 @@ public class ModalEditor {
         telescopePurpose = TelescopePurpose.RUN_MAIN_CLASS;
         beginTelescopeSession();
         statusMessage = "実行するmainクラスを選択してください（Enterで実行、Escでキャンセル）";
+        // Main.javaのバックグラウンドスレッド完了コールバックから呼ばれ、processKey()経由の
+        // syncCanvas()呼び出しを通らないため、ここで呼ばないと次のキー入力まで描画が更新されない。
+        syncCanvas();
     }
 
     /**
@@ -4438,6 +4445,9 @@ public class ModalEditor {
         statusMessage = result.success()
             ? "compile: success (" + result.fileCount() + " file(s))"
             : "compile: FAILED";
+        // Main.javaのバックグラウンドスレッド完了コールバックから呼ばれ、processKey()経由の
+        // syncCanvas()呼び出しを通らないため、ここで呼ばないと次のキー入力まで描画が更新されない。
+        syncCanvas();
     }
 
     /** F11: 実行結果を *run* 疑似バッファに表示する。showCompileResult と同じ疑似バッファパターン。 */
@@ -4456,6 +4466,9 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "run: " + fqcn + " exited with code " + exitCode;
+        // showCompileResult と同じ理由（バックグラウンドスレッド完了コールバックから呼ばれるため）で
+        // syncCanvas() を明示的に呼ぶ。
+        syncCanvas();
     }
 
     /**

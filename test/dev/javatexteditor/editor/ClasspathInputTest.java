@@ -1,5 +1,6 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.List;
@@ -20,6 +21,7 @@ public class ClasspathInputTest {
         testEnterWithEmptyInputYieldsEmptyList();
         testBackspaceEditsBuffer();
         testCallbackFiresExactlyOnce();
+        testPromptRendersImmediatelyWithoutKeyPress();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -88,6 +90,19 @@ public class ClasspathInputTest {
         ed.enterClasspathInput("F10", extra -> count[0]++);
         ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
         check("1回だけ呼ばれる", count[0] == 1);
+    }
+
+    // F10/F11/F12はMain.javaのグローバルキーディスパッチャからprocessKey()を経由せず直接呼ばれるため、
+    // enterClasspathInput()自身がsyncCanvas()しないとキー入力が来るまでステータス行が更新されない
+    // バグが実際にあった（ユーザー報告）。回帰防止のテスト。
+    static void testPromptRendersImmediatelyWithoutKeyPress() {
+        System.out.println("[enterClasspathInput: キー入力なしでもプロンプトが即座に描画される]");
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("abc", canvas);
+        ed.enterClasspathInput("F10", extra -> {});
+        String rendered = canvas.getCommandLineText();
+        check("キー入力前にプロンプト文言がcanvasへ反映されている",
+              rendered != null && rendered.startsWith("F10"));
     }
 
     // ユーティリティ
