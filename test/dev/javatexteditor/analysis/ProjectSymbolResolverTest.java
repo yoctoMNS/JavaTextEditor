@@ -21,6 +21,9 @@ public class ProjectSymbolResolverTest {
         test_resolveMemberInType_disambiguatesSameNamedMethod();
         test_resolveMemberInType_unknownTypeReturnsEmpty();
         test_resolveMemberInType_memberNotInThatTypeReturnsEmpty();
+        test_resolveMemberInType_walksSuperclassChain();
+        test_resolveMemberInType_stopsAtUnknownSuperclass();
+        test_resolveMemberInType_multiLevelInheritance();
 
         System.out.println();
         System.out.println("Results: " + passed + " passed, " + failed + " failed");
@@ -236,5 +239,80 @@ public class ProjectSymbolResolverTest {
 
         assertTrue("member absent from resolved type returns empty (no cross-class fallback)",
             loc.isEmpty());
+    }
+
+    /**
+     * インスタンスメソッド呼び出しの継承バグ再現: Derived型のレシーバでBaseのメソッドを
+     * 呼んでも、無関係な同名メソッドを持つOtherへ誤ジャンプせず、正しくBase.javaが見つかる。
+     */
+    static void test_resolveMemberInType_walksSuperclassChain() throws Exception {
+        Path dir = tempDir();
+        writeFile(dir, "Base.java", """
+            public class Base {
+                void helper() {
+                    System.out.println("base");
+                }
+            }
+            """);
+        writeFile(dir, "Derived.java", """
+            public class Derived extends Base {
+                void other() {}
+            }
+            """);
+        writeFile(dir, "Other.java", """
+            public class Other {
+                void helper() {
+                    System.out.println("wrong target");
+                }
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolveMemberInType(dir, null, null, "Derived", "helper");
+
+        assertTrue("inherited helper() is found by walking to Base", loc.isPresent());
+        assertTrue("resolved to Base.java, not Other.java",
+            loc.get().filePath().endsWith("Base.java"));
+    }
+
+    static void test_resolveMemberInType_stopsAtUnknownSuperclass() throws Exception {
+        Path dir = tempDir();
+        // ArrayList は JDK クラス（プロジェクト内には存在しない）
+        writeFile(dir, "MyList.java", """
+            public class MyList extends java.util.ArrayList<String> {
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolveMemberInType(dir, null, null, "MyList", "add");
+
+        assertTrue("JDK superclass is not resolvable in project, returns empty", loc.isEmpty());
+    }
+
+    static void test_resolveMemberInType_multiLevelInheritance() throws Exception {
+        Path dir = tempDir();
+        writeFile(dir, "A.java", """
+            public class A {
+                void rootMethod() {
+                }
+            }
+            """);
+        writeFile(dir, "B.java", """
+            public class B extends A {
+            }
+            """);
+        writeFile(dir, "C.java", """
+            public class C extends B {
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolveMemberInType(dir, null, null, "C", "rootMethod");
+
+        assertTrue("rootMethod found by walking two levels up (C -> B -> A)", loc.isPresent());
+        assertTrue("resolved to A.java", loc.get().filePath().endsWith("A.java"));
     }
 }

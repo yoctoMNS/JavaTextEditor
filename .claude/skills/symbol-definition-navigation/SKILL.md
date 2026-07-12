@@ -126,11 +126,25 @@ private boolean tryResolveQualifiedMember(String receiver, String member, String
 書かれている」ケースの両方で同じJDK解決ロジックを再利用できる。
 
 
+## インスタンスメソッド呼び出し（継承されたメソッド）への対応
+
+上記の「レシーバ型解決」だけでは、レシーバの宣言型**自身**が持たないメンバー
+（スーパークラスから継承しているメソッド）を呼び出した場合に、無関係な同名メソッドへ
+誤ジャンプするバグがあった（例: `Derived extends Base` で `Base` にしか無い `helper()` を
+`d.helper()` の形で呼ぶと、プロジェクト内の無関係な `Other.helper()` へ飛んでしまう）。
+
+`ProjectSymbolResolver.resolveMemberInType()` を、対象クラスにメンバーが無ければ
+`SymbolEntry.superTypeName()`（`SourceAnalyzer` が `extends` 節から抽出した親クラス名）を
+辿ってスーパークラスのファイルも探す「型階層探索」に拡張して修正した。
+JDKクラスの継承（`ArrayList` 等を継承した自作クラス）や `implements`（インタフェースの
+デフォルトメソッド）は今回のスコープ外。設計判断の詳細・既知の制限は
+`references/instance-method-hierarchy-resolution.md` を参照。
+
 ## 実装済みクラス
 
 | クラス | 場所 | 役割 |
 |---|---|---|
-| `ProjectSymbolResolver` | `src/dev/javatexteditor/analysis/ProjectSymbolResolver.java` | プロジェクト全体からシンボル宣言箇所を検索。`resolveMemberInType()` は型名を指定してそのクラスのファイルだけに絞ったメンバー検索を行う |
+| `ProjectSymbolResolver` | `src/dev/javatexteditor/analysis/ProjectSymbolResolver.java` | プロジェクト全体からシンボル宣言箇所を検索。`resolveMemberInType()` は型名を指定してそのクラスのファイルだけに絞ったメンバー検索を行う（見つからなければ `superTypeName` を辿ってスーパークラスも探す） |
 | `ReceiverTypeResolver` | `src/dev/javatexteditor/analysis/ReceiverTypeResolver.java` | 「変数名.メンバー名」の変数名から、軽量な正規表現ヒューリスティックで宣言型を推定する |
 
 ## 設計方針: 2段階解決（フル解析を避ける）

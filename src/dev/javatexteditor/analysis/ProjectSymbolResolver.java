@@ -97,14 +97,19 @@ public class ProjectSymbolResolver {
 
     /**
      * typeName（クラス/インタフェース/enum名）が自プロジェクト内で宣言されている場合に限り、
-     * そのクラスのファイル**だけ**を対象に memberName（フィールド・メソッド）の宣言を検索する。
+     * そのクラスのファイルを対象に memberName（フィールド・メソッド）の宣言を検索する。
+     * 見つからなければ、そのクラスの extends 節（{@link SymbolEntry#superTypeName()}）を
+     * 辿ってスーパークラスのファイルも同様に検索する（Eclipse の "Open Declaration" と同じ
+     * 型階層探索。詳細は symbol-definition-navigation スキルの
+     * references/instance-method-hierarchy-resolution.md 参照）。
      *
      * "instanceVar.member" 形式のジャンプ用: レシーバの型が typeName だと分かっている前提で、
-     * 他クラスの同名メンバーと混同しないよう検索範囲をそのクラスのファイルに限定する
-     * （継承元クラスへは辿らない。スコープ外は SKILL.md 参照）。
+     * 他クラスの同名メンバーと混同しないよう検索範囲を typeName とそのスーパークラスの
+     * ファイルだけに限定する。
      *
-     * typeName 自体が自プロジェクトのクラスとして見つからない場合（JDK型等）は
-     * Optional.empty() を返す。呼び出し側はこの場合 JDK 側の解決を試みること。
+     * スーパークラスがプロジェクト内で見つからない場合（JDK型を継承している等）はそこで
+     * 探索を打ち切り Optional.empty() を返す。呼び出し側はこの場合 JDK 側の解決を試みること。
+     * implements（インタフェースのデフォルトメソッド）は対象外（スコープ外、上記ドキュメント参照）。
      */
     public Optional<SymbolLocation> resolveMemberInType(Path baseDir, String currentFilePath,
                                                           String currentBufferText,
@@ -112,20 +117,28 @@ public class ProjectSymbolResolver {
         if (typeName == null || typeName.isBlank() || memberName == null || memberName.isBlank()) {
             return Optional.empty();
         }
-        Optional<String> classFile = findClassFile(baseDir, currentFilePath, currentBufferText, typeName);
-        if (classFile.isEmpty()) {
-            return Optional.empty();
+        java.util.Set<String> visited = new LinkedHashSet<>();
+        String currentType = typeName;
+        while (currentType != null && visited.add(currentType)) {
+            Optional<String> classFile = findClassFile(baseDir, currentFilePath, currentBufferText, currentType);
+            if (classFile.isEmpty()) {
+                return Optional.empty();
+            }
+            String filePath = classFile.get();
+            try {
+                SourceIndex idx = (currentFilePath != null && filePath.equals(currentFilePath) && currentBufferText != null)
+                    ? analyzer.analyzeText(currentBufferText)
+                    : analyzer.analyzeFile(Path.of(filePath));
+                Optional<SymbolEntry> member = findSymbol(idx, memberName);
+                if (member.isPresent()) {
+                    return Optional.of(new SymbolLocation(filePath, member.get().lineNumber(), member.get().kind()));
+                }
+                currentType = findClassSymbol(idx, currentType).map(SymbolEntry::superTypeName).orElse(null);
+            } catch (AnalysisException e) {
+                return Optional.empty();
+            }
         }
-        String filePath = classFile.get();
-        try {
-            SourceIndex idx = (currentFilePath != null && filePath.equals(currentFilePath) && currentBufferText != null)
-                ? analyzer.analyzeText(currentBufferText)
-                : analyzer.analyzeFile(Path.of(filePath));
-            return findSymbol(idx, memberName)
-                .map(s -> new SymbolLocation(filePath, s.lineNumber(), s.kind()));
-        } catch (AnalysisException e) {
-            return Optional.empty();
-        }
+        return Optional.empty();
     }
 
     /** typeName という名前のクラス/インタフェース/enum が宣言されているファイルの絶対パスを探す。 */
