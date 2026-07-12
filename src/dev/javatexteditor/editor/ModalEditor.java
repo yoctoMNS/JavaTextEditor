@@ -109,6 +109,10 @@ public class ModalEditor {
     private static final int MACRO_MAX_REPLAY_DEPTH = 1000;
     // Visual '>'/'<' 用の count 前置き入力（例: "3>" は shiftwidth*3）。数字キー以外が来たら破棄する。
     private String visualCountBuffer = "";
+    // NORMAL の r（1文字置換）専用の count 前置き入力（例: "3r"）。汎用の "3j" 等のカウント付き
+    // モーションは②modal-editing-engineスキルでスコープ外のまま（visualCountBufferと同じ理由づけ）。
+    private String normalCountBuffer = "";
+    private int pendingReplaceCount = 1;
     private final IndentSettings indentSettings = new IndentSettings();
     // gv: 直前の Visual 選択（種別・アンカー・カーソル）を記憶する。'>'/'<' 実行後も
     // 更新済みの範囲で保存されるため、'>gv' のような再選択運用がそのまま機能する。
@@ -579,6 +583,16 @@ public class ModalEditor {
                 if (movePaneNextCallback != null) movePaneNextCallback.run();
                 return;
             }
+            // r の2打目: キーマップ解決を経由せず、押された文字をそのまま置換文字として使う
+            // （VISUAL BLOCK の r と同じパターン。Esc によるキャンセルは上のESC早期分岐が
+            // pendingSequence を "ESC" で上書きすることで既に処理済みのため、ここでは扱わない）
+            if (prev == 'r') {
+                if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+                    replaceCharAtCursor(keyChar, pendingReplaceCount);
+                }
+                pendingReplaceCount = 1;
+                return;
+            }
             // \f: ファイル名検索, \g: ファイル内容grep
             if (prev == '\\') {
                 if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return; }
@@ -627,6 +641,14 @@ public class ModalEditor {
             // シーケンスが成立しなかった場合は落下してキーを通常処理
         }
 
+        // r の count 前置き（例: "3r"）。Visual '>'/'<' の visualCountBuffer と同じ方式で、
+        // digit以外のキーが来たら次の行で無条件に破棄される（consumeNormalCount()）。
+        if (Character.isDigit(keyChar) && (keyChar != '0' || !normalCountBuffer.isEmpty())) {
+            normalCountBuffer += keyChar;
+            return;
+        }
+        int replaceCount = consumeNormalCount();
+
         String action = keymap.resolve(KeymapRegistry.Mode.NORMAL, keyCode, keyChar, modifiers);
         if (action == null) return;
 
@@ -673,6 +695,11 @@ public class ModalEditor {
                 clampCursorAfterUndoRedo();
             }
             case "case.toggle.char" -> toggleCaseUnderCursor();
+            case "replace.char.pending" -> {
+                pendingReplaceCount = replaceCount;
+                pendingSequence = "r";
+                statusMessage = "r-";
+            }
             case "enter.visual" -> {
                 anchorRow = cursorRow;
                 anchorCol = cursorCol;
@@ -3132,6 +3159,14 @@ public class ModalEditor {
         return count;
     }
 
+    /** normalCountBuffer を読み取って count（未指定なら1）を返し、バッファをリセットする（r 専用）。 */
+    private int consumeNormalCount() {
+        if (normalCountBuffer.isEmpty()) return 1;
+        int count = Integer.parseInt(normalCountBuffer);
+        normalCountBuffer = "";
+        return count;
+    }
+
     /** r1〜r2行（両端含む）を行頭から count*shiftwidth 分シフトする（charwise/linewise 共通）。 */
     private void indentLines(int r1, int r2, boolean left, int count) {
         for (int row = r1; row <= r2; row++) {
@@ -3232,6 +3267,22 @@ public class ModalEditor {
             buffer.insert(offset, converted);
         }
         cursorCol = Math.min(cursorCol + 1, Math.max(0, line.length() - 1));
+    }
+
+    /**
+     * NORMAL の r: カーソル位置から count 文字を ch で一括置換する（count省略時は1）。
+     * 行末までの残り文字数を超える場合は何もしない（Vim の r と同じ、無効操作として中断）。
+     * カーソルは置換した最後の文字の位置に残す（INSERT へは遷移しない）。
+     */
+    private void replaceCharAtCursor(char ch, int count) {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return;
+        String line = lines[cursorRow];
+        if (cursorCol + count > line.length()) return;
+        int offset = offsetAt(cursorRow, cursorCol);
+        buffer.delete(offset, count);
+        buffer.insert(offset, String.valueOf(ch).repeat(count));
+        cursorCol = cursorCol + count - 1;
     }
 
     /**

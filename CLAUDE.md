@@ -426,3 +426,33 @@ project-root/
   を追加し、Shift+Enterも通常のEnterと同じ`"insert.newline"`アクションに解決されるようにした。
   NORMAL/COMMAND/VISUAL系モードのEnter（ジャンプ・コマンド実行等）は今回のバグ報告の対象外のため
   変更していない。
+
+## NORMALモード `r`（1文字置換）コマンドの実装
+
+- **キーバインド**: `KeymapRegistry`のNORMALモードに`bind(Mode.NORMAL, KeyBinding.ofChar('r', "replace.char.pending"), "replace.char.pending")`を追加した。
+  素の`r`は既存バインドと衝突しない（`Ctrl+R`=redo、VISUAL BLOCKの`r`=`block.replace.pending`は別モードのため独立）。
+- **カウント接頭辞（`3r`等）はr専用の軽量な数字バッファ`normalCountBuffer`で実装した**。NORMALモードには
+  `3j`/`3dd`のような汎用カウント機構が元々存在せず（②modal-editing-engineスキルで「未実装（スコープ外）」と
+  明記済み）、dd/yyの2打鍵シーケンスとも共通化できる仕組みがなかったため、既存のVisual `>`/`<`用
+  `visualCountBuffer`/`consumeVisualCount()`（`.claude/skills/modal-editing-engine/SKILL.md`参照）と
+  同型の専用バッファ・専用ヘルパー（`consumeNormalCount()`）を追加した。digit以外のキーが来た時点で
+  `consumeNormalCount()`が呼ばれてバッファは無条件に破棄される（`visualCountBuffer`と同じ「他のキーで破棄」方式）。
+  汎用カウント機構自体をこの実装で導入したわけではない。
+- **2打鍵目（置換文字入力）の処理は`pendingSequence == "r"`をprocessNormalKey内のdd/yyと同じ多打鍵
+  シーケンス処理ブロックに追加する形で実装した**（VISUAL BLOCKの`r`と同じ「キーマップ解決を経由せず
+  押された文字をそのまま置換文字として使う」パターン）。Escによるキャンセルは、NORMALモード冒頭の
+  既存のESC早期分岐（`pendingSequence`を`"ESC"`で無条件上書きする、dd/yy等と共通の仕組み）がそのまま
+  効くため専用コードは追加していない。
+- **置換ロジック（`replaceCharAtCursor(char, int)`）は`buffer.delete()`＋`buffer.insert()`の2操作**。
+  `toggleCaseUnderCursor()`/VISUAL BLOCKの`replaceBlockChar()`と同じ既存の「1つの論理編集がdelete+insertの
+  2 undo単位になる」トレードオフをそのまま踏襲した（①のピーステーブルは`insert`/`delete`単位でスナップショットを
+  取る設計のため、専用のグルーピング機構がない限りこの粒度になる。CLAUDE.mdの`:s`置換コマンドの節と同じ
+  既知のトレードオフ）。カウント分の置換は`replaceCount`文字の一括delete＋一括insertで行うため、
+  カウントの大小に関わらず常に2 undo単位のまま増えない。
+- **行末を超えるカウントは`cursorCol + count > line.length()`で判定し、何も変更せず無音で中断する**
+  （既存の無効操作時の挙動＝ビープ音やエラーメッセージなしのno-opに合わせた）。
+- **置換後のカーソル位置**: `cursorCol + count - 1`（置換した最後の文字の位置）に置く。INSERTモードへは
+  遷移しない。
+- **テスト**: `test/dev/javatexteditor/editor/ReplaceCharTest.java`（新設・7テスト）。カウントなし置換・
+  カウント付き置換・カウントが行末超過時のno-op・Escキャンセル（キャンセル後の`r`が正常動作することも確認）・
+  カーソル位置・NORMALモード維持・undo（delete+insertの2 undo単位のため`u`2回で復元）を検証。
