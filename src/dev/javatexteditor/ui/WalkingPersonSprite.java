@@ -61,12 +61,25 @@ public final class WalkingPersonSprite {
      *
      * @param elapsedSec  経過秒数
      * @param canvasWidth キャンバス幅（ピクセル）
-     * @param scale       拡大率（スプライト 1px → canvas scale px）
+     * @param scale       拡大率（スプライト 1px → canvas scale px）。ステータス行の文字高さと
+     *                    常に一致させるため小数の拡大率を受け付ける（{@link #heightScale(int)}参照）。
      */
-    public static int calcX(double elapsedSec, int canvasWidth, int scale) {
-        int spriteW = PERSON_W * scale;
+    public static int calcX(double elapsedSec, int canvasWidth, double scale) {
+        int spriteW = (int) Math.round(PERSON_W * scale);
         int totalW  = canvasWidth + spriteW;
         return (int)(elapsedSec * WALK_SPEED * scale) % totalW - spriteW;
+    }
+
+    /**
+     * スプライトの高さ（{@link #PERSON_H}px）を targetHeight px にちょうど一致させるための
+     * 拡大率を返す。整数除算（{@code lineHeight / PERSON_H}）による切り捨てだと、
+     * フォントサイズを変更（Ctrl+Shift+矢印）してもスプライトの高さが飛び飛びにしか
+     * 変わらず、文字の高さ（cellH）と常に揃わなくなる問題があったため、小数の拡大率を
+     * 返すようにした。呼び出し側は {@code Math.round(PERSON_H * scale)} が targetHeight と
+     * 一致することを前提にできる。
+     */
+    public static double heightScale(int targetHeight) {
+        return Math.max(0.0625, (double) targetHeight / PERSON_H);
     }
 
     /**
@@ -76,33 +89,40 @@ public final class WalkingPersonSprite {
      * @param frame     フレーム番号（0 or 1）
      * @param x         スプライト左端の X 座標
      * @param y         スプライト上端の Y 座標
-     * @param scale     拡大率
+     * @param scale     拡大率（小数可。フォントの文字高さと常に一致させるために使う）
      * @param baseColor '#' ピクセルに使う色（テーマの前景色または背景色を推奨）
      */
     public static void drawFrame(Graphics2D g2, int frame, int x, int y,
-                                  int scale, Color baseColor) {
+                                  double scale, Color baseColor) {
         int frameOffset = frame * PERSON_W;
         int br = baseColor.getRed();
         int bg = baseColor.getGreen();
         int bb = baseColor.getBlue();
 
-        for (int row = 0; row < PERSON_H; row++) {
-            String rowData = PERSON_DATA[row];
-            for (int col = 0; col < PERSON_W; col++) {
-                int dataIdx = frameOffset + col;
-                if (dataIdx >= rowData.length()) continue;
-                char ch = rowData.charAt(dataIdx);
-                if (ch == ' ') continue;
+        Graphics2D scaled = (Graphics2D) g2.create();
+        try {
+            scaled.translate(x, y);
+            scaled.scale(scale, scale);
+            for (int row = 0; row < PERSON_H; row++) {
+                String rowData = PERSON_DATA[row];
+                for (int col = 0; col < PERSON_W; col++) {
+                    int dataIdx = frameOffset + col;
+                    if (dataIdx >= rowData.length()) continue;
+                    char ch = rowData.charAt(dataIdx);
+                    if (ch == ' ') continue;
 
-                Color c = switch (ch) {
-                    case '#'  -> baseColor;
-                    case '\'' -> new Color(br, bg, bb, 178); // ~70% alpha
-                    case '.'  -> new Color(br, bg, bb, 102); // ~40% alpha
-                    default   -> baseColor;
-                };
-                g2.setColor(c);
-                g2.fillRect(x + col * scale, y + row * scale, scale, scale);
+                    Color c = switch (ch) {
+                        case '#'  -> baseColor;
+                        case '\'' -> new Color(br, bg, bb, 178); // ~70% alpha
+                        case '.'  -> new Color(br, bg, bb, 102); // ~40% alpha
+                        default   -> baseColor;
+                    };
+                    scaled.setColor(c);
+                    scaled.fillRect(col, row, 1, 1);
+                }
             }
+        } finally {
+            scaled.dispose();
         }
     }
 
