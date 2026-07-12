@@ -58,7 +58,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -184,6 +184,10 @@ public class ModalEditor {
     private final StringBuilder fileSearchBuffer = new StringBuilder();
     private FileSearchType fileSearchType = FileSearchType.NAME;
     private List<String> fileNameResults = null; // null = 通常バッファ
+    // F10/F11/F12: 追加クラスパス入力（CLASSPATH_INPUTモード）
+    private final StringBuilder classpathInputBuffer = new StringBuilder();
+    private String classpathInputLabel = "";
+    private Consumer<List<Path>> classpathCallback;
     // テキスト内検索状態
     private final StringBuilder searchBuffer = new StringBuilder();
     private String  lastSearchPattern = "";
@@ -424,6 +428,7 @@ public class ModalEditor {
             case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
             case IMPORT_SELECT -> processImportSelectKey(keyCode, keyChar, modifiers);
             case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
+            case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
         }
         syncCanvas();
     }
@@ -1645,6 +1650,57 @@ public class ModalEditor {
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             fileSearchBuffer.append(keyChar);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // CLASSPATH_INPUT モード処理（F10/F11/F12: 実行/コンパイル前の追加クラスパス入力）
+    // -------------------------------------------------------------------------
+
+    /**
+     * F10/F11/F12 押下時に呼ぶ。追加クラスパス（プロジェクト配下の複数ディレクトリ、カンマ区切り）を
+     * 入力させる。Enterで確定（0件でもよい）・Escでキャンセル（＝追加クラスパスなしとして即続行）。
+     * いずれの場合も callback は必ず1回呼ばれ、コンパイル/実行そのものは中断しない
+     * （Escは「クラスパス追加をスキップする」であり「コンパイル/実行そのものをキャンセルする」ではない）。
+     */
+    public void enterClasspathInput(String label, Consumer<List<Path>> callback) {
+        classpathInputLabel = label;
+        classpathCallback = callback;
+        classpathInputBuffer.setLength(0);
+        mode = Mode.CLASSPATH_INPUT;
+        statusMessage = "";
+    }
+
+    private void processClasspathInputKey(int keyCode, char keyChar) {
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            finishClasspathInput(List.of());
+        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
+            if (classpathInputBuffer.length() > 0) {
+                classpathInputBuffer.deleteCharAt(classpathInputBuffer.length() - 1);
+            }
+        } else if (keyCode == KeyEvent.VK_ENTER) {
+            finishClasspathInput(parseClasspathInput(classpathInputBuffer.toString()));
+        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            classpathInputBuffer.append(keyChar);
+        }
+    }
+
+    private void finishClasspathInput(List<Path> extraClasspath) {
+        mode = Mode.NORMAL;
+        classpathInputBuffer.setLength(0);
+        Consumer<List<Path>> cb = classpathCallback;
+        classpathCallback = null;
+        if (cb != null) cb.accept(extraClasspath);
+    }
+
+    /** カンマ区切りの入力を projectRoot 基準の絶対パスへ解決する（空要素は無視）。 */
+    private List<Path> parseClasspathInput(String input) {
+        List<Path> result = new ArrayList<>();
+        for (String raw : input.split(",")) {
+            String trimmed = raw.trim();
+            if (trimmed.isEmpty()) continue;
+            result.add(Path.of(resolveRelativeToProjectRoot(trimmed)));
+        }
+        return result;
     }
 
     // -------------------------------------------------------------------------
@@ -4092,6 +4148,10 @@ public class ModalEditor {
                 canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
             } else if (mode == Mode.TELESCOPE && telescopePicker != null) {
                 canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
+            } else if (mode == Mode.CLASSPATH_INPUT) {
+                canvas.setCommandLineText(classpathInputLabel
+                    + " classpath (カンマ区切り, Enter=確定, Esc=スキップ): "
+                    + classpathInputBuffer.toString());
             } else if (!statusMessage.isEmpty()) {
                 canvas.setCommandLineText(statusMessage);
             } else {
@@ -4135,6 +4195,8 @@ public class ModalEditor {
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
+    public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
+    public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
     public boolean isCompletionActive()   { return completionActive; }
     public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completionItems; }
     public boolean isCdSelectionActive()  { return cdSelectionActive; }
@@ -4163,6 +4225,9 @@ public class ModalEditor {
      */
     public void showCompileResult(BuildResult result) {
         StringBuilder sb = new StringBuilder();
+        if (result.command() != null && !result.command().isEmpty()) {
+            sb.append(result.command()).append('\n');
+        }
         sb.append("*compile* ").append(result.success() ? "SUCCESS" : "FAILED")
           .append(" — ").append(result.fileCount()).append(" file(s)\n");
         if (result.errorMessage() != null) {
@@ -4186,8 +4251,11 @@ public class ModalEditor {
     }
 
     /** F11: 実行結果を *run* 疑似バッファに表示する。showCompileResult と同じ疑似バッファパターン。 */
-    public void showRunOutput(String fqcn, String output, int exitCode) {
+    public void showRunOutput(String command, String fqcn, String output, int exitCode) {
         StringBuilder sb = new StringBuilder();
+        if (command != null && !command.isEmpty()) {
+            sb.append(command).append('\n');
+        }
         sb.append("*run* ").append(fqcn).append(" — exit code ").append(exitCode).append('\n');
         sb.append(output);
         buffer = new UndoablePieceTable(sb.toString());
