@@ -1726,8 +1726,19 @@ public class ModalEditor {
             case "files"   -> telescopePicker = new FilePicker(baseDir);
             case "grep"    -> telescopePicker = new GrepPicker(baseDir);
             case "buffers" -> {
-                List<BufferPicker.BufferEntry> entries = (bufferListSupplier != null)
-                    ? bufferListSupplier.get() : List.of();
+                List<BufferPicker.BufferEntry> entries = new ArrayList<>(
+                    (bufferListSupplier != null) ? bufferListSupplier.get() : List.of());
+                // F10/F11/F12 の *compile*/*run* 疑似バッファは currentFilePath == null
+                // （ディスク上のファイルを持たない）ため BUFFER_REGISTRY 経由では管理できない。
+                // 直近の内容を lastCompileBufferText/lastRunBufferText にキャッシュしておき、
+                // SPC+b で常に選択肢に含める（選択時は openTelescopeSelection() でディスクではなく
+                // このキャッシュから復元する）。
+                if (lastCompileBufferText != null) {
+                    entries.add(new BufferPicker.BufferEntry("*compile*", PSEUDO_COMPILE_PATH));
+                }
+                if (lastRunBufferText != null) {
+                    entries.add(new BufferPicker.BufferEntry("*run*", PSEUDO_RUN_PATH));
+                }
                 telescopePicker = new BufferPicker(entries);
             }
             default -> { return; }
@@ -1858,6 +1869,20 @@ public class ModalEditor {
         exitTelescope();
         if (purpose == TelescopePurpose.RUN_MAIN_CLASS) {
             if (onRunMainClassSelected != null) onRunMainClassSelected.accept(item.display());
+            return;
+        }
+        if (PSEUDO_COMPILE_PATH.equals(item.filePath()) || PSEUDO_RUN_PATH.equals(item.filePath())) {
+            String text = PSEUDO_COMPILE_PATH.equals(item.filePath())
+                ? lastCompileBufferText : lastRunBufferText;
+            if (text == null) return;
+            buffer = new UndoablePieceTable(text);
+            currentFilePath = null;
+            fileNameResults = null;
+            grepResults = null;
+            clearSearchHighlights();
+            cursorRow = 0;
+            cursorCol = 0;
+            statusMessage = "\"" + item.filePath() + "\" reopened";
             return;
         }
         if (item.filePath() == null) return;
@@ -4336,6 +4361,13 @@ public class ModalEditor {
      * F10: コンパイル結果を *compile* 疑似バッファに表示する。
      * :grep/:rename と同じパターン（pushBuffer せず直接 buffer を差し替え、Ctrl+U 履歴には積まない）。
      */
+    // F10/F11/F12: *compile*/*run* 疑似バッファは currentFilePath == null のためファイル経路の
+    // バッファ切替では追跡できない。SPC+b から常に再度開けるよう直近の内容をここにキャッシュする。
+    private String lastCompileBufferText = null;
+    private String lastRunBufferText = null;
+    private static final String PSEUDO_COMPILE_PATH = "*compile*";
+    private static final String PSEUDO_RUN_PATH = "*run*";
+
     public void showCompileResult(BuildResult result) {
         StringBuilder sb = new StringBuilder();
         if (result.command() != null && !result.command().isEmpty()) {
@@ -4352,7 +4384,8 @@ public class ModalEditor {
               .append(':').append(d.column() + 1).append(": ")
               .append(d.message()).append('\n');
         }
-        buffer = new UndoablePieceTable(sb.toString());
+        lastCompileBufferText = sb.toString();
+        buffer = new UndoablePieceTable(lastCompileBufferText);
         currentFilePath = null;
         grepResults = null;
         fileNameResults = null;
@@ -4371,7 +4404,8 @@ public class ModalEditor {
         }
         sb.append("*run* ").append(fqcn).append(" — exit code ").append(exitCode).append('\n');
         sb.append(output);
-        buffer = new UndoablePieceTable(sb.toString());
+        lastRunBufferText = sb.toString();
+        buffer = new UndoablePieceTable(lastRunBufferText);
         currentFilePath = null;
         grepResults = null;
         fileNameResults = null;
