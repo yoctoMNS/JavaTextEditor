@@ -469,3 +469,46 @@ project-root/
 - **テスト**: `test/dev/javatexteditor/editor/ReplaceCharTest.java`（新設・7テスト）。カウントなし置換・
   カウント付き置換・カウントが行末超過時のno-op・Escキャンセル（キャンセル後の`r`が正常動作することも確認）・
   カーソル位置・NORMALモード維持・undo（delete+insertの2 undo単位のため`u`2回で復元）を検証。
+
+## システムクリップボード連携（Ctrl+Shift+C / Ctrl+Shift+V）の実装
+
+- **キーバインド**: `KeymapRegistry`に新規アクション`clipboard.copy`（VISUAL/VISUAL_LINE/VISUAL_BLOCKの3モード、
+  `Ctrl+Shift+C`）・`clipboard.paste`（NORMAL/INSERTの2モード、`Ctrl+Shift+V`）を追加した。既存の
+  `Ctrl+V`=`enter.visual.block`（NORMALモード、修飾子は`CTRL_DOWN_MASK`のみ）とは修飾子の組み合わせが異なる
+  （`CTRL_DOWN_MASK | SHIFT_DOWN_MASK`）ため`KeymapRegistry.resolve()`の完全一致判定上衝突しない
+  （`organize.imports`のCtrl+Shift+Oと同型のパターン）。内部ヤンクレジスタ（`yankRegister`/`yankType`、y/d/p系）
+  とは完全に独立させた別経路とした（`y`でヤンクした内容が意図せずOSクリップボードを上書きする、または
+  逆に外部アプリでコピーした内容が`p`で貼り付けられてしまう、という混同を避けるため）。
+- **コピー（`copyToSystemClipboard(String)`）**: VISUAL/VISUAL_LINE/VISUAL_BLOCK各モードの既存`"yank"`
+  action（`getSelectedText()`/`buildLineRangeText()`/`buildBlockText()`で選択範囲を文字列化する処理）を
+  そのまま再利用し、`java.awt.datatransfer.StringSelection`で`Toolkit.getDefaultToolkit().getSystemClipboard()`
+  へ書き込む。コピー後はVimの`y`と同じくNORMALモードへ戻り、カーソルは選択開始位置に戻す（`y`の既存の
+  カーソル移動規約をそのまま踏襲）。
+- **貼り付け（`pasteFromSystemClipboard(boolean asNormalMode)`）**: `DataFlavor.stringFlavor`が取得できれば
+  そのままテキストとして`buffer.insert(offsetOfCursor(), text)`する。NORMALモードでは`P`と同じ「カーソル位置に
+  挿入しクランプする」動作、INSERTモードでは通常の文字入力と同じ「挿入してクランプしない」動作にした
+  （`asNormalMode`引数で分岐）。
+- **画像・音声等バイナリのクリップボード内容の扱い**: ユーザー要望により「バイナリそのものを貼り付ける」仕様と
+  した。`DataFlavor.stringFlavor`が使えない場合、`contents.getTransferDataFlavors()`から
+  `InputStream`を返すFlavor（`imageFlavor`等の非テキストDataFlavorはJavaのClipboard APIでは基本的に
+  `InputStream`経由でバイト列として読める）を探し、`readClipboardBinary()`で生バイト列を読み出す。
+  読み出したバイト列は`new String(bytes, StandardCharsets.ISO_8859_1)`で文字列化してバッファへ挿入する
+  （ISO-8859-1は1バイト=1コードポイントの可逆マッピングのため、`String.getBytes(StandardCharsets.ISO_8859_1)`
+  で元のバイト列をそのまま復元できる＝「バイナリそのもの」をエディタのString型バッファに格納する手段として
+  採用した。UTF-8等の他エンコーディングは不正なバイト列で例外/文字化けが起きるため使えない）。テキスト
+  バッファに制御文字やNUL等が挿入されるため画面表示は乱れるが、これは「バイナリそのものを貼り付ける」という
+  要件の直接的な帰結であり、意図した動作。
+- **ヘッドレス環境（`GraphicsEnvironment.isHeadless()==true`、DISPLAY未設定）でのフェイルセーフ**:
+  `Toolkit.getSystemClipboard()`はヘッドレス環境で`HeadlessException`を送出することを実機確認した
+  （このコンテナ自体がヘッドレス）。`copyToSystemClipboard()`/`pasteFromSystemClipboard()`双方とも
+  クリップボード取得部分を`try/catch(Exception)`で囲み、失敗時は`statusMessage`に`"E: clipboard ..."`を
+  設定するのみでクラッシュしない・モード遷移は正常に完了する設計にした（`:main`/`gr`等の既存のgraceful
+  degradationパターンと同じ）。
+- **テスト**: `test/dev/javatexteditor/editor/ClipboardTest.java`（新設・11テスト）。VISUAL/VISUAL_LINE/
+  VISUAL_BLOCKでのCtrl+Shift+C押下後にNORMALへ戻りクラッシュしないこと、NORMAL/INSERTでのCtrl+Shift+V
+  押下後もモードが崩れずクラッシュしないこと、既存の`Ctrl+V`（VISUAL BLOCK突入）と`Ctrl+Shift+V`が衝突しない
+  ことを検証。このコンテナがヘッドレスのため実際のOSクリップボードとの往復（コピーした文字列が本当に
+  貼り付けられるか）は検証できておらず、`GraphicsEnvironment.isHeadless()`で分岐しヘッドレス時は
+  エラーメッセージになることのみ確認する既知のテストギャップとして残る（⑫openjdk-source-tracing・
+  ⑳telescope-pickerと同種）。ヘッドフル環境での実クリップボード往復・画像/音声バイナリの貼り付けは
+  手動確認が必要。
