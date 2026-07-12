@@ -215,6 +215,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('U', "case.upper"),  "case.upper");
         bind(Mode.VISUAL, KeyBinding.ofChar('~', "case.toggle"), "case.toggle");
         bind(Mode.VISUAL, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
+        bind(Mode.VISUAL, KeyBinding.ofChar(';', "enter.command.visual"), "enter.command.visual"); // ; → : (like Vim)
 
         // VISUAL LINE モード（行単位選択）
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -237,6 +238,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('U', "case.upper"),  "case.upper");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('~', "case.toggle"), "case.toggle");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar(';', "enter.command.visual"), "enter.command.visual"); // ; → : (like Vim)
 
         // VISUAL BLOCK モード（矩形選択、Ctrl+V）
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -259,5 +261,6 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('U', "case.upper"),  "case.upper");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('~', "case.toggle"), "case.toggle");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar(';', "enter.command.visual"), "enter.command.visual"); // ; → : (like Vim)
     }
 }

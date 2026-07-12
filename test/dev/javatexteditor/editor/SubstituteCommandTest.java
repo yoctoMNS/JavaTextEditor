@@ -18,6 +18,7 @@ public class SubstituteCommandTest {
         testPercentSubstitutesWholeBuffer();
         testNumericRange();
         testVisualCharwiseRange();
+        testVisualSemicolonEntersCommand();
         testVisualLinewiseRange();
         testNoPreviousVisualSelectionError();
         testBackreferenceReplacement();
@@ -79,6 +80,20 @@ public class SubstituteCommandTest {
         ed.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
         check("2〜3行目のみ変更", ed.getText().equals("foo\nbar\nbar"));
         check("COMMAND終了後はNORMALモード", ed.isNormalMode());
+    }
+
+    static void testVisualSemicolonEntersCommand() {
+        System.out.println("[VISUALモードで ';' も ':' と同様に '<,'>s へ入る]");
+        ModalEditor ed = new ModalEditor("foo\nfoo\nfoo");
+        pressKey(ed, 'j');
+        pressKey(ed, 'v');
+        pressKey(ed, 'j');
+        pressKey(ed, ';');
+        check("commandBufferが'<,'>で初期化される", ed.getCommandBuffer().equals("'<,'>"));
+        check("COMMANDモードに遷移", ed.isCommandMode());
+        typeString(ed, "s/foo/bar/");
+        ed.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+        check("2〜3行目のみ変更", ed.getText().equals("foo\nbar\nbar"));
     }
 
     static void testVisualLinewiseRange() {
