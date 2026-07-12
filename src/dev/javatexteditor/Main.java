@@ -64,6 +64,10 @@ public class Main {
         new dev.javatexteditor.projectbuild.MainClassFinder();
     // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
     private static Process runningProcess = null;
+    // F11でmainクラスが複数見つかりtelescope選択待ちの間、選択確定後の実行まで
+    // ユーザーが入力した追加クラスパスを持ち越すための一時保存（onRunMainClassSelectedコールバックは
+    // createLeaf内で固定で1回だけ登録されるため、選択待ちの間はここに置くしかない）。
+    private static List<Path> pendingRunExtraClasspath = List.of();
 
     // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
@@ -296,39 +300,51 @@ public class Main {
         });
     }
 
-    /** F10: プロジェクト全体をコンパイルし、*compile* 疑似バッファに結果を表示する。 */
+    /**
+     * F10: 追加クラスパス（複数ディレクトリ、カンマ区切り）を尋ねてからプロジェクト全体を
+     * コンパイルし、*compile* 疑似バッファに結果を表示する。Escなら追加クラスパスなしで続行する。
+     */
     private static void triggerCompile(ModalEditor editor, EditorCanvas canvas) {
-        editor.setStatusMessage("F10: コンパイル中...");
-        Path projectRoot = editor.getProjectRoot();
-        Thread.ofVirtual().start(() -> {
-            dev.javatexteditor.projectbuild.BuildResult result = PROJECT_BUILDER.compile(projectRoot);
-            SwingUtilities.invokeLater(() -> {
-                editor.showCompileResult(result);
-                canvas.repaint();
-            });
-        });
+        editor.enterClasspathInput("F10",
+            extraClasspath -> doCompile(editor, canvas, extraClasspath, null));
     }
 
-    /** F11: bin/ に .class がなければ拒否し、あれば main クラスを解決して実行する。 */
+    /** F11: bin/ に .class がなければ拒否し、あれば追加クラスパスを尋ねて main クラスを解決・実行する。 */
     private static void triggerRun(ModalEditor editor, EditorCanvas canvas) {
         Path projectRoot = editor.getProjectRoot();
         if (!PROJECT_BUILDER.hasCompiledClasses(projectRoot)) {
             editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
             return;
         }
-        resolveAndRunMainClass(editor, canvas, projectRoot);
+        editor.enterClasspathInput("F11",
+            extraClasspath -> resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath));
     }
 
-    /** F12: コンパイルしてから（成功した場合のみ）main クラスを解決して実行する。 */
+    /**
+     * F12: 追加クラスパスを尋ねてからコンパイルし、成功した場合のみ同じ追加クラスパスで
+     * main クラスを解決して実行する。
+     */
     private static void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
-        editor.setStatusMessage("F12: コンパイル中...");
+        editor.enterClasspathInput("F12", extraClasspath -> {
+            Path projectRoot = editor.getProjectRoot();
+            doCompile(editor, canvas, extraClasspath, result -> {
+                if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath);
+            });
+        });
+    }
+
+    /** F10/F12共通のコンパイル実行部。onDone は完了後にEDT上で呼ばれる（null可）。 */
+    private static void doCompile(ModalEditor editor, EditorCanvas canvas, List<Path> extraClasspath,
+            java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
+        editor.setStatusMessage("コンパイル中...");
         Path projectRoot = editor.getProjectRoot();
         Thread.ofVirtual().start(() -> {
-            dev.javatexteditor.projectbuild.BuildResult result = PROJECT_BUILDER.compile(projectRoot);
+            dev.javatexteditor.projectbuild.BuildResult result =
+                PROJECT_BUILDER.compile(projectRoot, extraClasspath);
             SwingUtilities.invokeLater(() -> {
                 editor.showCompileResult(result);
                 canvas.repaint();
-                if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot);
+                if (onDone != null) onDone.accept(result);
             });
         });
     }
@@ -337,7 +353,8 @@ public class Main {
      * main メソッドを持つクラスを索引から探し、1件なら即実行、複数なら telescope-picker で選ばせる
      * （{@link ModalEditor#setOnRunMainClassSelected} 経由で選択結果が {@link #runJavaClass} に届く）。
      */
-    private static void resolveAndRunMainClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot) {
+    private static void resolveAndRunMainClass(
+            ModalEditor editor, EditorCanvas canvas, Path projectRoot, List<Path> extraClasspath) {
         editor.setStatusMessage("mainクラスを検索中...");
         Thread.ofVirtual().start(() -> {
             List<String> mainClasses = MAIN_CLASS_FINDER.findMainClasses(projectRoot);
@@ -345,8 +362,9 @@ public class Main {
                 if (mainClasses.isEmpty()) {
                     editor.setStatusMessage("run: mainメソッドを持つクラスが見つかりません");
                 } else if (mainClasses.size() == 1) {
-                    runJavaClass(editor, canvas, projectRoot, mainClasses.get(0));
+                    runJavaClass(editor, canvas, projectRoot, mainClasses.get(0), extraClasspath);
                 } else {
+                    pendingRunExtraClasspath = extraClasspath;
                     editor.enterMainClassPicker(mainClasses);
                 }
             });
@@ -354,21 +372,26 @@ public class Main {
     }
 
     /**
-     * bin/ をクラスパスとして別プロセスで java を起動する。
+     * bin/（常にデフォルトで含まれる）＋ユーザー指定の追加クラスパスで別プロセスとして java を起動する。
      * 実行中プロセスがまだ生きていれば destroy() してから起動し直す（多重実行を避けるため）。
      * 標準出力/標準エラーはマージして捕捉し、終了後に *run* 疑似バッファへまとめて表示する。
      */
-    private static void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn) {
+    private static void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn,
+            List<Path> extraClasspath) {
         if (runningProcess != null && runningProcess.isAlive()) {
             runningProcess.destroy();
         }
         Path binDir = PROJECT_BUILDER.binDirFor(projectRoot);
+        StringBuilder classpath = new StringBuilder(binDir.toString());
+        for (Path p : extraClasspath) {
+            classpath.append(java.io.File.pathSeparatorChar).append(p);
+        }
         editor.setStatusMessage("run: " + fqcn + " を実行中...");
         Thread.ofVirtual().start(() -> {
             StringBuilder output = new StringBuilder();
             int exitCode;
             try {
-                ProcessBuilder pb = new ProcessBuilder("java", "-cp", binDir.toString(), fqcn);
+                ProcessBuilder pb = new ProcessBuilder("java", "-cp", classpath.toString(), fqcn);
                 pb.redirectErrorStream(true);
                 pb.directory(projectRoot.toFile());
                 Process process = pb.start();
@@ -433,7 +456,7 @@ public class Main {
         editor.setOnFileOpened(Main::registerBuffer);
         editor.setOnBufferDelete(Main::unregisterBuffer);
         editor.setOnRunMainClassSelected(
-            fqcn -> runJavaClass(editor, canvas, editor.getProjectRoot(), fqcn));
+            fqcn -> runJavaClass(editor, canvas, editor.getProjectRoot(), fqcn, pendingRunExtraClasspath));
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }

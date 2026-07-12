@@ -39,6 +39,14 @@ public class ProjectBuilder {
     }
 
     public BuildResult compile(Path projectRoot) {
+        return compile(projectRoot, List.of());
+    }
+
+    /**
+     * F10/F12: extraClasspath（ユーザーが指定した追加ディレクトリ）を javac のクラスパスに
+     * 追加した上でコンパイルする。空リストなら従来どおりクラスパス指定なし。
+     */
+    public BuildResult compile(Path projectRoot, List<Path> extraClasspath) {
         List<Path> sources;
         try {
             sources = collectJavaFiles(projectRoot);
@@ -66,6 +74,10 @@ public class ProjectBuilder {
         DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
         try (StandardJavaFileManager fm = compiler.getStandardFileManager(collector, Locale.ENGLISH, null)) {
             fm.setLocation(StandardLocation.CLASS_OUTPUT, List.of(binDir.toFile()));
+            if (!extraClasspath.isEmpty()) {
+                fm.setLocation(StandardLocation.CLASS_PATH,
+                    extraClasspath.stream().map(Path::toFile).toList());
+            }
             Iterable<? extends JavaFileObject> units = fm.getJavaFileObjectsFromPaths(sources);
 
             JavaCompiler.CompilationTask task = compiler.getTask(
