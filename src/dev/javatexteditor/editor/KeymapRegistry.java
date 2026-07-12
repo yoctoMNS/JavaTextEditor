@@ -86,6 +86,7 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('u', "undo"), "undo");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK, "redo"), "redo");
         bind(Mode.NORMAL, KeyBinding.ofChar('~', "case.toggle.char"), "case.toggle.char");
+        bind(Mode.NORMAL, KeyBinding.ofChar('r', "replace.char.pending"), "replace.char.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('v', "enter.visual"), "enter.visual");
         bind(Mode.NORMAL, KeyBinding.ofChar('V', "enter.visual.line"), "enter.visual.line");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_V, KeyEvent.CTRL_DOWN_MASK, "enter.visual.block"), "enter.visual.block");
