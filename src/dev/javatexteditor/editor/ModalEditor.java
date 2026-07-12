@@ -95,6 +95,11 @@ public class ModalEditor {
     private Runnable onOrganizeImports = null;
     // handleAutoImport で全候補処理完了後に呼ぶコールバック（未使用 import 削除等）
     private Runnable onImportComplete = null;
+    // processKey() の末尾でバッファのversionが変化したときにだけ呼ばれるコールバック
+    // （NORMAL/VISUALモードのdd/p/u/Ctrl+R等、onReturnToNormal/onSaveの対象外となる
+    //  バッファ変更操作でも診断の再解析を追従させるため。デバウンスはMain側の責務）。
+    private Runnable onBufferChanged = null;
+    private long lastNotifiedBufferVersion = -1;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -315,6 +320,7 @@ public class ModalEditor {
     private void initHistory() {
         bufferHistory.add(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
         historyIdx = 0;
+        lastNotifiedBufferVersion = buffer.getVersion();
     }
 
     public void setBufferListSupplier(java.util.function.Supplier<List<BufferPicker.BufferEntry>> supplier) {
@@ -402,6 +408,14 @@ public class ModalEditor {
         this.onImportComplete = callback;
     }
 
+    /** processKey() の結果バッファのversionが変化したときにだけ呼ばれるコールバックを設定する。 */
+    public void setOnBufferChanged(Runnable callback) {
+        this.onBufferChanged = callback;
+    }
+
+    /** テスト・呼び出し側の再解析要否判定用。バッファ内容が変わるたびに増分する。 */
+    public long getBufferVersion() { return buffer.getVersion(); }
+
     /** 現在開いているファイルのパスを返す（未設定の場合は null）。 */
     public String getCurrentFilePath() { return currentFilePath; }
 
@@ -440,6 +454,11 @@ public class ModalEditor {
             case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
         }
         syncCanvas();
+        long currentVersion = buffer.getVersion();
+        if (currentVersion != lastNotifiedBufferVersion) {
+            lastNotifiedBufferVersion = currentVersion;
+            if (onBufferChanged != null) onBufferChanged.run();
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1726,8 +1745,19 @@ public class ModalEditor {
             case "files"   -> telescopePicker = new FilePicker(baseDir);
             case "grep"    -> telescopePicker = new GrepPicker(baseDir);
             case "buffers" -> {
-                List<BufferPicker.BufferEntry> entries = (bufferListSupplier != null)
-                    ? bufferListSupplier.get() : List.of();
+                List<BufferPicker.BufferEntry> entries = new ArrayList<>(
+                    (bufferListSupplier != null) ? bufferListSupplier.get() : List.of());
+                // F10/F11/F12 の *compile*/*run* 疑似バッファは currentFilePath == null
+                // （ディスク上のファイルを持たない）ため BUFFER_REGISTRY 経由では管理できない。
+                // 直近の内容を lastCompileBufferText/lastRunBufferText にキャッシュしておき、
+                // SPC+b で常に選択肢に含める（選択時は openTelescopeSelection() でディスクではなく
+                // このキャッシュから復元する）。
+                if (lastCompileBufferText != null) {
+                    entries.add(new BufferPicker.BufferEntry("*compile*", PSEUDO_COMPILE_PATH));
+                }
+                if (lastRunBufferText != null) {
+                    entries.add(new BufferPicker.BufferEntry("*run*", PSEUDO_RUN_PATH));
+                }
                 telescopePicker = new BufferPicker(entries);
             }
             default -> { return; }
@@ -1858,6 +1888,20 @@ public class ModalEditor {
         exitTelescope();
         if (purpose == TelescopePurpose.RUN_MAIN_CLASS) {
             if (onRunMainClassSelected != null) onRunMainClassSelected.accept(item.display());
+            return;
+        }
+        if (PSEUDO_COMPILE_PATH.equals(item.filePath()) || PSEUDO_RUN_PATH.equals(item.filePath())) {
+            String text = PSEUDO_COMPILE_PATH.equals(item.filePath())
+                ? lastCompileBufferText : lastRunBufferText;
+            if (text == null) return;
+            buffer = new UndoablePieceTable(text);
+            currentFilePath = null;
+            fileNameResults = null;
+            grepResults = null;
+            clearSearchHighlights();
+            cursorRow = 0;
+            cursorCol = 0;
+            statusMessage = "\"" + item.filePath() + "\" reopened";
             return;
         }
         if (item.filePath() == null) return;
@@ -4351,6 +4395,13 @@ public class ModalEditor {
      * :grep/:rename と同じパターン（pushBuffer せず直接 buffer を差し替え、Ctrl+U 履歴には積まない）。
      * ERROR診断・エラーメッセージの行は赤字表示するため行番号を outputErrorLines に記録する。
      */
+    // F10/F11/F12: *compile*/*run* 疑似バッファは currentFilePath == null のためファイル経路の
+    // バッファ切替では追跡できない。SPC+b から常に再度開けるよう直近の内容をここにキャッシュする。
+    private String lastCompileBufferText = null;
+    private String lastRunBufferText = null;
+    private static final String PSEUDO_COMPILE_PATH = "*compile*";
+    private static final String PSEUDO_RUN_PATH = "*run*";
+
     public void showCompileResult(BuildResult result) {
         StringBuilder sb = new StringBuilder();
         java.util.Set<Integer> errorRows = new java.util.HashSet<>();
@@ -4375,7 +4426,8 @@ public class ModalEditor {
               .append(d.message()).append('\n');
             row++;
         }
-        buffer = new UndoablePieceTable(sb.toString());
+        lastCompileBufferText = sb.toString();
+        buffer = new UndoablePieceTable(lastCompileBufferText);
         currentFilePath = null;
         grepResults = null;
         fileNameResults = null;
@@ -4396,7 +4448,8 @@ public class ModalEditor {
         }
         sb.append("*run* ").append(fqcn).append(" — exit code ").append(exitCode).append('\n');
         sb.append(output);
-        buffer = new UndoablePieceTable(sb.toString());
+        lastRunBufferText = sb.toString();
+        buffer = new UndoablePieceTable(lastRunBufferText);
         currentFilePath = null;
         grepResults = null;
         fileNameResults = null;
@@ -4469,13 +4522,18 @@ public class ModalEditor {
         appendOutputLine(line, isError);
     }
 
-    /** F11: プロセス終了後、*run* 疑似バッファ2行目のプレースホルダを実際の終了コードへ書き換える。 */
+    /**
+     * F11: プロセス終了後、*run* 疑似バッファ2行目のプレースホルダを実際の終了コードへ書き換える。
+     * SPC+b（BufferPicker）から再度開けるよう、確定した最終テキストを lastRunBufferText へも反映する
+     * （showRunOutput() と同じ役割。ストリーミング経路は showRunOutput() を経由しないため必須）。
+     */
     public void finishRunOutput(String fqcn, int exitCode) {
         if (outputErrorLinesOwner != buffer) return; // 実行中に別バッファへ切り替わっていたら何もしない
         String finalHeader = "*run* " + fqcn + " — exit code " + exitCode;
         buffer.delete(runHeaderOffset, runHeaderPlaceholder.length());
         buffer.insert(runHeaderOffset, finalHeader);
         statusMessage = "run: " + fqcn + " exited with code " + exitCode;
+        lastRunBufferText = buffer.getText();
     }
 
     /** beginCompileOutput()/beginRunOutput() が作った疑似バッファの末尾へ1行追記する共通処理。 */

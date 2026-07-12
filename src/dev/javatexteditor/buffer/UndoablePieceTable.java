@@ -12,6 +12,10 @@ public class UndoablePieceTable extends PieceTable {
     // undo/redoで保存時点のテキストと文字列として一致する状態に戻っても modified は false に戻らない
     // （厳密な内容比較はせず「編集操作が行われたか」だけを見る単純な近似。既知の制約）。
     private boolean modified = false;
+    // コンパイル診断（ガター表示）の再解析トリガ用。insert/delete/undo/redoのたびに増分する。
+    // modifiedと異なりundo/redoでも常に増えるため、「編集操作の結果テキストが変わった可能性がある」
+    // ことを漏れなく検知できる（呼び出し側はこの値の変化だけを見て再解析要否を判定する）。
+    private long version = 0;
 
     public UndoablePieceTable(String initialText) {
         super(initialText);
@@ -27,6 +31,7 @@ public class UndoablePieceTable extends PieceTable {
         snapshotBeforeEdit();
         super.insert(offset, text);
         modified = true;
+        version++;
     }
 
     @Override
@@ -34,6 +39,7 @@ public class UndoablePieceTable extends PieceTable {
         snapshotBeforeEdit();
         super.delete(offset, length);
         modified = true;
+        version++;
     }
 
     public void undo() {
@@ -41,6 +47,7 @@ public class UndoablePieceTable extends PieceTable {
         redoStack.push(getPieces());
         restorePieces(undoStack.pop());
         modified = true;
+        version++;
     }
 
     public void redo() {
@@ -48,7 +55,11 @@ public class UndoablePieceTable extends PieceTable {
         undoStack.push(getPieces());
         restorePieces(redoStack.pop());
         modified = true;
+        version++;
     }
+
+    /** バッファの版数。insert/delete/undo/redoのたびに増分する（コンパイル診断の再解析要否判定用）。 */
+    public long getVersion() { return version; }
 
     public boolean canUndo() { return !undoStack.isEmpty(); }
     public boolean canRedo() { return !redoStack.isEmpty(); }

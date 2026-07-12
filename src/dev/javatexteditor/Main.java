@@ -264,6 +264,18 @@ public class Main {
             editor.setStatusMessage("import 整理中...");
             runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗");
         });
+        // dd/p/u/Ctrl+R等、INSERT離脱・保存を経由しないバッファ変更操作は上記2フックの対象外で、
+        // 行が増減しても診断（ガターの赤線）が古い行番号のまま残り、保存するまで直らない不具合が
+        // あった。バッファのversionが変わるたびに再解析するが、INSERT中は入力途中の構文を
+        // 都度解析しても無駄なため対象外にする（onReturnToNormalが離脱時に既に解析する）。
+        // 連続編集での解析多発を避けるためデバウンスする。
+        javax.swing.Timer debounceTimer = new javax.swing.Timer(400, e -> trigger.run());
+        debounceTimer.setRepeats(false);
+        editor.setOnBufferChanged(() -> {
+            if (!editor.isInsertMode()) {
+                debounceTimer.restart();
+            }
+        });
     }
 
     /** バックグラウンド仮想スレッドでコンパイル解析し、EDT で診断反映と auto-import を行う。

@@ -523,3 +523,35 @@ project-root/
 - **`EditorCanvas`の赤字描画は既存の`ERROR_COLOR`定数（ガター描画で使用済み）と、UI文字列描画専用の`uiGlyphCache`（`(codePoint, cellW, cellH, rgb)`をキーに任意色のグリフをキャッシュする仕組み。telescope・ステータス行等で既に使用）をそのまま流用した**。本文専用の`glyphCacheFg`（テーマの前景色に固定・キーはcodePointのみ）とは別に、赤字対象行だけ`getUiGlyph(codePoint, cellW, cellH, ERROR_COLOR)`を呼ぶよう`drawLineWithFullWidthSupport()`に`isErrorLine`引数を追加した。新しい色管理の仕組みは追加せず、既存のキャッシュ機構2つの使い分けだけで実現している。`EditorCanvas.setErrorLines(Set<Integer>)`が公開APIで、`syncCanvas()`から毎回呼ばれる。
 - **副次的に修正した点（`syncCanvas()`の可視性）**: 調査の過程で、従来`doCompile()`/`runJavaClass()`が完了後に`editor.showCompileResult(result)`/`showRunOutput(...)`を呼んだ直後、`canvas.repaint()`だけを呼び`canvas.setText(...)`（＝`private syncCanvas()`経由でのみ呼ばれる）を呼んでいなかったことに気づいた。`EditorCanvas`は`cachedLines`をキャッシュしており`setText()`でのみ更新されるため、この経路では新しいバッファ内容が画面に反映されず、次にユーザーが何かキーを押す（＝`processKey()`経由で`syncCanvas()`が呼ばれる）までF10/F11/F12の結果が可視化されない可能性があった。`syncCanvas()`を`private`から`public`に変更し、`Main.java`の`doCompile()`/`runJavaClass()`・新設の`startRunOutputReader()`から`canvas.repaint()`の代わりに`editor.syncCanvas()`を呼ぶようにした（`syncCanvas()`内部で最終的に`canvas.repaint()`相当の再描画も行われるため置き換えで問題ない）。
 - **意図的にスコープ外とした点**: 標準出力/標準エラーの読み取りスレッドが個別に`invokeLater`するため、大量出力時にSwingのイベントキューへの積み上げがボトルネックになりうるが、コンパイル/実行ログの規模（通常は数十〜数百行程度）を想定したスコープでは許容した。スロットリング（例: N行または一定時間ごとにまとめて反映）は要望になく未実装。標準入力を要求するプログラム（`Scanner`等）が正しく動作しない既存の制約（F10/F11/F12の設計決定事項の節を参照）は変更していない。
+
+## F10/F11（`*compile*`/`*run*`疑似バッファ）をSPC+bからいつでも再度開けるようにした
+
+- **要望**: javac/java実行結果（`*compile*`/`*run*`疑似バッファ）を、他のバッファへ移動した後でも
+  SPC+b（BufferPicker）からいつでも再度開けるようにしてほしい、という依頼。
+- **原因**: `showCompileResult()`/`showRunOutput()`はいずれも`currentFilePath = null`のまま`buffer`を
+  直接差し替える疑似バッファ方式（本ファイル冒頭のF10/F11/F12節の「出力表示」参照）のため、
+  `Main.BUFFER_REGISTRY`（`onFileOpened`経由・`filePath`必須）にも`bufferHistory`（`pushBuffer()`を
+  呼ばない設計）にも一切載らない。そのため一度別のバッファへ移動すると、SPC+b は元より Ctrl+U/Ctrl+P
+  でも二度と戻れなかった。
+- **修正**: `ModalEditor`に`lastCompileBufferText`/`lastRunBufferText`（`String`、直近の疑似バッファ
+  本文全体のキャッシュ）を追加し、`showCompileResult()`/`showRunOutput()`実行のたびに更新するようにした。
+  `enterTelescope("buffers")`（SPC+b）は`bufferListSupplier`の結果に加え、キャッシュが非nullの場合のみ
+  `BufferPicker.BufferEntry("*compile*", "*compile*")`/`("*run*", "*run*")`という**ファイルパスの代わりに
+  固定の疑似パス文字列を`filePath`に持つエントリ**を追加で表示する（`BufferPicker.BufferEntry`の
+  Javadocに元々「nullパスはファイルなし疑似バッファ」という記述はあったが、選択時の処理
+  `openTelescopeSelection()`は`item.filePath() == null`を早期returnするだけで実際には未対応だった）。
+  `openTelescopeSelection()`に`"*compile*"`/`"*run*"`という固定文字列との一致判定を追加し、一致した
+  場合はディスクの`Files.readString()`ではなくキャッシュ済み`String`から`buffer`を復元する。
+- **意図的な設計判断**:
+  - F10/F11を一度も実行していない間はSPC+bの候補に`*compile*`/`*run*`は出さない（要望は「実行結果を
+    いつでも開けるように」であり、実行前から空のプレースホルダーを出す要望ではないため）。
+  - キャッシュは直近1回分のみ保持する（`*compile*`/`*run*`それぞれ1エントリ）。複数回分の実行履歴を
+    スタックする機構は要望に含まれておらず、既存の`*grep*`/`*rename*`等の疑似バッファも同様に「直前の
+    1回分のみ」という設計のため踏襲した。
+  - Ctrl+U/Ctrl+Pでの往復には対応しない（今回の要望はSPC+bのみ）。`currentFilePath == null`の疑似
+    バッファをCtrl+U/Ctrl+Pの対象に含めると、既存の`bufferHistory`フォールバック（`:enew`/`:tutor`用）
+    との重複・優先順位の整理が別途必要になり、スコープが広がるため見送った。
+- **テスト**: `test/dev/javatexteditor/editor/BuildOutputCommandTest.java`に4テスト追加（計14テスト）。
+  F10/F11未実行時はSPC+bの候補に出ないこと、実行後は候補に出て選択すると元の内容が復元されること、
+  別の疑似バッファ（`*run*`）へ画面が差し替わった後でも`*compile*`のキャッシュが保持され続けることを
+  検証。
