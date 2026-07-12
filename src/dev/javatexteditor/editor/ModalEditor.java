@@ -95,6 +95,11 @@ public class ModalEditor {
     private Runnable onOrganizeImports = null;
     // handleAutoImport で全候補処理完了後に呼ぶコールバック（未使用 import 削除等）
     private Runnable onImportComplete = null;
+    // processKey() の末尾でバッファのversionが変化したときにだけ呼ばれるコールバック
+    // （NORMAL/VISUALモードのdd/p/u/Ctrl+R等、onReturnToNormal/onSaveの対象外となる
+    //  バッファ変更操作でも診断の再解析を追従させるため。デバウンスはMain側の責務）。
+    private Runnable onBufferChanged = null;
+    private long lastNotifiedBufferVersion = -1;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -315,6 +320,7 @@ public class ModalEditor {
     private void initHistory() {
         bufferHistory.add(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
         historyIdx = 0;
+        lastNotifiedBufferVersion = buffer.getVersion();
     }
 
     public void setBufferListSupplier(java.util.function.Supplier<List<BufferPicker.BufferEntry>> supplier) {
@@ -402,6 +408,14 @@ public class ModalEditor {
         this.onImportComplete = callback;
     }
 
+    /** processKey() の結果バッファのversionが変化したときにだけ呼ばれるコールバックを設定する。 */
+    public void setOnBufferChanged(Runnable callback) {
+        this.onBufferChanged = callback;
+    }
+
+    /** テスト・呼び出し側の再解析要否判定用。バッファ内容が変わるたびに増分する。 */
+    public long getBufferVersion() { return buffer.getVersion(); }
+
     /** 現在開いているファイルのパスを返す（未設定の場合は null）。 */
     public String getCurrentFilePath() { return currentFilePath; }
 
@@ -440,6 +454,11 @@ public class ModalEditor {
             case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
         }
         syncCanvas();
+        long currentVersion = buffer.getVersion();
+        if (currentVersion != lastNotifiedBufferVersion) {
+            lastNotifiedBufferVersion = currentVersion;
+            if (onBufferChanged != null) onBufferChanged.run();
+        }
     }
 
     // -------------------------------------------------------------------------

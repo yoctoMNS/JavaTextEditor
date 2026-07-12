@@ -22,6 +22,10 @@ public class CompileTriggerCallbackTest {
         testOnSaveFiresOnSuccessfulWrite();
         testOnSaveNotFiredWithoutFileName();
         testOnOrganizeImportsFiresOnCtrlShiftO();
+        testOnBufferChangedFiresOnNormalModeDeleteLine();
+        testOnBufferChangedNotFiredOnPureCursorMovement();
+        testOnBufferChangedNotFiredDuringInsertTyping();
+        testOnBufferChangedFiresOnUndo();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -99,5 +103,67 @@ public class CompileTriggerCallbackTest {
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
 
         check("Ctrl+Shift+O で onOrganizeImports が1回発火する", counter[0] == 1);
+    }
+
+    /** NORMALモードの dd（onReturnToNormal/onSaveの対象外）でも onBufferChanged が発火する。 */
+    static void testOnBufferChangedFiresOnNormalModeDeleteLine() {
+        System.out.println("[onBufferChanged: NORMALモードの dd で発火]");
+        ModalEditor ed = new ModalEditor("line1\nline2\nline3");
+        int[] counter = {0};
+        ed.setOnBufferChanged(() -> counter[0]++);
+
+        ed.processKey(0, 'd', 0);
+        ed.processKey(0, 'd', 0);                              // dd: 1行削除
+
+        check("dd で onBufferChanged が1回発火する", counter[0] == 1);
+    }
+
+    /** カーソル移動などバッファ内容を変えないキー操作では onBufferChanged は発火しない。 */
+    static void testOnBufferChangedNotFiredOnPureCursorMovement() {
+        System.out.println("[onBufferChanged: カーソル移動だけでは発火しない]");
+        ModalEditor ed = new ModalEditor("line1\nline2\nline3");
+        int[] counter = {0};
+        ed.setOnBufferChanged(() -> counter[0]++);
+
+        ed.processKey(0, 'j', 0);
+        ed.processKey(0, 'l', 0);
+
+        check("カーソル移動では onBufferChanged が発火しない", counter[0] == 0);
+    }
+
+    /** INSERTモード中の入力では毎回バッファversionが変わるため onBufferChanged 自体は発火するが、
+     *  Main側は isInsertMode() を見て無視する契約になっている（入力途中の構文を都度解析しても
+     *  無駄なため。離脱時の再解析は既存の onReturnToNormal が担う）。 */
+    static void testOnBufferChangedNotFiredDuringInsertTyping() {
+        System.out.println("[onBufferChanged: INSERT中の入力ではMain契約上カウントしない]");
+        ModalEditor ed = new ModalEditor("hello");
+        int[] rawCounter = {0};
+        int[] filteredCounter = {0};
+        ed.setOnBufferChanged(() -> {
+            rawCounter[0]++;
+            if (!ed.isInsertMode()) filteredCounter[0]++;
+        });
+
+        ed.processKey(0, 'i', 0);
+        ed.processKey(0, 'X', 0);
+        ed.processKey(0, 'Y', 0);
+        check("生の onBufferChanged はINSERT中の2回の入力で2回発火する", rawCounter[0] == 2);
+        check("Main契約(isInsertMode時は無視)ではカウントされない", filteredCounter[0] == 0);
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);       // INSERT → NORMAL
+        check("ESC自体はバッファversionを変えないため追加発火しない", rawCounter[0] == 2);
+    }
+
+    /** undo（onReturnToNormal/onSaveの対象外）でも onBufferChanged が発火する。 */
+    static void testOnBufferChangedFiresOnUndo() {
+        System.out.println("[onBufferChanged: undo (u) で発火]");
+        ModalEditor ed = new ModalEditor("line1\nline2");
+        ed.processKey(0, 'd', 0);
+        ed.processKey(0, 'd', 0);                              // dd（onBufferChanged未登録時点）
+
+        int[] counter = {0};
+        ed.setOnBufferChanged(() -> counter[0]++);
+        ed.processKey(0, 'u', 0);                              // undo
+
+        check("undo で onBufferChanged が1回発火する", counter[0] == 1);
     }
 }
