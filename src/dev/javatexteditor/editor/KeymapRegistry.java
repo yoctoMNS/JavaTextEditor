@@ -154,6 +154,13 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_O,
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
                 "organize.imports"), "organize.imports");
+        // システムクリップボードから貼り付け（Ctrl+Shift+V）
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_V,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "clipboard.paste"), "clipboard.paste");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_V,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "clipboard.paste"), "clipboard.paste");
 
         // INSERT モード
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
@@ -217,6 +224,10 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('~', "case.toggle"), "case.toggle");
         bind(Mode.VISUAL, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
         bind(Mode.VISUAL, KeyBinding.ofChar(';', "enter.command.visual"), "enter.command.visual"); // ; → : (like Vim)
+        // システムクリップボードへコピー（Ctrl+Shift+C）
+        bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_C,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "clipboard.copy"), "clipboard.copy");
 
         // VISUAL LINE モード（行単位選択）
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -240,6 +251,9 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('~', "case.toggle"), "case.toggle");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar(';', "enter.command.visual"), "enter.command.visual"); // ; → : (like Vim)
+        bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_C,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "clipboard.copy"), "clipboard.copy");
 
         // VISUAL BLOCK モード（矩形選択、Ctrl+V）
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('h', "cursor.left"), "cursor.left");
@@ -263,5 +277,8 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar('~', "case.toggle"), "case.toggle");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar(':', "enter.command.visual"), "enter.command.visual");
         bind(Mode.VISUAL_BLOCK, KeyBinding.ofChar(';', "enter.command.visual"), "enter.command.visual"); // ; → : (like Vim)
+        bind(Mode.VISUAL_BLOCK, KeyBinding.ofCode(KeyEvent.VK_C,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "clipboard.copy"), "clipboard.copy");
     }
 }

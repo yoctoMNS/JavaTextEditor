@@ -27,9 +27,18 @@ import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.EditorCanvas;
+import java.awt.Toolkit;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.KeyEvent;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -722,6 +731,7 @@ public class ModalEditor {
             case "delete.char" -> deleteCharAtCursor();
             case "paste.after" -> pasteAfter();
             case "paste.before" -> pasteBefore();
+            case "clipboard.paste" -> pasteFromSystemClipboard(true);
             case "yank.pending" -> pendingSequence = "y";
             case "delete.pending" -> pendingSequence = "d";
             case "macro.record.pending" -> { pendingSequence = "q"; statusMessage = "q-"; }
@@ -884,6 +894,7 @@ public class ModalEditor {
                     case "file.start"    -> { dismissCompletion(); moveFileStart(); }
                     case "file.end"      -> { dismissCompletion(); moveFileEnd(); }
                     case "organize.imports" -> organizeImports();
+                    case "clipboard.paste" -> pasteFromSystemClipboard(false);
                 }
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
@@ -2851,6 +2862,13 @@ public class ModalEditor {
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
+            case "clipboard.copy" -> {
+                copyToSystemClipboard(getSelectedText());
+                int startOffset = Math.min(offsetAt(anchorRow, anchorCol), offsetOfCursor());
+                moveCursorToOffset(startOffset);
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+            }
             case "indent.right", "indent.left" -> {
                 // charwise Visual でも対象は選択に含まれる全行（linewise と同じ扱い）
                 int r1 = Math.min(anchorRow, cursorRow);
@@ -2918,6 +2936,15 @@ public class ModalEditor {
                 yankRegister = buildLineRangeText(r1, r2);
                 yankType = YankType.LINE;
                 deleteLineRange(r1, r2);
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+            }
+            case "clipboard.copy" -> {
+                int r1 = Math.min(anchorRow, cursorRow);
+                int r2 = Math.max(anchorRow, cursorRow);
+                copyToSystemClipboard(buildLineRangeText(r1, r2));
+                cursorRow = r1;
+                cursorCol = 0;
                 saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
             }
@@ -2995,6 +3022,14 @@ public class ModalEditor {
                 yankRegister = buildBlockText();
                 yankType = YankType.BLOCK;
                 deleteBlock();
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
+            case "clipboard.copy" -> {
+                copyToSystemClipboard(buildBlockText());
+                cursorRow = Math.min(anchorRow, cursorRow);
+                cursorCol = Math.min(anchorCol, cursorCol);
                 saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
@@ -3715,6 +3750,84 @@ public class ModalEditor {
         int newOffset = currentOffset + yankRegister.length() - 1;
         moveCursorToOffset(newOffset);
         clampCursorForNormal();
+    }
+
+    // -------------------------------------------------------------------------
+    // システムクリップボード連携（Ctrl+Shift+C / Ctrl+Shift+V）
+    // -------------------------------------------------------------------------
+
+    /** 内部ヤンクレジスタとは独立に、指定テキストをOSのシステムクリップボードへコピーする。 */
+    private void copyToSystemClipboard(String text) {
+        try {
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            clipboard.setContents(new StringSelection(text), null);
+            statusMessage = text.length() + " bytes copied to clipboard";
+        } catch (Exception e) {
+            statusMessage = "E: clipboard copy failed: " + e.getMessage();
+        }
+    }
+
+    /**
+     * システムクリップボードの内容をカーソル位置へ貼り付ける。文字列（stringFlavor）が
+     * 取得できればそのまま挿入する。画像・音声等の非テキストデータの場合は、ストリーム系
+     * DataFlavor から生バイト列を読み出し、ISO-8859-1（1バイト=1文字の可逆マッピング）で
+     * デコードしてバイト列そのものをバッファへ挿入する（getBytes(ISO_8859_1)で元のバイト列
+     * を復元可能）。
+     *
+     * @param asNormalMode true の場合 NORMAL モードと同じカーソルクランプを行う（P相当）。
+     *                     false の場合 INSERT モード中の挿入として扱い、クランプしない。
+     */
+    private void pasteFromSystemClipboard(boolean asNormalMode) {
+        Transferable contents;
+        try {
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            contents = clipboard.getContents(null);
+        } catch (Exception e) {
+            // ヘッドレス環境等、システムクリップボードにそもそもアクセスできない場合
+            statusMessage = "E: clipboard unavailable: " + e.getMessage();
+            return;
+        }
+        if (contents == null) {
+            statusMessage = "clipboard is empty";
+            return;
+        }
+        String text;
+        try {
+            if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+                text = (String) contents.getTransferData(DataFlavor.stringFlavor);
+            } else {
+                byte[] bytes = readClipboardBinary(contents);
+                if (bytes == null) {
+                    statusMessage = "unsupported clipboard content";
+                    return;
+                }
+                text = new String(bytes, StandardCharsets.ISO_8859_1);
+            }
+        } catch (UnsupportedFlavorException | IOException e) {
+            statusMessage = "E: clipboard paste failed: " + e.getMessage();
+            return;
+        }
+        if (text.isEmpty()) return;
+
+        int offset = offsetOfCursor();
+        buffer.insert(offset, text);
+        moveCursorToOffset(offset + text.length());
+        if (asNormalMode) {
+            clampCursorForNormal();
+        }
+    }
+
+    /** 文字列以外の DataFlavor（image/audio 等）から生バイト列を読み出す。取得不能なら null。 */
+    private byte[] readClipboardBinary(Transferable contents) throws UnsupportedFlavorException, IOException {
+        for (DataFlavor flavor : contents.getTransferDataFlavors()) {
+            if (!InputStream.class.isAssignableFrom(flavor.getRepresentationClass())) continue;
+            try (InputStream in = (InputStream) contents.getTransferData(flavor)) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                in.transferTo(out);
+                return out.toByteArray();
+            }
+        }
+        return null;
     }
 
     /** 行ヤンク: カーソル行の下に貼り付け、カーソルを貼り付け行へ移動 */
