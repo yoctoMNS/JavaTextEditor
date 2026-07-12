@@ -379,6 +379,13 @@ static int testFrameCalculation() {
 - **意図的に採用しなかった案**: 真のプラットフォーム非依存なCPU/GPU温度取得手段は存在しない（OSHI等の外部ライブラリがあるが、CLAUDE.mdの「依存ライブラリを一切使用しない」制約に反するため不採用）。Windows向けに `wmic`/PowerShell経由のACPI温度取得を追加することも検討したが、多くの環境で管理者権限が必要・信頼性が低いため今回のスコープでは見送り、Linuxの `/sys/class/thermal` とNVIDIAの `nvidia-smi` のみをサポート対象とした（それ以外の環境では単に `N/A` 表示になる）。
 - **テスト**: `test/dev/javatexteditor/system/SystemStatsMonitorTest.java`（8/8）。このコンテナ環境には温度センサーも `nvidia-smi` も存在しないため、具体的な温度値ではなく「値が取れるなら妥当な範囲(-40〜150°C)」「取れないなら空」の両方を許容する形でテストしている。メモリ使用率のみ、JDK標準APIが常に利用可能なため必ず値が返ることを検証している。
 
+## 不具合修正: ウォーキングパーソン（ステータス行の歩行キャラクター）の高さがフォント高さと揃わない問題（2026-07）
+
+- **症状**: `Ctrl+Shift+矢印` で文字セル高さ（`cellH`）を変更すると、本文の文字（`TtfMonoFont`でセル高さぴったりに描画される）に対して、ステータス行を歩くキャラクター（`WalkingPersonSprite`）の見かけの高さが一致しないことがあった。
+- **原因**: `EditorCanvas.drawWalkingPerson()` が `int scale = Math.max(1, lineHeight / WalkingPersonSprite.PERSON_H)` という**整数除算**でスプライトの拡大率を決めていた。`PERSON_H`（16px）に対し `lineHeight` が16の倍数ちょうどでない限り端数が切り捨てられ、`spriteH = PERSON_H * scale` が `lineHeight` と一致しない（例: `lineHeight=30` なら `scale=1` になり `spriteH=16px` にしかならず、既定値の `lineHeight=20` でも `scale=1` で `spriteH=16px` と、文字の高さ20pxに対し4px足りない）。フォントサイズを変えてもキャラクターの高さが飛び飛びにしか追従しない、という見た目のズレの原因だった。
+- **修正**: `WalkingPersonSprite.drawFrame()`/`calcX()` の `scale` 引数を `int` から `double` に変更し、`Graphics2D.scale(scale, scale)` によるアフィン変換でスプライトを描画するようにした（従来の `col*scale`/`row*scale` を使った `fillRect` 呼び出しの手動スケーリングを廃止）。新設の `WalkingPersonSprite.heightScale(int targetHeight)` が `targetHeight / PERSON_H`（小数）を返し、`Math.round(PERSON_H * scale) == targetHeight` を保証する。`EditorCanvas.drawWalkingPerson()` はこれを呼んで `scale`/`spriteH` を求めるだけになり、スプライトの高さは常にステータス行の文字高さ（`lineHeight`）とちょうど一致するようになった。
+- **意図的に変更しなかった点**: スプライトデータ（`PERSON_DATA`）自体・フレームレート・移動速度（`WALK_SPEED`）は変更していない。あくまで拡大率の計算方法（整数→小数）と描画方法（手動ピクセル拡大→`Graphics2D`のアフィン変換）のみを変更し、見た目上のドット絵表現（アンチエイリアスなしの矩形塗りつぶし）はそのまま維持した。
+
 ## このスキルを使うタイミング
 
 - ステータスラインにアニメーションを追加したい場合 → `drawWalkingCharacter()` の実装を参照

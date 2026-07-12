@@ -1067,11 +1067,12 @@ public class EditorCanvas extends JPanel {
 
     private void drawWalkingPerson(Graphics2D g2, int statusTopY, int lineHeight) {
         double elapsed = (System.currentTimeMillis() - animStartMs) / 1000.0;
-        int scale  = Math.max(1, lineHeight / WalkingPersonSprite.PERSON_H);
+        double scale = WalkingPersonSprite.heightScale(lineHeight);
         int frame  = WalkingPersonSprite.calcFrame(elapsed);
         int x      = WalkingPersonSprite.calcX(elapsed, getWidth(), scale);
-        // スプライトをステータスライン内に縦中央揃えする
-        int spriteH = WalkingPersonSprite.PERSON_H * scale;
+        // スプライトの高さは常に lineHeight（=文字の高さ）にちょうど一致するため、
+        // ステータスライン内でずれることなく描画される。
+        int spriteH = (int) Math.round(WalkingPersonSprite.PERSON_H * scale);
         int y = statusTopY + (lineHeight - spriteH) / 2;
         // ステータスライン背景色（accent）に対して視認性の高い色を選択する
         Color spriteColor = contrastColor(theme.accent, theme.foreground, theme.background);
