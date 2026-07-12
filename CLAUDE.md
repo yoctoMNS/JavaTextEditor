@@ -259,6 +259,10 @@ project-root/
   - **F11/F12（実行）**: `Main.runJavaClass()`はもともと`ProcessBuilder("java", "-cp", classpath, fqcn)`で実プロセスを起動しているため、この実引数から組み立てた`"java -cp <classpath> <fqcn>"`をそのまま`ModalEditor.showRunOutput(command, fqcn, output, exitCode)`の第1引数として渡す（F10と異なり、これは本当に実行されたコマンドそのもの）。
   - **表示位置**: `showCompileResult()`/`showRunOutput()`は`command`が非空ならバッファの1行目に配置し、2行目以降に従来どおりの`*compile* SUCCESS/FAILED — N file(s)`／`*run* <fqcn> — exit code N`サマリと診断/実行出力が続く。
   - **テスト**: `ProjectBuilderTest`に3テスト追加（`command()`がjavacで始まる・binDir/ソースパスを含む・`-cp`と追加クラスパスを含む・早期リターン時は空文字列）。`test/dev/javatexteditor/editor/BuildOutputCommandTest.java`（新設・3テスト）で`showCompileResult`/`showRunOutput`がバッファ1行目にコマンドを配置すること、`command`が空の場合は1行目を追加しないことを検証。
+- **バグ修正: クラスパス入力プロンプトがキー入力なしでは描画されない不具合**。`enterClasspathInput()`（F10/F11/F12押下時にステータス行へプロンプトを表示するメソッド）は`Main.java`のグローバルキーイベントディスパッチャから`processKey()`を経由せず直接呼ばれる。`syncCanvas()`（`buffer`/`statusMessage`等のモデル状態を`EditorCanvas`へ反映する唯一の経路）は`processKey()`の末尾でのみ呼ばれる`private`メソッドのため、`enterClasspathInput()`はモデル状態（`mode = CLASSPATH_INPUT`）を変更するだけで画面には一切反映されず、次にユーザーが何かキーを押して`processKey()`が呼ばれて初めて（そのキー処理の結果と合わせて）ようやくプロンプトが表示される、という不具合があった。
+  - **修正**: `enterClasspathInput()`の末尾に`syncCanvas()`呼び出しを追加した。
+  - **同根の不具合を横展開して修正**: `Main.java`のバックグラウンドスレッド完了コールバック（`SwingUtilities.invokeLater`内）から`processKey()`を経由せず直接呼ばれる他の公開メソッド（`showCompileResult()`・`showRunOutput()`・`enterMainClassPicker()`）も同じ理由で`syncCanvas()`を呼んでいなかったため、同様に末尾へ追加した（`canvas.repaint()`をMain.java側で呼んでいても、`repaint()`は`EditorCanvas`が保持するキャッシュ済みの`text`/`commandLineText`フィールドを再描画するだけで、`syncCanvas()`が行う「`ModalEditor`の`buffer`から`EditorCanvas`へ値をコピーする」処理の代わりにはならない）。
+  - **テスト用に`EditorCanvas.getCommandLineText()`を新設**した（既存の`setCommandLineText()`とペアになる読み取り専用アクセサ。他の`get*`/`is*`アクセサと同じ「テスト・外部連携用」の位置づけ）。`ClasspathInputTest`に`testPromptRendersImmediatelyWithoutKeyPress()`を追加し、`enterClasspathInput()`直後（キー入力なし）に`canvas.getCommandLineText()`がプロンプト文言を返すことを回帰テストとして固定した。
 
 ## `SystemStatsMonitor`（ステータス行のCPU/GPU表示）の設計決定事項
 
