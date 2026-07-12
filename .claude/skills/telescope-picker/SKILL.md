@@ -171,6 +171,27 @@ TELESCOPE
   既存の `loadFromFile()` を呼ぶ（`pushBuffer()` が正しい元バッファを履歴に積むようにするため。
   FILERモードの設計決定事項節の「ファイルオープンの再利用」を参照）。プレビュー欄
   （`buildFilerPreview()`）は telescope 同様に廃止した。
+- **追記（2026-07）: 一覧選択画面のカーソル移動キーを Vim 式に統一した**。
+  ユーザーから「`:cd` のディレクトリ選択で Ctrl+N/P しか使えないのを Vim のキーバインドに揃えてほしい」
+  という要望を受け、選択系のモード横断で移動キーを整理した。判断基準は「その画面が自由入力
+  （検索クエリ）を受け付けるかどうか」の一点で、自由入力がある画面では `j`/`k` を検索文字列として
+  打てる必要があるため移動キーには割り当てず、矢印キー(↑↓)と Ctrl+N/P のみを追加・維持した。
+  自由入力を持たない画面では `j`/`k` も移動キーとして使える。
+  - **TELESCOPE**（`processTelescopeKey()`。クエリ自由入力あり）: 矢印キー(↓↑)を追加し、
+    Ctrl+N/P と併用可能にした（従来は Ctrl+N/P のみ）。`j`/`k` は非対応のまま
+    （ファイル名に `j`/`k` を含むクエリを打てなくなるため）。
+  - **FILER 検索中**（`processFilerKey()` の `filerSearchMode == true` 分岐。`/` クエリ自由入力あり）:
+    同様に矢印キー(↓↑)を追加。`j`/`k` は非対応のまま。
+  - **FILER 一覧表示中**（`filerSearchMode == false` 分岐。自由入力なし）: `j`/`k` を移動キーとして
+    追加した（矢印キー・Ctrl+N/P は従来どおり維持）。これがユーザー報告の直接の対象。
+  - **IMPORT_SELECT**（`processImportSelectKey()`。自由入力なし）: 既存の矢印キー・Ctrl+N/P に加え
+    `j`/`k` を追加した。呼び出しシグネチャを `processImportSelectKey(keyCode, modifiers)` から
+    `processImportSelectKey(keyCode, keyChar, modifiers)` に変更している。
+  - **`*cd候補*` 疑似バッファ**（`cdSelectionActive`）は変更不要だった。実体が通常の NORMAL モード
+    バッファであるため、`j`/`k` を含む既存の NORMAL モードカーソル移動がそのまま使える
+    （Enter/`q` のみ疑似バッファ用に割り込み処理している）。
+  - **BufferPicker の `d`（バッファ削除）キーとは衝突しない**: `d` は telescope の自由入力画面で
+    使われているキーだが、`j`/`k` を割り当てていないためこの節の変更と無関係。
 
 ### FuzzyMatcher の実装
 
