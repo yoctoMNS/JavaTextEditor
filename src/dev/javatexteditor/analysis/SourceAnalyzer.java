@@ -115,7 +115,8 @@ public class SourceAnalyzer {
                 int lineNum = (int) unit.getLineMap().getLineNumber(startPos) - 1;
                 int offset = (int) startPos;
 
-                symbols.add(new SymbolEntry(ct.getSimpleName().toString(), kind, lineNum, offset));
+                String superTypeName = simpleTypeNameOf(ct.getExtendsClause());
+                symbols.add(new SymbolEntry(ct.getSimpleName().toString(), kind, lineNum, offset, superTypeName));
 
                 // クラス内のメソッド・フィールド・コンストラクタを収集（ネストしたクラスは除外）
                 for (Tree member : ct.getMembers()) {
@@ -130,14 +131,14 @@ public class SourceAnalyzer {
                             // コンストラクタ名はクラス名にする
                             String displayName = mKind == SymbolKind.CONSTRUCTOR
                                 ? ct.getSimpleName().toString() : name;
-                            symbols.add(new SymbolEntry(displayName, mKind, mLine, mOffset));
+                            symbols.add(new SymbolEntry(displayName, mKind, mLine, mOffset, null));
                         }
                         case VariableTree vt -> {
                             long vStart = positions.getStartPosition(unit, vt);
                             int vLine = (int) unit.getLineMap().getLineNumber(vStart) - 1;
                             int vOffset = (int) vStart;
                             symbols.add(new SymbolEntry(
-                                vt.getName().toString(), SymbolKind.FIELD, vLine, vOffset));
+                                vt.getName().toString(), SymbolKind.FIELD, vLine, vOffset, null));
                         }
                         default -> {} // ネストしたクラスは収集しない
                     }
@@ -145,5 +146,20 @@ public class SourceAnalyzer {
             }
             default -> {} // 型宣言以外（エラーノード等）は無視
         }
+    }
+
+    /**
+     * extends 節のTreeから単純型名を抽出する。ジェネリクス（{@code Base<String>}）は
+     * {@code <} より前だけを、パッケージ修飾（{@code pkg.Base}）は最後の {@code .} より
+     * 後ろだけを取る。extends 節が無ければ null。
+     */
+    private String simpleTypeNameOf(Tree extendsClause) {
+        if (extendsClause == null) return null;
+        String raw = extendsClause.toString();
+        int lt = raw.indexOf('<');
+        String base = lt >= 0 ? raw.substring(0, lt) : raw;
+        int lastDot = base.lastIndexOf('.');
+        String simple = lastDot >= 0 ? base.substring(lastDot + 1) : base;
+        return simple.isBlank() ? null : simple.trim();
     }
 }
