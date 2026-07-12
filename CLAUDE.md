@@ -254,6 +254,11 @@ project-root/
   - **F12**: F10とF11で同じ`extraClasspath`（1回のプロンプトで入力した値）を再利用する。F10とF11で別々に尋ねることはしない。
   - **main複数候補時の持ち越し**: F11でmainクラスが複数見つかりtelescope-picker（`MainClassPicker`）で選択待ちになる場合、`ModalEditor.setOnRunMainClassSelected`は`createLeaf()`内で1回だけ固定登録されているコールバックのため、選択確定時点では元のクロージャに`extraClasspath`を持たせられない。そのため`Main.pendingRunExtraClasspath`（`static List<Path>`）に一時保存し、選択確定時のコールバックがそこを読む方式にした（`runningProcess`と同種の「単一static状態で足りる」という既存の割り切りに倣った。複数ペインで同時にF11を使うケースはスコープ外）。
   - **意図的にスコープ外とした点**: 追加クラスパスの入力履歴・補完（`:cd`のTAB補完のような）は実装していない。毎回手入力が必要。
+- **追記: `*compile*`/`*run*` 疑似バッファの先頭行に、実際に発行したjavac/java相当のコマンド文字列を表示するようにした**。
+  - **F10/F12（コンパイル）**: `BuildResult`に`String command`フィールドを追加した。`ProjectBuilder.compile()`が実際に`javax.tools.JavaCompiler`へ渡したオプション（`-d <binDir>`・`-cp <extraClasspath>`（指定時のみ）・`-proc:none`）と全ソースファイルの絶対パスから`"javac -d ... [-cp ...] -proc:none <src1> <src2> ..."`という表示用コマンド文字列を組み立て、`BuildResult.command()`として返す。ソース走査失敗・対象ファイル0件・コンパイラ未検出・出力先作成失敗などコンパイルを実際には試みなかった早期リターンでは`command()`は空文字列になる（＝表示しない）。実際にはJDK標準APIによるin-process呼び出しであり外部`javac`プロセスは起動しないが（本ファイル冒頭のF10の設計決定事項どおり）、ユーザーへの透明性のためAPIに渡した内容を等価なコマンドライン表記に変換して見せている。
+  - **F11/F12（実行）**: `Main.runJavaClass()`はもともと`ProcessBuilder("java", "-cp", classpath, fqcn)`で実プロセスを起動しているため、この実引数から組み立てた`"java -cp <classpath> <fqcn>"`をそのまま`ModalEditor.showRunOutput(command, fqcn, output, exitCode)`の第1引数として渡す（F10と異なり、これは本当に実行されたコマンドそのもの）。
+  - **表示位置**: `showCompileResult()`/`showRunOutput()`は`command`が非空ならバッファの1行目に配置し、2行目以降に従来どおりの`*compile* SUCCESS/FAILED — N file(s)`／`*run* <fqcn> — exit code N`サマリと診断/実行出力が続く。
+  - **テスト**: `ProjectBuilderTest`に3テスト追加（`command()`がjavacで始まる・binDir/ソースパスを含む・`-cp`と追加クラスパスを含む・早期リターン時は空文字列）。`test/dev/javatexteditor/editor/BuildOutputCommandTest.java`（新設・3テスト）で`showCompileResult`/`showRunOutput`がバッファ1行目にコマンドを配置すること、`command`が空の場合は1行目を追加しないことを検証。
 
 ## `SystemStatsMonitor`（ステータス行のCPU/GPU表示）の設計決定事項
 

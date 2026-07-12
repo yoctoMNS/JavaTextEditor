@@ -11,5 +11,6 @@ public record BuildResult(
     boolean success,
     int fileCount,
     List<BuildDiagnostic> diagnostics,
-    String errorMessage
+    String errorMessage,
+    String command
 ) {}

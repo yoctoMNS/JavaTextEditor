@@ -32,6 +32,10 @@ public class ProjectBuilderTest {
         testFindMainClassIgnoresNonMainClass();
         testFindMainClassSkipsBinDirectory();
 
+        testCompileResultIncludesJavacCommand();
+        testCompileResultCommandIncludesExtraClasspath();
+        testCompileResultCommandEmptyWhenSourceScanFails();
+
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
         if (fail > 0) System.exit(1);
@@ -203,5 +207,36 @@ public class ProjectBuilderTest {
 
         List<String> found = new MainClassFinder().findMainClasses(dir);
         assertEquals("bin/ excluded from main class search", List.of("App"), found);
+    }
+
+    static void testCompileResultIncludesJavacCommand() throws IOException {
+        Path dir = Files.createTempDirectory("pb-command");
+        Files.writeString(dir.resolve("Hello.java"),
+            "public class Hello { public static void main(String[] a) {} }");
+
+        BuildResult result = new ProjectBuilder().compile(dir);
+        assertTrue("command starts with javac", result.command().startsWith("javac "));
+        assertTrue("command references bin output dir",
+            result.command().contains(dir.resolve("bin").toString()));
+        assertTrue("command references the source file",
+            result.command().contains(dir.resolve("Hello.java").toString()));
+    }
+
+    static void testCompileResultCommandIncludesExtraClasspath() throws IOException {
+        Path dir = Files.createTempDirectory("pb-command-cp");
+        Files.writeString(dir.resolve("Hello.java"),
+            "public class Hello { public static void main(String[] a) {} }");
+        Path extra = Files.createTempDirectory("pb-command-cp-extra");
+
+        BuildResult result = new ProjectBuilder().compile(dir, List.of(extra));
+        assertTrue("command includes -cp", result.command().contains("-cp"));
+        assertTrue("command includes extra classpath dir", result.command().contains(extra.toString()));
+    }
+
+    static void testCompileResultCommandEmptyWhenSourceScanFails() throws IOException {
+        Path dir = Files.createTempDirectory("pb-command-empty");
+        BuildResult result = new ProjectBuilder().compile(dir);
+        assertTrue("command is empty when there are no sources to compile",
+            result.command() != null && result.command().isEmpty());
     }
 }

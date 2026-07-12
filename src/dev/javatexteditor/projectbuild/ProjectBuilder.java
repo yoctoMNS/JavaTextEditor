@@ -1,6 +1,7 @@
 package dev.javatexteditor.projectbuild;
 
 import dev.javatexteditor.search.FileNameSearcher;
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -51,25 +52,28 @@ public class ProjectBuilder {
         try {
             sources = collectJavaFiles(projectRoot);
         } catch (IOException e) {
-            return new BuildResult(false, 0, List.of(), "ソース走査に失敗しました: " + e.getMessage());
+            return new BuildResult(false, 0, List.of(), "ソース走査に失敗しました: " + e.getMessage(), "");
         }
         if (sources.isEmpty()) {
             return new BuildResult(false, 0, List.of(),
-                "コンパイル対象の.javaファイルが見つかりません: " + projectRoot);
+                "コンパイル対象の.javaファイルが見つかりません: " + projectRoot, "");
         }
 
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             return new BuildResult(false, 0, List.of(),
-                "JavaCompilerが見つかりません。JDKで実行してください。");
+                "JavaCompilerが見つかりません。JDKで実行してください。", "");
         }
 
         Path binDir = binDirFor(projectRoot);
         try {
             Files.createDirectories(binDir);
         } catch (IOException e) {
-            return new BuildResult(false, 0, List.of(), "出力先ディレクトリを作成できません: " + binDir);
+            return new BuildResult(false, 0, List.of(), "出力先ディレクトリを作成できません: " + binDir, "");
         }
+
+        List<String> options = buildCompilerOptions(binDir, extraClasspath);
+        String command = buildJavacCommand(options, sources);
 
         DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
         try (StandardJavaFileManager fm = compiler.getStandardFileManager(collector, Locale.ENGLISH, null)) {
@@ -86,11 +90,33 @@ public class ProjectBuilder {
 
             List<BuildDiagnostic> diagnostics = toDiagnostics(collector.getDiagnostics());
             boolean hasErrors = diagnostics.stream().anyMatch(BuildDiagnostic::isError);
-            return new BuildResult(called && !hasErrors, sources.size(), diagnostics, null);
+            return new BuildResult(called && !hasErrors, sources.size(), diagnostics, null, command);
         } catch (IOException e) {
             return new BuildResult(false, sources.size(), List.of(),
-                "コンパイル中にエラーが発生しました: " + e.getMessage());
+                "コンパイル中にエラーが発生しました: " + e.getMessage(), command);
         }
+    }
+
+    /** javax.tools.JavaCompiler に実際に渡したオプション（-d/-cp/-proc:none）の表示用リストを組み立てる。 */
+    private List<String> buildCompilerOptions(Path binDir, List<Path> extraClasspath) {
+        List<String> options = new ArrayList<>();
+        options.add("-d");
+        options.add(binDir.toString());
+        if (!extraClasspath.isEmpty()) {
+            options.add("-cp");
+            options.add(extraClasspath.stream().map(Path::toString)
+                .reduce((a, b) -> a + File.pathSeparatorChar + b).orElse(""));
+        }
+        options.add("-proc:none");
+        return options;
+    }
+
+    /** *compile* 疑似バッファの先頭に表示する、実際に発行したjavac相当のコマンド文字列。 */
+    private String buildJavacCommand(List<String> options, List<Path> sources) {
+        StringBuilder sb = new StringBuilder("javac");
+        for (String opt : options) sb.append(' ').append(opt);
+        for (Path src : sources) sb.append(' ').append(src);
+        return sb.toString();
     }
 
     /** F11: bin/ に .class が1つでもあれば true（未コンパイルなら実行を拒否するためのガード）。 */

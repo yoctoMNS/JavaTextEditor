@@ -4225,6 +4225,9 @@ public class ModalEditor {
      */
     public void showCompileResult(BuildResult result) {
         StringBuilder sb = new StringBuilder();
+        if (result.command() != null && !result.command().isEmpty()) {
+            sb.append(result.command()).append('\n');
+        }
         sb.append("*compile* ").append(result.success() ? "SUCCESS" : "FAILED")
           .append(" — ").append(result.fileCount()).append(" file(s)\n");
         if (result.errorMessage() != null) {
@@ -4248,8 +4251,11 @@ public class ModalEditor {
     }
 
     /** F11: 実行結果を *run* 疑似バッファに表示する。showCompileResult と同じ疑似バッファパターン。 */
-    public void showRunOutput(String fqcn, String output, int exitCode) {
+    public void showRunOutput(String command, String fqcn, String output, int exitCode) {
         StringBuilder sb = new StringBuilder();
+        if (command != null && !command.isEmpty()) {
+            sb.append(command).append('\n');
+        }
         sb.append("*run* ").append(fqcn).append(" — exit code ").append(exitCode).append('\n');
         sb.append(output);
         buffer = new UndoablePieceTable(sb.toString());

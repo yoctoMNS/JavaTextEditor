@@ -386,6 +386,7 @@ public class Main {
         for (Path p : extraClasspath) {
             classpath.append(java.io.File.pathSeparatorChar).append(p);
         }
+        String command = "java -cp " + classpath + " " + fqcn;
         editor.setStatusMessage("run: " + fqcn + " を実行中...");
         Thread.ofVirtual().start(() -> {
             StringBuilder output = new StringBuilder();
@@ -414,7 +415,7 @@ public class Main {
             }
             int finalExitCode = exitCode;
             SwingUtilities.invokeLater(() -> {
-                editor.showRunOutput(fqcn, output.toString(), finalExitCode);
+                editor.showRunOutput(command, fqcn, output.toString(), finalExitCode);
                 canvas.repaint();
             });
         });
