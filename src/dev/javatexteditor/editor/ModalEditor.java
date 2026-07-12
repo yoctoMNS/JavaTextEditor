@@ -90,9 +90,11 @@ public class ModalEditor {
     private int cursorCol = 0;
     private int anchorRow = 0;
     private int anchorCol = 0;
-    private String yankRegister = "";
+    // ペイン分割（複数ModalEditorインスタンス）をまたいでヤンク内容を共有するため static にする。
+    // Vimのレジスタはウィンドウ単位ではなくエディタプロセス単位で共有されるのと同じ意味論。
+    private static String yankRegister = "";
     private enum YankType { CHAR, LINE, BLOCK }
-    private YankType yankType = YankType.CHAR;
+    private static YankType yankType = YankType.CHAR;
     private enum CaseOp { UPPER, LOWER, TOGGLE }
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
     // vim-macro-recording: q{register}記録 / @{register}再生。
@@ -2075,14 +2077,12 @@ public class ModalEditor {
             saveToFile(currentFilePath);
         } else if (cmd.startsWith("w ")) {
             String path = cmd.substring(2).trim();
-            if (saveToFile(path)) {
-                currentFilePath = path;
-            }
+            saveToFile(path); // 成功時、絶対パスへの currentFilePath 更新は saveToFile 内で行う
         } else if (cmd.equals("e") || cmd.equals("enew")) {
             newBuffer();
         } else if (cmd.startsWith("e ")) {
             String path = cmd.substring(2).trim();
-            loadFromFile(path);
+            loadFromFile(resolveRelativeToProjectRoot(path));
         } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
             openTutorial();
         } else if (cmd.equals("main") || cmd.startsWith("main ")) {
@@ -2331,6 +2331,14 @@ public class ModalEditor {
             Files.writeString(targetPath, buffer.getText());
             statusMessage = "\"" + targetPath + "\" written";
             buffer.markSaved();
+            // 相対パス指定 or 新規ファイルの初回保存でも、以後は常に絶対パスで
+            // currentFilePath を保持する（FILER/telescope 等の他経路と形式を揃え、
+            // switchToRelativeBuffer() の BUFFER_REGISTRY 突合を機能させるため）。
+            currentFilePath = targetPath.toString();
+            if (onFileOpened != null) {
+                onFileOpened.accept(new BufferPicker.BufferEntry(
+                    targetPath.getFileName().toString(), currentFilePath));
+            }
             if (onSave != null) onSave.run();
             return true;
         } catch (IOException e) {
@@ -2412,16 +2420,20 @@ public class ModalEditor {
             return applyRegexSubstituteToPath(pathSpec);
         }
 
-        // ~ を展開
-        String expanded = expandHome(pathSpec);
+        return resolveRelativeToProjectRoot(pathSpec);
+    }
 
-        // 絶対パスか相対パスか判定
+    /**
+     * ~ 展開の上、絶対パスならそのまま・相対パスなら projectRoot を基準に絶対パス化する。
+     * `:e path`/`:w path` の両方で使う共通の解決ロジック（FILER/telescope 等、他の
+     * ファイルを開く経路がいずれも絶対パスを currentFilePath に格納するのと形式を揃えるため）。
+     */
+    private String resolveRelativeToProjectRoot(String pathSpec) {
+        String expanded = expandHome(pathSpec);
         Path target = Path.of(expanded);
         if (target.isAbsolute()) {
             return target.toString();
         }
-
-        // 相対パスの場合、projectRoot を基準に解決
         return getProjectRoot().resolve(expanded).toAbsolutePath().toString();
     }
 
@@ -2513,6 +2525,13 @@ public class ModalEditor {
             cursorCol = 0;
             resetSearchAndResultState();
             statusMessage = "\"" + path + "\" [新規ファイル]";
+            // 既存ファイルを開く場合と同様に登録する。登録しないと switchToRelativeBuffer()
+            // が BUFFER_REGISTRY 上でこのバッファを見つけられず、Ctrl+U/Ctrl+P で
+            // 元々開いていた他のバッファへ戻れなくなる（新規ファイル作成直後の既知の不具合）。
+            if (onFileOpened != null) {
+                String name = Path.of(path).getFileName().toString();
+                onFileOpened.accept(new BufferPicker.BufferEntry(name, path));
+            }
             return;
         }
         try {
@@ -4224,7 +4243,7 @@ public class ModalEditor {
     public void handleAutoImport(List<CompileDiagnostic> diags) {
         if (autoImportHandler == null) return;
         Map<String, List<String>> candidates =
-            autoImportHandler.resolveCandidates(diags, buffer.getText());
+            autoImportHandler.resolveCandidates(diags, buffer.getText(), getProjectRoot());
         if (candidates.isEmpty()) {
             statusMessage = "auto-import: 挿入対象なし";
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }

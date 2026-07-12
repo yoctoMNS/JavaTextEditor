@@ -1,6 +1,9 @@
 package dev.javatexteditor.analysis;
 
 import dev.javatexteditor.buffer.PieceTable;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +40,7 @@ public class AutoImportHandlerTest {
         testApplyImportDuplicateSkipped(handler);
         testApplyImports(handler);
         testResolveCandidates(handler, index);
+        testResolveCandidatesIncludesProjectClass(handler);
         testImportSuggesterSuggestNew(suggester, sourceAnalyzer);
         testRemoveImport(handler);
         testFindUnusedImports(handler);
@@ -241,6 +245,45 @@ public class AutoImportHandlerTest {
         Map<String, List<String>> c2 =
             handler.resolveCandidates(List.of(dUnknown), "class X {}");
         assertFalse("unknown symbol not in map", c2.containsKey("ZzZzUnknownXxX"));
+    }
+
+    // baseDir を渡すと自プロジェクトの別パッケージのクラスも候補に含まれることを確認する
+    // （JDKクラスしか候補に出なかった不具合の修正）。
+    private static void testResolveCandidatesIncludesProjectClass(AutoImportHandler handler) {
+        try {
+            Path tmp = Files.createTempDirectory("auto-import-project-class-test");
+            try {
+                Path pkg = tmp.resolve("src/com/example/util");
+                Files.createDirectories(pkg);
+                Files.writeString(pkg.resolve("MyHelper.java"),
+                    "package com.example.util;\n\npublic class MyHelper {\n}\n");
+
+                CompileDiagnostic d = new CompileDiagnostic(1, 0,
+                    "error: cannot find symbol\n  symbol:   class MyHelper", DiagnosticKind.ERROR);
+                Map<String, List<String>> withoutBaseDir =
+                    handler.resolveCandidates(List.of(d), "class X {}");
+                assertFalse("baseDir未指定なら自プロジェクトのクラスは候補に出ない",
+                    withoutBaseDir.containsKey("MyHelper"));
+
+                Map<String, List<String>> withBaseDir =
+                    handler.resolveCandidates(List.of(d), "class X {}", tmp);
+                if (withBaseDir.containsKey("MyHelper")) {
+                    assertTrue("自プロジェクトの別パッケージのクラスが候補に出る",
+                        withBaseDir.get("MyHelper").contains("com.example.util.MyHelper"));
+                } else {
+                    failed++;
+                    System.out.println("FAIL: 自プロジェクトの別パッケージのクラスが候補に出る");
+                }
+            } finally {
+                try (var walk = Files.walk(tmp)) {
+                    walk.sorted((a, b) -> b.compareTo(a)).forEach(p -> {
+                        try { Files.delete(p); } catch (IOException ignored) {}
+                    });
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("SKIP: testResolveCandidatesIncludesProjectClass (" + e.getMessage() + ")");
+        }
     }
 
     // ----- ImportSuggester.suggestNew -----

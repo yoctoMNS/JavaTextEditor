@@ -1,7 +1,9 @@
 package dev.javatexteditor.analysis;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
@@ -11,17 +13,31 @@ import java.util.List;
 public class ImportSuggester {
 
     private final JdkClassIndex jdkIndex;
+    private final ProjectClassSuggester projectClassSuggester = new ProjectClassSuggester();
 
     public ImportSuggester(JdkClassIndex jdkIndex) {
         this.jdkIndex = jdkIndex;
     }
 
     /**
-     * 単純名に対する FQN 候補リストを返す。
+     * 単純名に対する FQN 候補リストを返す（JDK クラスのみ）。
      * JDK インデックスが未完了なら空リスト。
      */
     public List<String> suggest(String simpleName) {
         return jdkIndex.lookup(simpleName);
+    }
+
+    /**
+     * 単純名に対する FQN 候補リストを返す。JDK クラスに加え、baseDir 配下の
+     * 自プロジェクトの class/interface/enum/record も候補に含める。
+     * baseDir が null の場合は {@link #suggest(String)} と同じ（JDK のみ）。
+     */
+    public List<String> suggest(String simpleName, Path baseDir) {
+        LinkedHashSet<String> result = new LinkedHashSet<>(jdkIndex.lookup(simpleName));
+        if (baseDir != null) {
+            result.addAll(projectClassSuggester.suggest(baseDir, simpleName));
+        }
+        return List.copyOf(result);
     }
 
     /**

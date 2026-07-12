@@ -62,6 +62,7 @@ public class ModalEditorTest {
         testVisualLineDelete();
         testVisualLineEscape();
         testYankTypeDefault();
+        testYankSharedAcrossPanes();
 
         // 矩形選択（VISUAL BLOCK, Ctrl+V）
         testVisualBlockEnter();
@@ -1183,10 +1184,12 @@ public class ModalEditorTest {
 
     static void testYankTypeDefault() {
         System.out.println("[yankType: デフォルトは 'char'・文字ヤンク後も 'char']");
+        // yankRegister/yankType はペイン間共有のため static（modal-editing-engine スキル参照）。
+        // このJVM内で他のテストが先に行ヤンクを行っていると「新規インスタンスの初期値」は
+        // 意味を持たないため、まず文字ヤンクで既知の状態にしてから検証する。
         ModalEditor ed = new ModalEditor("abcdef");
-        check("初期 yankType='char'", ed.getYankType().equals("char"));
 
-        // VISUAL で文字ヤンク後も 'char'
+        // VISUAL で文字ヤンク後は 'char'
         pressKey(ed, 'v');
         pressKey(ed, 'l');
         pressKey(ed, 'y');
@@ -1201,6 +1204,31 @@ public class ModalEditorTest {
         pressKey(ed, 'v');
         pressKey(ed, 'y');
         check("再度文字ヤンクで yankType='char'", ed.getYankType().equals("char"));
+    }
+
+    /**
+     * 不具合修正の回帰テスト: ペイン分割時、一方のペイン(=別のModalEditorインスタンス)で
+     * ヤンクしたテキストがもう一方のペインで貼り付けられなかった。yankRegister/yankTypeを
+     * static化し、全ペインで共有されることを検証する。
+     */
+    static void testYankSharedAcrossPanes() {
+        ModalEditor paneA = new ModalEditor("abcde");
+        ModalEditor paneB = new ModalEditor("xyz");
+
+        // paneA で文字単位ヤンク
+        pressKey(paneA, 'v');
+        pressKey(paneA, 'l');
+        pressKey(paneA, 'l');
+        pressKey(paneA, 'y'); // "abc" をヤンク
+
+        // paneB（別インスタンス）でペーストすると paneA の内容が貼り付けられる
+        pressKey(paneB, 'p');
+        check("別ペインでの貼り付けにヤンク内容が反映される", paneB.getText().equals("xabcyz"));
+
+        // paneB で行単位ヤンクすると、その yankType も paneA 側から見える（static共有）
+        ModalEditor paneC = new ModalEditor("line1\nline2\n");
+        pressKey(paneC, 'y'); pressKey(paneC, 'y'); // yy: 行ヤンク
+        check("行ヤンクの yankType もペインをまたいで共有される", paneA.getYankType().equals("line"));
     }
 
     // -------------------------------------------------------------------------
