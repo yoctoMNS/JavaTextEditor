@@ -333,17 +333,25 @@ public class Main {
         });
     }
 
-    /** F10/F12共通のコンパイル実行部。onDone は完了後にEDT上で呼ばれる（null可）。 */
+    /**
+     * F10/F12共通のコンパイル実行部。onDone は完了後にEDT上で呼ばれる（null可）。
+     * javacが診断を報告するたび *compile* 疑似バッファへリアルタイムに追記する。
+     */
     private static void doCompile(ModalEditor editor, EditorCanvas canvas, List<Path> extraClasspath,
             java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
-        editor.setStatusMessage("コンパイル中...");
+        editor.beginCompileOutput();
+        editor.syncCanvas();
         Path projectRoot = editor.getProjectRoot();
         Thread.ofVirtual().start(() -> {
             dev.javatexteditor.projectbuild.BuildResult result =
-                PROJECT_BUILDER.compile(projectRoot, extraClasspath);
+                PROJECT_BUILDER.compile(projectRoot, extraClasspath, diag ->
+                    SwingUtilities.invokeLater(() -> {
+                        editor.appendCompileDiagnostic(diag);
+                        editor.syncCanvas();
+                    }));
             SwingUtilities.invokeLater(() -> {
-                editor.showCompileResult(result);
-                canvas.repaint();
+                editor.finishCompileOutput(result);
+                editor.syncCanvas();
                 if (onDone != null) onDone.accept(result);
             });
         });
@@ -374,7 +382,8 @@ public class Main {
     /**
      * bin/（常にデフォルトで含まれる）＋ユーザー指定の追加クラスパスで別プロセスとして java を起動する。
      * 実行中プロセスがまだ生きていれば destroy() してから起動し直す（多重実行を避けるため）。
-     * 標準出力/標準エラーはマージして捕捉し、終了後に *run* 疑似バッファへまとめて表示する。
+     * 標準出力/標準エラーは別々のスレッドで読み取り、*run* 疑似バッファへ1行ずつリアルタイムに
+     * 追記する（標準エラー由来の行は赤字表示。EditorCanvas.setErrorLines参照）。
      */
     private static void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn,
             List<Path> extraClasspath) {
@@ -387,24 +396,20 @@ public class Main {
             classpath.append(java.io.File.pathSeparatorChar).append(p);
         }
         String command = "java -cp " + classpath + " " + fqcn;
-        editor.setStatusMessage("run: " + fqcn + " を実行中...");
+        editor.beginRunOutput(command, fqcn);
+        editor.syncCanvas();
         Thread.ofVirtual().start(() -> {
-            StringBuilder output = new StringBuilder();
             int exitCode;
             try {
                 ProcessBuilder pb = new ProcessBuilder("java", "-cp", classpath.toString(), fqcn);
-                pb.redirectErrorStream(true);
                 pb.directory(projectRoot.toFile());
                 Process process = pb.start();
                 runningProcess = process;
-                try (var reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(process.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        output.append(line).append('\n');
-                    }
-                }
+                Thread stdoutReader = startRunOutputReader(process.getInputStream(), editor, false);
+                Thread stderrReader = startRunOutputReader(process.getErrorStream(), editor, true);
                 exitCode = process.waitFor();
+                stdoutReader.join();
+                stderrReader.join();
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() ->
                     editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
@@ -415,10 +420,32 @@ public class Main {
             }
             int finalExitCode = exitCode;
             SwingUtilities.invokeLater(() -> {
-                editor.showRunOutput(command, fqcn, output.toString(), finalExitCode);
-                canvas.repaint();
+                editor.finishRunOutput(fqcn, finalExitCode);
+                editor.syncCanvas();
             });
         });
+    }
+
+    /**
+     * 実行中プロセスの標準出力/標準エラーを1行読むたび *run* 疑似バッファへリアルタイム反映する
+     * 読み取り専用スレッドを起動する（isError=trueなら標準エラー由来として赤字表示される）。
+     */
+    private static Thread startRunOutputReader(java.io.InputStream in, ModalEditor editor, boolean isError) {
+        Thread t = Thread.ofVirtual().unstarted(() -> {
+            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(in))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String finalLine = line;
+                    SwingUtilities.invokeLater(() -> {
+                        editor.appendRunOutputLine(finalLine, isError);
+                        editor.syncCanvas();
+                    });
+                }
+            } catch (IOException ignored) {
+            }
+        });
+        t.start();
+        return t;
     }
 
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */

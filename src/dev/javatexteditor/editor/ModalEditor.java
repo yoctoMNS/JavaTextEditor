@@ -4227,9 +4227,10 @@ public class ModalEditor {
         }
     }
 
-    private void syncCanvas() {
+    public void syncCanvas() {
         if (canvas != null) {
             canvas.setText(buffer.getText());
+            canvas.setErrorLines(outputErrorLinesOwner == buffer ? outputErrorLines : java.util.Set.of());
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
 
@@ -4332,25 +4333,47 @@ public class ModalEditor {
         return (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
     }
 
+    // F10/F11: *compile*/*run* 疑似バッファのリアルタイムログ表示用の状態。
+    // outputErrorLinesOwner は「この行番号集合がどの buffer インスタンスに対応するか」を
+    // 参照一致で識別するためのフィールド。buffer は ~25箇所で `buffer = new UndoablePieceTable(...)`
+    // と再代入されるため、逐一クリアするより「今の buffer と一致するときだけ有効」という
+    // 参照ベースの自動失効の方が取りこぼしがない（syncCanvas() 側で判定する）。
+    private java.util.Set<Integer> outputErrorLines = java.util.Set.of();
+    private UndoablePieceTable outputErrorLinesOwner = null;
+    // ストリーミング追記時、次に追記する行が何行目になるかのカウンタ（末尾追記のみのため単純な+1でよい）。
+    private int outputNextRow = 0;
+    // *run* 疑似バッファ2行目（ステータス行）を完了時に書き換えるためのプレースホルダ文字列と開始オフセット。
+    private String runHeaderPlaceholder = "";
+    private int runHeaderOffset = 0;
+
     /**
      * F10: コンパイル結果を *compile* 疑似バッファに表示する。
      * :grep/:rename と同じパターン（pushBuffer せず直接 buffer を差し替え、Ctrl+U 履歴には積まない）。
+     * ERROR診断・エラーメッセージの行は赤字表示するため行番号を outputErrorLines に記録する。
      */
     public void showCompileResult(BuildResult result) {
         StringBuilder sb = new StringBuilder();
+        java.util.Set<Integer> errorRows = new java.util.HashSet<>();
+        int row = 0;
         if (result.command() != null && !result.command().isEmpty()) {
             sb.append(result.command()).append('\n');
+            row++;
         }
         sb.append("*compile* ").append(result.success() ? "SUCCESS" : "FAILED")
           .append(" — ").append(result.fileCount()).append(" file(s)\n");
+        row++;
         if (result.errorMessage() != null) {
+            errorRows.add(row);
             sb.append(result.errorMessage()).append('\n');
+            row++;
         }
         for (BuildDiagnostic d : result.diagnostics()) {
+            if (d.isError()) errorRows.add(row);
             sb.append(d.isError() ? "ERROR " : "WARNING ")
               .append(d.filePath()).append(':').append(d.lineNumber() + 1)
               .append(':').append(d.column() + 1).append(": ")
               .append(d.message()).append('\n');
+            row++;
         }
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
@@ -4358,6 +4381,8 @@ public class ModalEditor {
         fileNameResults = null;
         cursorRow = 0;
         cursorCol = 0;
+        outputErrorLines = errorRows;
+        outputErrorLinesOwner = buffer;
         statusMessage = result.success()
             ? "compile: success (" + result.fileCount() + " file(s))"
             : "compile: FAILED";
@@ -4378,6 +4403,89 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         statusMessage = "run: " + fqcn + " exited with code " + exitCode;
+    }
+
+    /**
+     * F10: コンパイル開始時に *compile* 疑似バッファをプレースホルダで表示する
+     * （javac実行中に diagnostic が届くたびリアルタイムで追記していく起点）。
+     */
+    public void beginCompileOutput() {
+        buffer = new UndoablePieceTable("*compile* 実行中...\n");
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        outputErrorLines = new java.util.HashSet<>();
+        outputErrorLinesOwner = buffer;
+        outputNextRow = 1;
+        statusMessage = "コンパイル中...";
+    }
+
+    /** F10: javacが診断を1件報告するたび *compile* 疑似バッファの末尾へリアルタイム追記する。 */
+    public void appendCompileDiagnostic(BuildDiagnostic d) {
+        String line = (d.isError() ? "ERROR " : "WARNING ")
+            + d.filePath() + ':' + (d.lineNumber() + 1) + ':' + (d.column() + 1) + ": " + d.message();
+        appendOutputLine(line, d.isError());
+    }
+
+    /**
+     * F10: コンパイル完了後、最終結果で *compile* 疑似バッファを確定表示する。
+     * ストリーミング中の追記内容は破棄し、showCompileResult() と同じ最終整形で丸ごと描き直す
+     * （command 行の有無で先頭の行数が変わりうるため、逐次パッチではなく確定結果からの再構築にする）。
+     */
+    public void finishCompileOutput(BuildResult result) {
+        showCompileResult(result);
+    }
+
+    /**
+     * F11: 実行開始時に *run* 疑似バッファをプレースホルダで表示する
+     * （コマンド行は実行前から確定しているため、以後 finishRunOutput() まで行数は変わらない）。
+     */
+    public void beginRunOutput(String command, String fqcn) {
+        StringBuilder sb = new StringBuilder();
+        String header0 = (command != null) ? command : "";
+        if (!header0.isEmpty()) sb.append(header0).append('\n');
+        runHeaderOffset = sb.length();
+        runHeaderPlaceholder = "*run* " + fqcn + " — 実行中...";
+        sb.append(runHeaderPlaceholder).append('\n');
+        buffer = new UndoablePieceTable(sb.toString());
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        outputErrorLines = new java.util.HashSet<>();
+        outputErrorLinesOwner = buffer;
+        outputNextRow = header0.isEmpty() ? 1 : 2;
+        statusMessage = "run: " + fqcn + " を実行中...";
+    }
+
+    /**
+     * F11: 実行中プロセスの標準出力/標準エラー出力を1行ずつ *run* 疑似バッファへリアルタイム追記する。
+     * isError=true（標準エラー由来）の行は赤字表示するため行番号を outputErrorLines に記録する。
+     */
+    public void appendRunOutputLine(String line, boolean isError) {
+        appendOutputLine(line, isError);
+    }
+
+    /** F11: プロセス終了後、*run* 疑似バッファ2行目のプレースホルダを実際の終了コードへ書き換える。 */
+    public void finishRunOutput(String fqcn, int exitCode) {
+        if (outputErrorLinesOwner != buffer) return; // 実行中に別バッファへ切り替わっていたら何もしない
+        String finalHeader = "*run* " + fqcn + " — exit code " + exitCode;
+        buffer.delete(runHeaderOffset, runHeaderPlaceholder.length());
+        buffer.insert(runHeaderOffset, finalHeader);
+        statusMessage = "run: " + fqcn + " exited with code " + exitCode;
+    }
+
+    /** beginCompileOutput()/beginRunOutput() が作った疑似バッファの末尾へ1行追記する共通処理。 */
+    private void appendOutputLine(String line, boolean isError) {
+        if (outputErrorLinesOwner != buffer) return; // ストリーミング中に別バッファへ切り替わっていたら何もしない
+        buffer.insert(buffer.length(), line + "\n");
+        if (isError) outputErrorLines.add(outputNextRow);
+        cursorRow = outputNextRow;
+        cursorCol = 0;
+        outputNextRow++;
     }
     public boolean isFileSearchMode()     { return mode == Mode.FILESEARCH; }
     public boolean isFileNameSearch()     { return mode == Mode.FILESEARCH && fileSearchType == FileSearchType.NAME; }

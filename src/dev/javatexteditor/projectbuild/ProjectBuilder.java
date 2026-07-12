@@ -13,8 +13,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Consumer;
 import javax.tools.Diagnostic;
-import javax.tools.DiagnosticCollector;
+import javax.tools.DiagnosticListener;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
@@ -48,6 +49,16 @@ public class ProjectBuilder {
      * 追加した上でコンパイルする。空リストなら従来どおりクラスパス指定なし。
      */
     public BuildResult compile(Path projectRoot, List<Path> extraClasspath) {
+        return compile(projectRoot, extraClasspath, d -> { });
+    }
+
+    /**
+     * extraClasspathに加え、コンパイル中にjavacが診断を報告するたびonDiagnosticへ即座に通知する
+     * （*compile*疑似バッファへのリアルタイム表示用）。onDiagnosticはコンパイルを実行している
+     * スレッド上で同期的に呼ばれるため、UIスレッドへのディスパッチは呼び出し側の責務とする
+     * （ProjectBuilder自体はSwingに依存しない設計を維持する）。
+     */
+    public BuildResult compile(Path projectRoot, List<Path> extraClasspath, Consumer<BuildDiagnostic> onDiagnostic) {
         List<Path> sources;
         try {
             sources = collectJavaFiles(projectRoot);
@@ -75,8 +86,15 @@ public class ProjectBuilder {
         List<String> options = buildCompilerOptions(binDir, extraClasspath);
         String command = buildJavacCommand(options, sources);
 
-        DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
-        try (StandardJavaFileManager fm = compiler.getStandardFileManager(collector, Locale.ENGLISH, null)) {
+        List<BuildDiagnostic> diagnostics = new ArrayList<>();
+        DiagnosticListener<JavaFileObject> listener = diagnostic -> {
+            BuildDiagnostic bd = toDiagnostic(diagnostic);
+            if (bd != null) {
+                diagnostics.add(bd);
+                onDiagnostic.accept(bd);
+            }
+        };
+        try (StandardJavaFileManager fm = compiler.getStandardFileManager(listener, Locale.ENGLISH, null)) {
             fm.setLocation(StandardLocation.CLASS_OUTPUT, List.of(binDir.toFile()));
             if (!extraClasspath.isEmpty()) {
                 fm.setLocation(StandardLocation.CLASS_PATH,
@@ -85,10 +103,9 @@ public class ProjectBuilder {
             Iterable<? extends JavaFileObject> units = fm.getJavaFileObjectsFromPaths(sources);
 
             JavaCompiler.CompilationTask task = compiler.getTask(
-                null, fm, collector, List.of("-proc:none"), null, units);
+                null, fm, listener, List.of("-proc:none"), null, units);
             boolean called = Boolean.TRUE.equals(task.call());
 
-            List<BuildDiagnostic> diagnostics = toDiagnostics(collector.getDiagnostics());
             boolean hasErrors = diagnostics.stream().anyMatch(BuildDiagnostic::isError);
             return new BuildResult(called && !hasErrors, sources.size(), diagnostics, null, command);
         } catch (IOException e) {
@@ -175,22 +192,19 @@ public class ProjectBuilder {
         return result;
     }
 
-    private List<BuildDiagnostic> toDiagnostics(List<Diagnostic<? extends JavaFileObject>> raw) {
-        List<BuildDiagnostic> result = new ArrayList<>();
-        for (Diagnostic<? extends JavaFileObject> d : raw) {
-            Diagnostic.Kind kind = d.getKind();
-            boolean isError = kind == Diagnostic.Kind.ERROR;
-            boolean isWarning = kind == Diagnostic.Kind.WARNING || kind == Diagnostic.Kind.MANDATORY_WARNING;
-            if (!isError && !isWarning) continue;
+    /** ERROR/WARNING以外（NOTE等）はnullを返し、呼び出し側で読み飛ばす。 */
+    private BuildDiagnostic toDiagnostic(Diagnostic<? extends JavaFileObject> d) {
+        Diagnostic.Kind kind = d.getKind();
+        boolean isError = kind == Diagnostic.Kind.ERROR;
+        boolean isWarning = kind == Diagnostic.Kind.WARNING || kind == Diagnostic.Kind.MANDATORY_WARNING;
+        if (!isError && !isWarning) return null;
 
-            String path = (d.getSource() != null) ? d.getSource().getName() : "?";
-            long rawLine = d.getLineNumber();
-            int line = rawLine > 0 ? (int) rawLine - 1 : 0;
-            long rawCol = d.getColumnNumber();
-            int col = rawCol > 0 ? (int) rawCol - 1 : 0;
+        String path = (d.getSource() != null) ? d.getSource().getName() : "?";
+        long rawLine = d.getLineNumber();
+        int line = rawLine > 0 ? (int) rawLine - 1 : 0;
+        long rawCol = d.getColumnNumber();
+        int col = rawCol > 0 ? (int) rawCol - 1 : 0;
 
-            result.add(new BuildDiagnostic(path, line, col, d.getMessage(Locale.ENGLISH), isError));
-        }
-        return result;
+        return new BuildDiagnostic(path, line, col, d.getMessage(Locale.ENGLISH), isError);
     }
 }

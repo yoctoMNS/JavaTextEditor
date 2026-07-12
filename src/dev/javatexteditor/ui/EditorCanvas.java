@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
 
 public class EditorCanvas extends JPanel {
 
@@ -66,6 +67,10 @@ public class EditorCanvas extends JPanel {
     private List<CompileDiagnostic> diagnostics = List.of();
     // 行番号 → 最も優先度の高い診断種別（ERROR > WARNING）
     private Map<Integer, DiagnosticKind> diagByLine = Map.of();
+
+    // F10/F11: *compile*/*run* 疑似バッファのリアルタイムログ表示用。
+    // 標準エラー出力・ERROR診断の行番号集合（この行だけ ERROR_COLOR で描画する）。
+    private Set<Integer> errorLines = Set.of();
 
     // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
     private int cellW = TtfMonoFont.BASE_CELL_W;
@@ -386,6 +391,15 @@ public class EditorCanvas extends JPanel {
     public boolean isShowSplash() { return showSplash; }
 
     /**
+     * *compile* / *run* 疑似バッファの行のうち、赤字（標準エラー出力・ERROR診断）で描画する
+     * 行番号の集合をセットする。空集合なら全行が通常の前景色で描画される。
+     */
+    public void setErrorLines(Set<Integer> errorLines) {
+        this.errorLines = (errorLines != null) ? Set.copyOf(errorLines) : Set.of();
+        repaint();
+    }
+
+    /**
      * コンパイル診断リストをセットして再描画する。
      * 空リストを渡すとガター・アンダーラインが消える。
      */
@@ -542,7 +556,8 @@ public class EditorCanvas extends JPanel {
         for (int row = scrollRow; row < lastRow; row++) {
             int screenRow = row - scrollRow;
             int y = (screenRow + 1) * lineHeight;
-            drawLineWithFullWidthSupport(g2, lines[row], y, charWidth, scrollOffsetX, gutterWidth);
+            drawLineWithFullWidthSupport(g2, lines[row], y, charWidth, scrollOffsetX, gutterWidth,
+                errorLines.contains(row));
         }
 
         // 3. カーソルを描画する（縦・横スクロールオフセット考慮）
@@ -717,7 +732,7 @@ public class EditorCanvas extends JPanel {
      * y はベースライン（セル底辺）の Y 座標。
      */
     private void drawLineWithFullWidthSupport(Graphics2D g2, String line, int y,
-            int charWidth, int scrollOffsetX, int gutterWidth) {
+            int charWidth, int scrollOffsetX, int gutterWidth, boolean isErrorLine) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
         int swingBaselineY = y - ttfFont.descentPixels(cellH);
@@ -727,9 +742,14 @@ public class EditorCanvas extends JPanel {
             int charPixelWidth = charWidth * widthMult;
             if (x + charPixelWidth > 0 && x < getWidth()) {
                 if (ttfFont.isSupported(codePoint)) {
-                    g2.drawImage(getGlyphFg(codePoint), x, y - cellTopOffset, null);
+                    // errorLines 指定行のみ ERROR_COLOR の別キャッシュ（uiGlyphCache）で描画する。
+                    // 通常行は本文専用キャッシュ（glyphCacheFg、テーマ色固定）のまま高速に保つ。
+                    BufferedImage glyph = isErrorLine
+                        ? getUiGlyph(codePoint, cellW, cellH, ERROR_COLOR)
+                        : getGlyphFg(codePoint);
+                    g2.drawImage(glyph, x, y - cellTopOffset, null);
                 } else {
-                    g2.setColor(theme.foreground);
+                    g2.setColor(isErrorLine ? ERROR_COLOR : theme.foreground);
                     g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
                 }
             }
