@@ -638,6 +638,8 @@ public class ModalEditor {
                 if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { jumpToPrevDiagnostic(); return; }
                 // マッチしない場合は通常処理へ
             }
+            // zz: カーソル行をviewport中央にスクロール（zt/zbは未実装のためzのみ受け付ける）
+            if (prev == 'z' && matches(keyCode, keyChar, KeyEvent.VK_Z, 'z')) { centerCursorLineInViewport(); return; }
             // SPC+g+? シーケンス（SPC+g の2打鍵の後）
             if (seq.equals(" g")) {
                 if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
@@ -757,6 +759,7 @@ public class ModalEditor {
             case "macro.play.pending"   -> { pendingSequence = "@"; statusMessage = "@-"; }
             case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
             case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
+            case "screen.center.pending" -> { pendingSequence = "z"; statusMessage = "z-"; }
             case "split.pending"       -> { pendingSequence = "s";  statusMessage = "s-"; }
             case "leader.pending"      -> { pendingSequence = " "; statusMessage = "SPC-"; }
             case "filesearch.pending"  -> { pendingSequence = "\\"; statusMessage = "\\-"; }
@@ -4077,6 +4080,19 @@ public class ModalEditor {
         int lineLen = docLines[cursorRow].length();
         cursorCol = Math.min(cursorCol, Math.max(0, lineLen - 1));
         syncCanvas();
+    }
+
+    /**
+     * zz: カーソル行を viewport の垂直中央付近に表示する。カーソルの論理位置（行・列）は変更しない。
+     * ファイル先頭・末尾付近では scrollRow を有効範囲（0 〜 totalLines - visibleRows）にクランプする。
+     */
+    private void centerCursorLineInViewport() {
+        if (canvas == null) return;
+        int visibleRows = getVisibleRows();
+        int totalLines = getLines().length;
+        int maxScrollRow = Math.max(0, totalLines - visibleRows);
+        int newScrollRow = Math.max(0, Math.min(cursorRow - visibleRows / 2, maxScrollRow));
+        canvas.setScrollRow(newScrollRow);
     }
 
     /** 表示可能行数を返す（canvas がなければ仮の値 40）。 */

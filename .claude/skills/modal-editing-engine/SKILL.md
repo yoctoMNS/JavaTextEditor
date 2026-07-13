@@ -166,6 +166,32 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
   （`moveLineStartNonBlank()` 等）へ動かす前」に行う必要がある（先に動かすと選択終端の行番号が
   失われる。実装時に一度ここで躓いたため、呼び出し順序を変えるときは要注意）。
 
+## `zz`（カーソル行を viewport 中央にスクロール、2026-07 追加）
+
+- **`z` を新規プレフィックスとして追加した**（`KeymapRegistry` に `z → screen.center.pending`、
+  NORMAL モードのみ）。2打鍵目が `z` の場合のみ `centerCursorLineInViewport()` を呼ぶ。それ以外の
+  2打鍵目は `g`/`s` 等と同じ「マッチしない場合は落下して通常処理へ」の既存方針に従い、`pendingSequence`
+  を消費しつつ通常のキー処理にフォールスルーする（`zt`/`zb` 相当は未実装のため今回は追加していない）。
+  `z` はバイパス方式の一時UIモード（SEARCH/TELESCOPE等）には存在しないため、INSERT/COMMAND等では
+  `KeymapRegistry` に `z` バインドが無く、通常の文字入力として扱われる（NORMALモード専用というスコープが
+  モード分岐の仕組みだけで自然に保証される）。
+- **`centerCursorLineInViewport()` は既存のスクロールAPI（`canvas.getScrollRow()`/`setScrollRow()`・
+  `ModalEditor.getVisibleRows()`）をそのまま再利用**し、新しい描画・座標系コードは追加していない。
+  `newScrollRow = cursorRow - visibleRows/2` を `[0, totalLines - visibleRows]` にクランプするだけで、
+  ファイル先頭・末尾付近でも不正な `scrollRow` にならない。カーソルの `row`/`col` は一切変更しない
+  （`H`/`M`/`L`＝`jumpToScreenRow()` とは逆に、`zz` は「画面を動かす」側でカーソルは動かさない）。
+  `syncCanvas()` が毎回呼ぶ `canvas.ensureCursorVisible(cursorRow)` は、中央寄せ後のカーソルが常に
+  可視範囲内に収まる（クランプの結果カーソルが画面端に来た場合も可視範囲内ではある）ため、
+  centerCursorLineInViewport() の結果を上書きしない。
+- **テスト**: `test/dev/javatexteditor/editor/ZzCenterScrollTest.java`（新設）。`ScrollTest.java` とは
+  異なり、`getVisibleRows()`（≒`scrollRow`反映）を検証するには実際の `EditorCanvas`（`setSize()`で
+  固定）が必要なため、canvas なしの `ModalEditor` ではなく `new ModalEditor(text, canvas)` を使う。
+  **`EditorCanvas` を生成するテストは `System.exit()` を明示的に呼ばないと JVM が終了しない**（Swing
+  Timer が非デーモンの `AWT-EventQueue-0` を起動させ続けるため）。`EditorCanvasTest.java` に既存の
+  コメントで明記されている既知の注意点で、今回このテストを書く際にも同じ理由でハングを実機で踏んだ
+  （`System.exit(fail > 0 ? 1 : 0)` を追加して解消）。次に `EditorCanvas` を伴う新規テストクラスを
+  書く開発者は、同じハングを踏まないようこの節を参照すること。
+
 ## テスト（`%`・Visual インデント・`gv`）
 
 - `test/dev/javatexteditor/editor/MatchPairAndIndentTest.java`（18テスト）: `MatchPairs.findMatch()`の
