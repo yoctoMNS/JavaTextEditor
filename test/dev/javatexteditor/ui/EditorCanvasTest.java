@@ -48,29 +48,20 @@ public class EditorCanvasTest {
             pass += checkColor("NORMALモードカーソルブロック色", 0x33, 0x33, 0x33, pixel);
         }
 
-        // Test 4: INSERTモードのカーソルバーが2px幅で描画されているか
+        // Test 4: INSERTモードでもカーソルはブロック（■）のまま描画されるか
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
-            canvas.setText(" ");
+            canvas.setText("A");
             canvas.setTheme(Theme.LIGHT_MODE);
             canvas.setCursor(0, 0);
             canvas.setInsertMode(true);
 
             BufferedImage img = render(canvas, 400, 300);
-            // x=0,1 は縦棒（前景色）、x=5 はバー外（背景色）
-            // 文字は空白にしておく。'A' 等のグリフを使うとフォントの字形次第で
-            // (5,5) 相当の座標がグリフのストローク内に入り得るため
-            // （IBM Plex Mono 移行時に発生）、カーソルバー幅の検証がグリフ形状に
-            // 依存しないようにする。
-            int barPixel   = img.getRGB(0, 5);
-            int afterPixel = img.getRGB(5, 5);
-            boolean barOk   = colorMatch(barPixel,   0x33, 0x33, 0x33);
-            boolean afterOk = colorMatch(afterPixel, 0xF5, 0xF0, 0xE6);
-            int result = (barOk && afterOk) ? 1 : 0;
-            System.out.println((result == 1 ? "[OK] " : "[FAIL] ")
-                + "INSERTモードカーソルバー2px -> bar=" + barOk + " afterBar=" + afterOk);
-            pass += result;
+            // (1, 1)は必ずブロック内に入る。INSERTモードでも縦棒(2px)ではなく
+            // NORMALモードと同じブロックカーソルが描画されることを確認する。
+            int pixel = img.getRGB(1, 1);
+            pass += checkColor("INSERTモードカーソルブロック色", 0x33, 0x33, 0x33, pixel);
         }
 
         // Test 5: charCellWidthが半角・全角を正しく判定するか

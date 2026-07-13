@@ -771,22 +771,17 @@ public class EditorCanvas extends JPanel {
 
         if (x + charWidth < 0 || x >= getWidth()) return;
 
-        if (insertMode) {
-            g2.setColor(theme.foreground);
-            g2.fillRect(x, yTop, 2, lineHeight);
-        } else {
-            int codePoint = (cursorCol < line.length()) ? line.codePointAt(cursorCol) : -1;
-            int blockWidth = charWidth * (codePoint != -1 ? charCellWidth(codePoint) : 1);
-            g2.setColor(theme.foreground);
-            g2.fillRect(x, yTop, blockWidth, lineHeight);
-            if (codePoint != -1) {
-                if (ttfFont.isSupported(codePoint)) {
-                    g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
-                } else {
-                    g2.setColor(theme.background);
-                    int swingBaselineY = (screenRow + 1) * lineHeight - ttfFont.descentPixels(lineHeight);
-                    g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
-                }
+        int codePoint = (cursorCol < line.length()) ? line.codePointAt(cursorCol) : -1;
+        int blockWidth = charWidth * (codePoint != -1 ? charCellWidth(codePoint) : 1);
+        g2.setColor(theme.foreground);
+        g2.fillRect(x, yTop, blockWidth, lineHeight);
+        if (codePoint != -1) {
+            if (ttfFont.isSupported(codePoint)) {
+                g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
+            } else {
+                g2.setColor(theme.background);
+                int swingBaselineY = (screenRow + 1) * lineHeight - ttfFont.descentPixels(lineHeight);
+                g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
             }
         }
     }

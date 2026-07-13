@@ -264,3 +264,10 @@ int b = pixel & 0xFF;
 - **症状**: 半角ASCII本文は `TtfMonoFont`（IBM Plex Mono TTFをラスタライズしてキャッシュしたビットマップグリフ）で描画されており、ラスタライズ時点で `RenderingHints.KEY_TEXT_ANTIALIASING`/`KEY_ANTIALIASING` を`ON`にして生成していたため滑らかだった。一方、日本語等の非ASCIIフォールバック文字（`getSwingFont()` で生成する `Font(Font.MONOSPACED, ...)`）や、スプラッシュ画面・ステータス行・telescope/補完ポップアップの `drawUiText()`/直接 `g2.drawString()` 呼び出しは、`paintContent()` に渡される `Graphics2D` 自体にアンチエイリアスのヒントを一切設定していなかった。Swingのデフォルトはデスクトップのフォントレンダリングヒント（`awt.font.desktophints`）依存で、環境によってはOFF相当になり、本文のビットマップフォントと非ASCII部分とでギザギザ具合が異なって見えていた。
 - **修正**: `EditorCanvas.paintContent(Graphics2D g2)` の冒頭（本文セルサイズを読む前）で、`KEY_ANTIALIASING`/`KEY_TEXT_ANTIALIASING`/`KEY_FRACTIONALMETRICS`/`KEY_STROKE_CONTROL` の4つのヒントを一度だけ設定するようにした（`TtfMonoFont` のグリフラスタライズ時に使っているのと同じ4つの値）。`paintContent()` 配下の `drawSplashScreen`/`drawStatusLine`/`drawTelescopeOverlay`/`drawCompletionPopup`/`drawGutter`/`drawUiText`/`drawLineWithFullWidthSupport` 等は全て同じ `g2` インスタンスを引数として使い回す設計（本ファイル冒頭の「telescope・ステータス行・補完ポップアップの文字描画を MiscFixed ビットマップフォントに統一」節参照）のため、呼び出しの起点1箇所にヒントを設定するだけで画面内の全描画経路に反映される。
 - **意図的に選ばなかった対策**: 個々の `drawString` 呼び出し箇所（10箇所以上）にそれぞれヒント設定を追加する案は、呼び出し漏れのリスクがあり、かつ本ファイルにある「共有 `g2` を使い回す」という既存設計の意図とも逆行するため採用しなかった。
+
+## カーソルをINSERTモードでも常にブロック（■）表示にする変更
+
+- **経緯**: v1〜のスコープ定義（本ファイル冒頭）では「NORMAL=ブロック/INSERT=縦棒」だったが、ユーザーから「カーソルをずっと■のままにしてほしい」という明示的な要望があり、モードによる見た目の切り替えを廃止した。
+- **修正**: `EditorCanvas.drawCursor()` の `if (insertMode) { ... 2px縦棒 ... } else { ... ブロック ... }` という分岐をやめ、常に旧`else`側（ブロック塗り＋文字を背景色で再描画）だけを実行するようにした。
+- **意図的に変更しなかった点**: `insertMode` フィールド・`setInsertMode()`・ステータス行の `"-- INSERT --"`/`"-- NORMAL --"` ラベル表示（`drawStatusLine`）はそのまま残した。要望は「カーソル形状」のみに限定されており、モード名の文字表示までは対象外のため。
+- **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java` の Test 4（旧: 「INSERTモードのカーソルバーが2px幅で描画されているか」）を「INSERTモードでもカーソルはブロック（■）のまま描画されるか」に更新し、Test 3（NORMALモード）と同じアサーション形（`(1,1)` が前景色）に揃えた。
