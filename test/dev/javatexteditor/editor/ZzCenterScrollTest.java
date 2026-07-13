@@ -75,13 +75,16 @@ public class ZzCenterScrollTest {
         assertEq("zz near start: cursorRow unchanged", 2, t.editor().getCursorRow());
     }
 
-    static void testZzClampedNearFileEnd() {
-        // 101行、maxScrollRow = 101-14 = 87。cursorRow=99 → 99-7=92 → clamp to 87
+    static void testZzDoesNotClampNearFileEnd() {
+        // NeoVim（Vimと共通のscroll_cursor_halfway()実装）のzzは、ファイル末尾付近でも
+        // 「最終行を画面下端に留める」クランプをせず、カーソル行を厳密に中央へ置く
+        // （画面下部はファイル末尾を超えて空白になることを許容する）。
+        // 101行、visibleRows=14。cursorRow=99 → 99-7=92（87へのクランプはしない）
         TestEditor t = editorWithCanvas(makeLines(100));
         t.editor().setCursor(99, 0);
         sendChar(t.editor(), 'z');
         sendChar(t.editor(), 'z');
-        assertEq("zz: clamped to maxScrollRow near file end", 87, t.canvas().getScrollRow());
+        assertEq("zz: not clamped near file end (NeoVim-style)", 92, t.canvas().getScrollRow());
         assertEq("zz near end: cursorRow unchanged", 99, t.editor().getCursorRow());
     }
 
@@ -137,7 +140,7 @@ public class ZzCenterScrollTest {
         testZzCentersCursorLine();
         testZzDoesNotChangeCursorPosition();
         testZzClampedNearFileStart();
-        testZzClampedNearFileEnd();
+        testZzDoesNotClampNearFileEnd();
         testZAloneDoesNotScrollYet();
         testZThenOtherKeyFallsThroughToNormalProcessing();
         testZzNotTriggeredInInsertMode();

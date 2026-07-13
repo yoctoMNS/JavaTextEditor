@@ -4084,14 +4084,16 @@ public class ModalEditor {
 
     /**
      * zz: カーソル行を viewport の垂直中央付近に表示する。カーソルの論理位置（行・列）は変更しない。
-     * ファイル先頭・末尾付近では scrollRow を有効範囲（0 〜 totalLines - visibleRows）にクランプする。
+     * NeoVim（Vimも同じ move.c 由来の scroll_cursor_halfway() 実装を共有する）の zz は、
+     * ファイル末尾付近であってもカーソル行を厳密に中央へ置き、画面下部がファイル末尾を超えて
+     * 空白になることを許容する。「最終行を画面下端に留める」というクランプは行わない
+     * （そうすると末尾付近でカーソル行が中央からずれてしまい、本家の zz と挙動が異なってしまうため）。
+     * scrollRow の下限（0 未満にならない）だけは canvas.setScrollRow() 側で保証される。
      */
     private void centerCursorLineInViewport() {
         if (canvas == null) return;
         int visibleRows = getVisibleRows();
-        int totalLines = getLines().length;
-        int maxScrollRow = Math.max(0, totalLines - visibleRows);
-        int newScrollRow = Math.max(0, Math.min(cursorRow - visibleRows / 2, maxScrollRow));
+        int newScrollRow = cursorRow - visibleRows / 2;
         canvas.setScrollRow(newScrollRow);
     }
 

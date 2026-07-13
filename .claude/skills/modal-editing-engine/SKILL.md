@@ -177,12 +177,22 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
   モード分岐の仕組みだけで自然に保証される）。
 - **`centerCursorLineInViewport()` は既存のスクロールAPI（`canvas.getScrollRow()`/`setScrollRow()`・
   `ModalEditor.getVisibleRows()`）をそのまま再利用**し、新しい描画・座標系コードは追加していない。
-  `newScrollRow = cursorRow - visibleRows/2` を `[0, totalLines - visibleRows]` にクランプするだけで、
-  ファイル先頭・末尾付近でも不正な `scrollRow` にならない。カーソルの `row`/`col` は一切変更しない
+  `newScrollRow = cursorRow - visibleRows/2` を計算し、そのまま `canvas.setScrollRow()` に渡す
+  （下限0のクランプは `setScrollRow()` 自体が行う）。カーソルの `row`/`col` は一切変更しない
   （`H`/`M`/`L`＝`jumpToScreenRow()` とは逆に、`zz` は「画面を動かす」側でカーソルは動かさない）。
   `syncCanvas()` が毎回呼ぶ `canvas.ensureCursorVisible(cursorRow)` は、中央寄せ後のカーソルが常に
-  可視範囲内に収まる（クランプの結果カーソルが画面端に来た場合も可視範囲内ではある）ため、
-  centerCursorLineInViewport() の結果を上書きしない。
+  可視範囲内（`scrollRow` 〜 `scrollRow+visibleRows`）に収まるため、centerCursorLineInViewport() の
+  結果を上書きしない。
+- **意図的にVimではなくNeoVimの `zz` を仕様として採用した（ユーザー指定）**: 当初は「ファイル末尾付近では
+  `scrollRow` を `totalLines - visibleRows` にクランプし、最終行が画面下端に留まる」実装だったが、
+  「Vimの挙動に合わせるのではなく、NeoVimの挙動を参考にしてほしい」という指示を受け、
+  `AskUserQuestion` で具体的な差分を確認したところ「ファイル末尾付近でもクランプしない」が
+  意図であることが確定した。NeoVim・Vimとも `zz` の中核実装（`move.c` の
+  `scroll_cursor_halfway()`）は共有されており、ファイル末尾付近でもカーソル行を厳密に画面中央へ
+  置き、画面下部がファイル末尾を超えて空白になることを許容する（本エディタには `~` 相当の
+  空行表示はないため、単に描画対象の行が尽きて背景色のまま何も描かれない領域になる）。
+  この「末尾でクランプしない」挙動を実現するため `maxScrollRow`（`totalLines - visibleRows`
+  による上限クランプ）を撤廃し、下限0のクランプのみ `canvas.setScrollRow()` に委譲する形にした。
 - **テスト**: `test/dev/javatexteditor/editor/ZzCenterScrollTest.java`（新設）。`ScrollTest.java` とは
   異なり、`getVisibleRows()`（≒`scrollRow`反映）を検証するには実際の `EditorCanvas`（`setSize()`で
   固定）が必要なため、canvas なしの `ModalEditor` ではなく `new ModalEditor(text, canvas)` を使う。
