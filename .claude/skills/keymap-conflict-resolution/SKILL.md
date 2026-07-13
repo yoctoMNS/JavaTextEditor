@@ -218,3 +218,4 @@ INSERT / VISUAL / VISUAL_LINE モードも移行する。
 | Visual の `>`/`<`（インデント）を VISUAL/VISUAL_LINE/VISUAL_BLOCK に追加 | `indent.right`/`indent.left`。count前置き（`3>` 等）は `KeymapRegistry` を経由しない専用の数字バッファ（`visualCountBuffer`）で実装し、`>`/`<` 以外のキーが来たら破棄する軽量方式にとどめた（②スキル参照）。 |
 | `q`/`@`（マクロ記録/再生）を NORMAL に追加 | `macro.record.pending`/`macro.play.pending`。どちらも本プロジェクトで未使用だったキーで衝突なし。実際のレジスタ選択（2打鍵目の`a`-`z`/`A`-`Z`）は`gg`等と同じ`pendingSequence`の`prev`分岐で処理し、`KeymapRegistry`側は「マクロ記録/再生待ちへ入る」ところまでしか受け持たない（㉗ `vim-macro-recording` 参照）。 |
 | `;`（`:`のエイリアス）を VISUAL/VISUAL_LINE/VISUAL_BLOCK にも追加 | NORMAL では既に `KeyBinding.ofChar(';', ...)` を `enter.command` に束縛済みだったが、VISUAL系3モードには `:`（`enter.command.visual`）のみが束縛されており `;` が未対応だった。同じ `enter.command.visual` アクションに `;` を追加束縛するだけで対応（3モードとも既存の `:` 束縛の直後に1行追加）。衝突なし（`;` はVISUAL系モードで未使用だった）。 |
+| `z`（NORMALのみ）を `zz` のプレフィックスとして追加 | `screen.center.pending`。カーソル行を viewport 中央にスクロールする。衝突なし（`z` は本プロジェクトで未使用だったキー）。`zt`/`zb` は今回スコープ外（詳細は modal-editing-engine スキル参照）。 |

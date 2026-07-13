@@ -136,6 +136,8 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('H', "screen.top"),    "screen.top");
         bind(Mode.NORMAL, KeyBinding.ofChar('M', "screen.middle"), "screen.middle");
         bind(Mode.NORMAL, KeyBinding.ofChar('L', "screen.bottom"), "screen.bottom");
+        // z をプレフィックスとして使用（zz=カーソル行をviewport中央にスクロール）
+        bind(Mode.NORMAL, KeyBinding.ofChar('z', "screen.center.pending"), "screen.center.pending");
         // [ をプレフィックスとして使用（[g=次の診断, [d=前の診断）
         bind(Mode.NORMAL, KeyBinding.ofChar('[', "diag.pending"), "diag.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_OPEN_BRACKET, 0, "diag.pending"), "diag.pending");
