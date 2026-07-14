@@ -412,7 +412,81 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        int total = 30;
+        // =====================================================================
+        // IME変換中文字列のオーバーレイ表示テスト
+        // =====================================================================
+
+        // Test 31: IME変換中の未確定文字列がカーソル位置にオーバーレイ表示される
+        // （下線がアクセント色で描画される。cellH=20のため下線のy座標は19）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setCursor(0, 0);
+
+            java.text.AttributedString as = new java.text.AttributedString("あ");
+            java.awt.event.InputMethodEvent evt = new java.awt.event.InputMethodEvent(
+                canvas, java.awt.event.InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                as.getIterator(), 0, null, null); // committedCharacterCount==0 => 全て変換中
+            canvas.inputMethodTextChanged(evt);
+
+            BufferedImage img = render(canvas, 400, 300);
+            int pixel = img.getRGB(5, 19);
+            pass += checkColor("IME変換中オーバーレイの下線色", 0x99, 0x99, 0x99, pixel);
+        }
+
+        // Test 32: IMEが確定した文字列は setImeCommitHandler のコールバックに渡され、
+        // 確定後はオーバーレイ（下線）が消える
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setCursor(0, 0);
+
+            StringBuilder committedCaptured = new StringBuilder();
+            canvas.setImeCommitHandler(committedCaptured::append);
+
+            java.text.AttributedString as = new java.text.AttributedString("日本語");
+            java.awt.event.InputMethodEvent evt = new java.awt.event.InputMethodEvent(
+                canvas, java.awt.event.InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                as.getIterator(), 3, null, null); // 全文字数を確定済みとして渡す
+            canvas.inputMethodTextChanged(evt);
+
+            boolean commitOk = committedCaptured.toString().equals("日本語");
+            BufferedImage img = render(canvas, 400, 300);
+            boolean overlayCleared = !colorMatch(img.getRGB(5, 19), 0x99, 0x99, 0x99);
+
+            boolean ok = commitOk && overlayCleared;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "IME確定文字列のコールバック通知とオーバーレイ解除: committed=" + committedCaptured);
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 33: clearImeComposition() で変換中オーバーレイが強制的に消える
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setCursor(0, 0);
+
+            java.text.AttributedString as = new java.text.AttributedString("あ");
+            java.awt.event.InputMethodEvent evt = new java.awt.event.InputMethodEvent(
+                canvas, java.awt.event.InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                as.getIterator(), 0, null, null);
+            canvas.inputMethodTextChanged(evt);
+            canvas.clearImeComposition();
+
+            BufferedImage img = render(canvas, 400, 300);
+            boolean overlayCleared = !colorMatch(img.getRGB(5, 19), 0x99, 0x99, 0x99);
+            System.out.println((overlayCleared ? "[OK] " : "[FAIL] ")
+                + "clearImeComposition でオーバーレイが消える");
+            pass += overlayCleared ? 1 : 0;
+        }
+
+        int total = 33;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

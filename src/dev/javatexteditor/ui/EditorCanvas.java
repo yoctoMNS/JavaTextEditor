@@ -7,8 +7,15 @@ import dev.javatexteditor.telescope.TelescopeItem;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 import java.awt.*;
+import java.awt.event.InputMethodEvent;
+import java.awt.event.InputMethodListener;
+import java.awt.font.TextHitInfo;
 import java.awt.im.InputContext;
+import java.awt.im.InputMethodRequests;
 import java.awt.image.BufferedImage;
+import java.text.AttributedCharacterIterator;
+import java.text.AttributedString;
+import java.text.CharacterIterator;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -16,8 +23,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
+import java.util.function.Consumer;
 
-public class EditorCanvas extends JPanel {
+public class EditorCanvas extends JPanel implements InputMethodListener {
 
     private String text = "";
     // text の行分割結果のキャッシュ。setText() でのみ再計算し、
@@ -42,6 +50,13 @@ public class EditorCanvas extends JPanel {
 
     // スプラッシュ画面フラグ（true のとき通常テキストの代わりにスプラッシュを描画）
     private boolean showSplash = false;
+
+    // IME変換中の未確定文字列（preedit）。確定前のためバッファには含まれないが、
+    // カーソル位置にオーバーレイ表示することで「変換中の文字がIMEの候補ウィンドウにしか
+    // 出ず、画面上で何を入力しているか分からない」問題を解消する。
+    private String composedText = "";
+    // IMEが確定した文字列を呼び出し側（Main.java）へ通知するコールバック
+    private Consumer<String> imeCommitHandler;
 
     // 検索ハイライト: 各要素 {row, startCol, endCol}（endCol は exclusive）
     private List<int[]> searchHighlights = List.of();
@@ -169,6 +184,8 @@ public class EditorCanvas extends JPanel {
         animTimer.start();
         acquireTimerResolutionPin();
         timerResolutionPinHeld = true;
+        enableInputMethods(true);
+        addInputMethodListener(this);
     }
 
     @Override
@@ -208,6 +225,109 @@ public class EditorCanvas extends JPanel {
             } catch (Exception ignored) {}
         }
     }
+
+    /** IMEが確定した文字列を受け取るコールバックを設定する（Main.javaから配線）。 */
+    public void setImeCommitHandler(Consumer<String> handler) {
+        this.imeCommitHandler = handler;
+    }
+
+    /** INSERT→NORMAL遷移時など、変換中の未確定文字列の表示を消す。 */
+    public void clearImeComposition() {
+        this.composedText = "";
+        repaint();
+    }
+
+    @Override
+    public InputMethodRequests getInputMethodRequests() {
+        return imeRequests;
+    }
+
+    /**
+     * IMEの変換状態が変わるたびに呼ばれる。確定済み部分（getCommittedCharacterCount()より前）は
+     * imeCommitHandler へ通知し、未確定部分（変換中の文字列）は composedText に保持してカーソル
+     * 位置へオーバーレイ表示する（drawImeComposition参照）。
+     */
+    @Override
+    public void inputMethodTextChanged(InputMethodEvent event) {
+        AttributedCharacterIterator iter = event.getText();
+        int committedCount = event.getCommittedCharacterCount();
+        StringBuilder committed = new StringBuilder();
+        StringBuilder composing = new StringBuilder();
+        if (iter != null) {
+            int idx = 0;
+            for (char c = iter.first(); c != CharacterIterator.DONE; c = iter.next(), idx++) {
+                if (idx < committedCount) {
+                    committed.append(c);
+                } else {
+                    composing.append(c);
+                }
+            }
+        }
+        composedText = composing.toString();
+        event.consume();
+        if (committed.length() > 0 && imeCommitHandler != null) {
+            imeCommitHandler.accept(committed.toString());
+        }
+        repaint();
+    }
+
+    @Override
+    public void caretPositionChanged(InputMethodEvent event) {
+        event.consume();
+    }
+
+    /**
+     * IMEに対し、変換候補ウィンドウの表示位置・コミット済みテキストの問い合わせに応答する。
+     * このプロジェクトはJTextComponentを使わず自前描画のため、これを実装しないと
+     * AWTが「on-the-spot（自前描画コンポーネント内に変換中テキストを表示する）」方式を
+     * 選択できず、変換中の文字列がIMEの浮動ウィンドウにしか表示されない（今回の不具合の原因）。
+     */
+    private final InputMethodRequests imeRequests = new InputMethodRequests() {
+        @Override
+        public Rectangle getTextLocation(TextHitInfo offset) {
+            Point base;
+            try {
+                base = getLocationOnScreen();
+            } catch (IllegalComponentStateException e) {
+                base = new Point(0, 0);
+            }
+            int lineHeight = cachedLineHeight > 0 ? cachedLineHeight : 16;
+            int charWidth  = cachedCharWidth  > 0 ? cachedCharWidth  : 8;
+            int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+            int screenRow = cursorRow - scrollRow;
+            String line = (cursorRow < cachedLines.length) ? cachedLines[cursorRow] : "";
+            int x = xForCol(line, cursorCol, charWidth) - scrollCol * charWidth + gutterWidth;
+            int y = screenRow * lineHeight;
+            return new Rectangle(base.x + x, base.y + y + lineHeight, 1, lineHeight);
+        }
+
+        @Override
+        public TextHitInfo getLocationOffset(int x, int y) { return null; }
+
+        @Override
+        public int getInsertPositionOffset() { return 0; }
+
+        @Override
+        public AttributedCharacterIterator getCommittedText(
+                int beginIndex, int endIndex, AttributedCharacterIterator.Attribute[] attributes) {
+            return new AttributedString("").getIterator();
+        }
+
+        @Override
+        public int getCommittedTextLength() { return 0; }
+
+        @Override
+        public AttributedCharacterIterator cancelLatestCommittedText(
+                AttributedCharacterIterator.Attribute[] attributes) {
+            return null;
+        }
+
+        @Override
+        public AttributedCharacterIterator getSelectedText(
+                AttributedCharacterIterator.Attribute[] attributes) {
+            return null;
+        }
+    };
 
     public void setText(String text) {
         this.text = text;
@@ -771,6 +891,11 @@ public class EditorCanvas extends JPanel {
 
         if (x + charWidth < 0 || x >= getWidth()) return;
 
+        if (!composedText.isEmpty()) {
+            drawImeComposition(g2, x, yTop, lineHeight);
+            return;
+        }
+
         int codePoint = (cursorCol < line.length()) ? line.codePointAt(cursorCol) : -1;
         int blockWidth = charWidth * (codePoint != -1 ? charCellWidth(codePoint) : 1);
         g2.setColor(theme.foreground);
@@ -784,6 +909,21 @@ public class EditorCanvas extends JPanel {
                 g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
             }
         }
+    }
+
+    /**
+     * IME変換中の未確定文字列（composedText）をカーソル位置にオーバーレイ表示する。
+     * 変換中であることが分かるよう下線（テーマのaccent色）を引く。
+     */
+    private void drawImeComposition(Graphics2D g2, int x, int yTop, int lineHeight) {
+        int w = uiTextWidth(composedText, cellW);
+        g2.setColor(theme.background);
+        g2.fillRect(x, yTop, w, lineHeight);
+        drawUiText(g2, composedText, x, yTop + lineHeight, cellW, lineHeight, theme.foreground);
+        // drawLineだとAA(アンチエイリアス)により1pxのストロークが上下2行に分かれてぼやけるため、
+        // fillRectで1行分を確実に塗りつぶす。
+        g2.setColor(theme.accent);
+        g2.fillRect(x, yTop + lineHeight - 1, w, 1);
     }
 
     /** ガター列に診断マーカー（E / W）を描画する */
