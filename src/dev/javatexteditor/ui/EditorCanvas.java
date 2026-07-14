@@ -230,14 +230,25 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * IMEを半角英数字入力モードに切り替える。
      * INSERTモードからNORMALモードに遷移する際に呼ぶことで、
      * 日本語IMEが有効なままNORMALモードのキーバインドを誤入力するのを防ぐ。
+     *
+     * Windows(Microsoft IME)は英語キーボードレイアウトを別途追加していない限り
+     * Locale.ENGLISHに対応するInputMethodが登録されておらず、selectInputMethod()
+     * だけではUnsupportedOperationExceptionになり何も起こらない（Windows実機で確認）。
+     * setCompositionEnabled(false)はIMM32のImmSetOpenStatus(FALSE)相当を呼び、
+     * 単一のIME（追加のレイアウト無し）でも直接入力(半角英数字)へ切り替えられるため、
+     * こちらを主手段としつつ、Linux(fcitx/ibus等)向けにselectInputMethod()も
+     * 併用する（どちらか一方しか対応していないプラットフォームでも他方の例外を
+     * 握りつぶすだけで済むようにする）。
      */
     public void switchToHalfWidth() {
         InputContext ic = getInputContext();
-        if (ic != null) {
-            try {
-                ic.selectInputMethod(Locale.ENGLISH);
-            } catch (Exception ignored) {}
-        }
+        if (ic == null) return;
+        try {
+            ic.setCompositionEnabled(false);
+        } catch (Exception ignored) {}
+        try {
+            ic.selectInputMethod(Locale.ENGLISH);
+        } catch (Exception ignored) {}
     }
 
     /** IMEが確定した文字列を受け取るコールバックを設定する（Main.javaから配線）。 */
