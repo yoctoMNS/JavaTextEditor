@@ -23,6 +23,8 @@ public class JumpBackTest {
         testJumpBackKeyBinding();
         testShiftKIntoJdkSourceClearsSearchHighlight();
         testCloseJdkSourceBufferClearsSearchHighlight();
+        testShiftKOnLocalVariableReceiverJumpsToDeclaration();
+        testShiftKOnLocalVariableReceiverThenJumpBack();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -206,5 +208,65 @@ public class JumpBackTest {
         ed.processKey(KeyEvent.VK_UNDEFINED, 'q', 0);
         assertTrue("q復帰後: searchMatchesが空", ed.getSearchMatches().isEmpty());
         assertTrue("q復帰後: キャンバスのハイライトが空", canvas.getSearchHighlights().isEmpty());
+    }
+
+    /**
+     * "変数名.メソッド名(...)" の変数名側（レシーバ）にカーソルがある状態で Shift+K を押すと、
+     * 従来は何もヒットせず "Not found in JDK: ..." になっていた（ローカル変数は
+     * SourceAnalyzer のシンボル索引に存在しないため）。ローカル変数自身の宣言行へ
+     * ジャンプできるようになったことの回帰テスト。
+     */
+    static void testShiftKOnLocalVariableReceiverJumpsToDeclaration() throws Exception {
+        Path dir = Files.createTempDirectory("localvar-receiver-test");
+        Path callerFile = dir.resolve("Caller.java");
+        String content = """
+            public class Caller {
+                void run() {
+                    Helper h = new Helper();
+                    h.doWork();
+                }
+            }
+            """;
+        Files.writeString(callerFile, content);
+
+        ModalEditor ed = new ModalEditor(content, callerFile.toString(), null);
+        ed.setProjectRoot(dir);
+
+        int useLine = 3; // "        h.doWork();"
+        int col = content.split("\n", -1)[useLine].indexOf("h."); // カーソルは "h"(レシーバ)上
+        ed.setCursor(useLine, col);
+
+        pressShiftK(ed);
+
+        assertTrue("Shift+K: ファイルは変わらない", ed.getCurrentFilePath().endsWith("Caller.java"));
+        assertEquals("Shift+K: h の宣言行(2行目, 0-indexed)へジャンプ", 2, ed.getCursorRow());
+    }
+
+    /** 上記のローカル変数レシーバへのジャンプも Shift+J で呼び出し元へ戻れることを確認する。 */
+    static void testShiftKOnLocalVariableReceiverThenJumpBack() throws Exception {
+        Path dir = Files.createTempDirectory("localvar-receiver-jumpback-test");
+        Path callerFile = dir.resolve("Caller.java");
+        String content = """
+            public class Caller {
+                void run() {
+                    Helper h = new Helper();
+                    h.doWork();
+                }
+            }
+            """;
+        Files.writeString(callerFile, content);
+
+        ModalEditor ed = new ModalEditor(content, callerFile.toString(), null);
+        ed.setProjectRoot(dir);
+
+        int useLine = 3;
+        int col = content.split("\n", -1)[useLine].indexOf("h.");
+        ed.setCursor(useLine, col);
+
+        pressShiftK(ed);
+        pressShiftJ(ed);
+
+        assertEquals("Shift+J: 呼び出し元の行へ戻る", useLine, ed.getCursorRow());
+        assertEquals("Shift+J: 呼び出し元の列へ戻る", col, ed.getCursorCol());
     }
 }

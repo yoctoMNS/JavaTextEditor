@@ -26,12 +26,29 @@ public class ReceiverTypeResolver {
         "synchronized", "import", "package"
     );
 
+    /** 宣言の発見箇所。row は宣言が見つかった行番号、type は基底の型名（ジェネリクス・配列を除去済み）。 */
+    private record Declaration(int row, String type) {}
+
     /**
      * lines[0..cursorRow] を近い順（cursorRow から 0 へ）に走査し、varName の宣言型を推定する。
      * ジェネリクス（{@code List<String>}）・配列（{@code MyClass[]}）は基底の型名に正規化する。
      * 見つからなければ Optional.empty()。
      */
     public Optional<String> resolveType(String[] lines, int cursorRow, String varName) {
+        return findNearestDeclaration(lines, cursorRow, varName).map(Declaration::type);
+    }
+
+    /**
+     * lines[0..cursorRow] を近い順に走査し、varName の宣言が現れる行番号を返す。
+     * ローカル変数・引数自身への K ジャンプ（宣言箇所自体は SourceAnalyzer のシンボル索引に
+     * 含まれないため、この正規表現ヒューリスティックのみが唯一の手掛かりになる）に使う。
+     * 見つからなければ Optional.empty()。
+     */
+    public Optional<Integer> resolveDeclarationLine(String[] lines, int cursorRow, String varName) {
+        return findNearestDeclaration(lines, cursorRow, varName).map(Declaration::row);
+    }
+
+    private Optional<Declaration> findNearestDeclaration(String[] lines, int cursorRow, String varName) {
         if (varName == null || varName.isEmpty() || lines == null) {
             return Optional.empty();
         }
@@ -52,7 +69,7 @@ public class ReceiverTypeResolver {
                 }
             }
             if (lastOnLine != null) {
-                return Optional.of(stripGenericsAndArray(lastOnLine));
+                return Optional.of(new Declaration(row, stripGenericsAndArray(lastOnLine)));
             }
         }
         return Optional.empty();

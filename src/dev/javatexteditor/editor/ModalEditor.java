@@ -4950,6 +4950,17 @@ public class ModalEditor {
                 jumpToSymbolLocation(loc.get(), word);
                 return;
             }
+
+            // プロジェクト内シンボル（フィールド/メソッド/クラス）としても見つからない場合、
+            // word 自身がローカル変数・引数の名前である可能性を試す。ローカル変数は
+            // SourceAnalyzer のシンボル索引に含まれないため、上の resolve() では原理的に
+            // 見つからない。"変数名.メソッド名" の変数名側（レシーバ）にカーソルがある
+            // ケースはこれに該当し、従来は classAndMethodAtCursor() が member 側にしか
+            // 反応しないため、レシーバへの K が何もヒットせず JDK 検索まで落ちて
+            // "Not found" になっていた。
+            if (jumpToLocalDeclaration(word)) {
+                return;
+            }
         }
 
         if (jdkIndex == null || !jdkIndex.isReady()) {
@@ -5069,6 +5080,26 @@ public class ModalEditor {
             return true;
         }
         return false;
+    }
+
+    /**
+     * word がローカル変数・メソッド引数の名前だった場合、その宣言行へジャンプする。
+     * ローカル変数はプロジェクト内シンボル索引（フィールド/メソッド/クラスのみ対象）にも
+     * JDK索引にも存在しないため、"変数名.メソッド名" の変数名側にカーソルを置いて K を
+     * 押した場合や、単に変数の使用箇所で K を押した場合に何もヒットせず失敗していた。
+     * {@link ReceiverTypeResolver} と同じ「直近の宣言が最有力」という正規表現ヒューリスティックで
+     * カーソル行から上方向に探し、見つかった行（同一ファイル内、ローカル変数はファイルを
+     * 跨がないため）へジャンプする。見つかった場合 true、見つからなければ false。
+     */
+    private boolean jumpToLocalDeclaration(String word) {
+        Optional<Integer> declRow = receiverTypeResolver.resolveDeclarationLine(getLines(), cursorRow, word);
+        if (declRow.isEmpty()) {
+            return false;
+        }
+        cursorRow = declRow.get();
+        cursorCol = 0;
+        setStatusMessage("→ " + word + " (local variable)  line " + (cursorRow + 1));
+        return true;
     }
 
     /** ProjectSymbolResolver.SymbolLocation へジャンプし、ステータスバーに結果を表示する。 */
