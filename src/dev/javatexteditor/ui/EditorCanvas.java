@@ -56,6 +56,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     // スプラッシュ画面フラグ（true のとき通常テキストの代わりにスプラッシュを描画）
     private boolean showSplash = false;
 
+    // IME変換中の未確定文字列（preedit）。確定前のためバッファには含まれないが、
+    // カーソル位置にオーバーレイ表示することでリアルタイムに何を入力中か分かるようにする。
+    // ネイティブIME側の候補ウィンドウ（getTextLocation参照）とは表示位置を意図的にずらし、
+    // 重ならないようにしている。
+    private String composedText = "";
     // IMEが確定した文字列を呼び出し側（Main.java）へ通知するコールバック
     private Consumer<String> imeCommitHandler;
 
@@ -240,27 +245,44 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         this.imeCommitHandler = handler;
     }
 
+    /** INSERT→NORMAL遷移時など、変換中の未確定文字列の表示を消す。 */
+    public void clearImeComposition() {
+        this.composedText = "";
+        repaint();
+    }
+
     @Override
     public InputMethodRequests getInputMethodRequests() {
         return imeRequests;
     }
 
     /**
-     * IMEの変換状態が変わるたびに呼ばれる。確定済み部分（getCommittedCharacterCount()より前）だけを
-     * imeCommitHandler へ通知する。変換中の未確定部分は自前描画しない（下記「意図的に描画しない」参照）。
+     * IMEの変換状態が変わるたびに呼ばれる。確定済み部分（getCommittedCharacterCount()より前）は
+     * imeCommitHandler へ通知し、未確定部分（変換中の文字列）は composedText に保持して
+     * カーソル位置へリアルタイムにオーバーレイ表示する（drawImeComposition参照）。
      */
     @Override
     public void inputMethodTextChanged(InputMethodEvent event) {
         AttributedCharacterIterator iter = event.getText();
         int committedCount = event.getCommittedCharacterCount();
-        event.consume();
-        if (committedCount <= 0 || iter == null || imeCommitHandler == null) return;
         StringBuilder committed = new StringBuilder();
-        int idx = 0;
-        for (char c = iter.first(); c != CharacterIterator.DONE && idx < committedCount; c = iter.next(), idx++) {
-            committed.append(c);
+        StringBuilder composing = new StringBuilder();
+        if (iter != null) {
+            int idx = 0;
+            for (char c = iter.first(); c != CharacterIterator.DONE; c = iter.next(), idx++) {
+                if (idx < committedCount) {
+                    committed.append(c);
+                } else {
+                    composing.append(c);
+                }
+            }
         }
-        imeCommitHandler.accept(committed.toString());
+        composedText = composing.toString();
+        event.consume();
+        if (committed.length() > 0 && imeCommitHandler != null) {
+            imeCommitHandler.accept(committed.toString());
+        }
+        repaint();
     }
 
     @Override
@@ -272,9 +294,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * IMEに対し、変換候補ウィンドウの表示位置・コミット済みテキストの問い合わせに応答する。
      * これを実装しない（＝getInputMethodRequests()がnullを返す）と、IMEはカーソル位置を
      * 一切知る術がなく、変換中の文字列を表示する浮動ウィンドウがカーソルと無関係な位置
-     * （画面端等）に表示されてしまう。getTextLocation()でカーソルの画面座標を返すことで、
-     * IME自身の浮動ウィンドウをカーソルのすぐ下に追従させる（意図的に自前描画はしない。
-     * 下記「変換中の文字列を自前描画しない」参照）。
+     * （画面端等）に表示されてしまう。
+     *
+     * 一方で、この浮動ウィンドウ（ネイティブ側）自体にも変換中の文字列が表示されるため、
+     * カーソルのすぐ下（1行分だけ下）を返すと、EditorCanvas自前の drawImeComposition() の
+     * 表示（カーソル位置そのもの＝現在行）と重なって見えることが実機検証で判明した。
+     * そのため、意図的にさらに1行分（計2行分）下にずらした位置を返し、自前のリアルタイム
+     * 入力表示（現在行）とネイティブ側の変換候補ウィンドウ（2行下）が重ならないようにしている。
      */
     private final InputMethodRequests imeRequests = new InputMethodRequests() {
         @Override
@@ -292,7 +318,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             String line = (cursorRow < cachedLines.length) ? cachedLines[cursorRow] : "";
             int x = xForCol(line, cursorCol, charWidth) - scrollCol * charWidth + gutterWidth;
             int y = screenRow * lineHeight;
-            return new Rectangle(base.x + x, base.y + y + lineHeight, 1, lineHeight);
+            return new Rectangle(base.x + x, base.y + y + 2 * lineHeight, 1, lineHeight);
         }
 
         @Override
@@ -897,6 +923,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         if (x + charWidth < 0 || x >= getWidth()) return;
 
+        if (!composedText.isEmpty()) {
+            drawImeComposition(g2, x, yTop, lineHeight);
+            return;
+        }
+
         int codePoint = (cursorCol < line.length()) ? line.codePointAt(cursorCol) : -1;
         int blockWidth = charWidth * (codePoint != -1 ? charCellWidth(codePoint) : 1);
         g2.setColor(theme.foreground);
@@ -910,6 +941,23 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                 g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
             }
         }
+    }
+
+    /**
+     * IME変換中の未確定文字列（composedText）をカーソル位置にリアルタイムでオーバーレイ表示する。
+     * 変換中であることが分かるよう下線（テーマのaccent色）を引く。ネイティブIME側の候補
+     * ウィンドウ（getInputMethodRequests().getTextLocation()参照）とは表示位置を意図的に
+     * ずらしており、重ならない。
+     */
+    private void drawImeComposition(Graphics2D g2, int x, int yTop, int lineHeight) {
+        int w = uiTextWidth(composedText, cellW);
+        g2.setColor(theme.background);
+        g2.fillRect(x, yTop, w, lineHeight);
+        drawUiText(g2, composedText, x, yTop + lineHeight, cellW, lineHeight, theme.foreground);
+        // drawLineだとAA(アンチエイリアス)により1pxのストロークが上下2行に分かれてぼやけるため、
+        // fillRectで1行分を確実に塗りつぶす。
+        g2.setColor(theme.accent);
+        g2.fillRect(x, yTop + lineHeight - 1, w, 1);
     }
 
     /** ガター列に診断マーカー（E / W）を描画する */
