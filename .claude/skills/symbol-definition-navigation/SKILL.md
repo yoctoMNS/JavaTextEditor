@@ -126,6 +126,48 @@ private boolean tryResolveQualifiedMember(String receiver, String member, String
 書かれている」ケースの両方で同じJDK解決ロジックを再利用できる。
 
 
+## バグ修正: 「変数名.メソッド名」の変数名側（レシーバ）にカーソルがあると K が何もヒットしない
+
+**症状**: `h.doWork()` のような呼び出しで、カーソルが `doWork`（member側）ではなく `h`（レシーバ側）に
+あるまま Shift+K を押すと "Not found in JDK: h" になり、ジャンプできなかった。
+
+**原因**: `classAndMethodAtCursor()` はカーソルが `.` の**直後**の識別子（member側）にある場合しか
+`[receiver, member]` を検出できない設計になっていた。レシーバ側にカーソルがある場合、
+`wordAtCursor()` は単に `"h"` という単一の識別子を返すだけになり、その後の
+`projectSymbolResolver.resolve(..., "h")` はプロジェクト内のフィールド・メソッド・クラス宣言しか
+対象にしていない（`SourceAnalyzer` はローカル変数・引数を一切シンボルとして収集しない設計のため）。
+結果、ローカル変数・引数の名前は原理的にこの検索へ絶対にヒットせず、JDK側の検索（`jdkIndex.lookup("h")`）
+にも当然ヒットしないため、"Not found" になっていた。
+
+**修正**: `ReceiverTypeResolver` に `resolveDeclarationLine(lines, cursorRow, varName)` を追加した。
+既存の `resolveType()`（型名を返す）と同じ「直近の宣言が最有力」という正規表現ヒューリスティック
+（`(?:^|[^.\w])(Type)\s+varName\b\s*(?:=|;|,|\)|:)`）を共有しつつ、型名ではなく**その宣言が
+見つかった行番号**を返す。内部的には `resolveType`/`resolveDeclarationLine` 共通のプライベート
+`record Declaration(int row, String type)` を返す `findNearestDeclaration()` に一本化した。
+
+`ModalEditor.lookupJdkDocAndJump()` に、プロジェクト内シンボル検索（`projectSymbolResolver.resolve()`）
+が失敗した直後の位置に `jumpToLocalDeclaration(word)` を追加した。`word` 自身がローカル変数・引数の
+名前であれば `receiverTypeResolver.resolveDeclarationLine()` で宣言行を探し、見つかれば同一ファイル内
+（ローカル変数はファイルを跨がないため）でその行へジャンプする。`jdkIndex` の準備状態を問わず
+（`!inJdkSourceBuffer` ブロック内、JDK索引チェックより前）動作するため、JDK索引が未構築でも
+プロジェクト内のローカル変数ジャンプは即座に機能する。
+
+**意図的な設計判断**:
+- この検索は `word` が既存の経路（qualified member 解決・プロジェクトシンボル検索）で
+  1件もヒットしなかった場合の**最後のフォールバック**として追加した。フィールド/メソッド/クラス名の
+  解決を優先させるため、既存のヒットを奪わない。
+- カーソルが member 側（`doWork`）にある場合は従来通り `classAndMethodAtCursor()` +
+  `tryResolveQualifiedMember()` が処理する。今回追加したフォールバックは、そちらが不発だった
+  場合（＝レシーバ側にカーソルがある、または修飾されていない単なる変数参照）にのみ効く。
+- ジャンプ先の列は常に `0`（行頭）にした。既存の `jumpToSymbolLocation()` と同じ精度（行単位）に
+  揃えるためで、変数名の正確な列位置を計算する追加ロジックは導入していない。
+
+**テスト**: `ReceiverTypeResolverTest` に `resolveDeclarationLine()` 用の3テストを追加（ローカル変数・
+メソッド引数の宣言行を発見できること、未宣言の変数は空を返すこと）。`JumpBackTest` に
+`testShiftKOnLocalVariableReceiverJumpsToDeclaration`/`testShiftKOnLocalVariableReceiverThenJumpBack`
+を追加し、`h.doWork()` の `h` 側にカーソルを置いた状態での Shift+K → 宣言行ジャンプ → Shift+J
+での復帰までを ModalEditor 経由で検証した。
+
 ## インスタンスメソッド呼び出し（継承されたメソッド）への対応
 
 上記の「レシーバ型解決」だけでは、レシーバの宣言型**自身**が持たないメンバー

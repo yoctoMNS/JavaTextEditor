@@ -17,6 +17,9 @@ public class ReceiverTypeResolverTest {
         test_nearestDeclarationWins();
         test_keywordIsNotMistakenForType();
         test_unknownVariableReturnsEmpty();
+        test_resolveDeclarationLineFindsLocalVariable();
+        test_resolveDeclarationLineFindsMethodParameter();
+        test_resolveDeclarationLineReturnsEmptyForUnknownVariable();
 
         System.out.println();
         System.out.println("Results: " + passed + " passed, " + failed + " failed");
@@ -146,5 +149,37 @@ public class ReceiverTypeResolverTest {
         };
         Optional<String> type = new ReceiverTypeResolver().resolveType(lines, 1, "obj");
         assertTrue("undeclared variable returns empty", type.isEmpty());
+    }
+
+    static void test_resolveDeclarationLineFindsLocalVariable() {
+        String[] lines = {
+            "void use() {",
+            "    Cat obj = new Cat();",
+            "    obj.speak();",
+            "}"
+        };
+        // "obj.speak()" の "obj"（レシーバ）にカーソルがあるケース: 変数自身の宣言行(1)を返す
+        Optional<Integer> row = new ReceiverTypeResolver().resolveDeclarationLine(lines, 2, "obj");
+        assertEquals("declaration line for local variable", 1, row.orElse(-1));
+    }
+
+    static void test_resolveDeclarationLineFindsMethodParameter() {
+        String[] lines = {
+            "void use(Cat obj) {",
+            "    obj.speak();",
+            "}"
+        };
+        Optional<Integer> row = new ReceiverTypeResolver().resolveDeclarationLine(lines, 1, "obj");
+        assertEquals("declaration line for method parameter", 0, row.orElse(-1));
+    }
+
+    static void test_resolveDeclarationLineReturnsEmptyForUnknownVariable() {
+        String[] lines = {
+            "void use() {",
+            "    doSomething();",
+            "}"
+        };
+        Optional<Integer> row = new ReceiverTypeResolver().resolveDeclarationLine(lines, 1, "obj");
+        assertTrue("undeclared variable returns empty declaration line", row.isEmpty());
     }
 }
