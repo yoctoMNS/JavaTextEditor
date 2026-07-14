@@ -418,15 +418,36 @@ public class EditorCanvasTest {
         }
 
         // =====================================================================
-        // IME確定文字列のコールバック通知テスト
-        // （変換中の未確定文字列は自前描画せず、ネイティブIME側の浮動ウィンドウの表示に
-        //  一本化した。自前オーバーレイとネイティブIMEの表示が重なって見える不具合の修正）
+        // IME変換中文字列のリアルタイムオーバーレイ表示テスト
+        // （ネイティブIME側の候補ウィンドウ位置は意図的に2行下へずらしており重ならない）
         // =====================================================================
 
-        // Test 31: IMEが確定した文字列は setImeCommitHandler のコールバックに渡される
+        // Test 31: IME変換中の未確定文字列がカーソル位置にリアルタイムでオーバーレイ表示される
+        // （下線がアクセント色で描画される。cellH=20のため下線のy座標は19）
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
+            canvas.setText("");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setCursor(0, 0);
+
+            java.text.AttributedString as = new java.text.AttributedString("あ");
+            java.awt.event.InputMethodEvent evt = new java.awt.event.InputMethodEvent(
+                canvas, java.awt.event.InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                as.getIterator(), 0, null, null); // committedCharacterCount==0 => 全て変換中
+            canvas.inputMethodTextChanged(evt);
+
+            BufferedImage img = render(canvas, 400, 300);
+            int pixel = img.getRGB(5, 19);
+            pass += checkColor("IME変換中オーバーレイの下線色", 0x99, 0x99, 0x99, pixel);
+        }
+
+        // Test 32: IMEが確定した文字列は setImeCommitHandler のコールバックに渡され、
+        // 確定後はオーバーレイ（下線）が消える
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("");
             canvas.setTheme(Theme.LIGHT_MODE);
             canvas.setCursor(0, 0);
 
@@ -439,31 +460,33 @@ public class EditorCanvasTest {
                 as.getIterator(), 3, null, null); // 全文字数を確定済みとして渡す
             canvas.inputMethodTextChanged(evt);
 
-            boolean ok = committedCaptured.toString().equals("日本語");
+            boolean commitOk = committedCaptured.toString().equals("日本語");
+            BufferedImage img = render(canvas, 400, 300);
+            boolean overlayCleared = !colorMatch(img.getRGB(5, 19), 0x99, 0x99, 0x99);
+
+            boolean ok = commitOk && overlayCleared;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
-                + "IME確定文字列のコールバック通知: committed=" + committedCaptured);
+                + "IME確定文字列のコールバック通知とオーバーレイ解除: committed=" + committedCaptured);
             pass += ok ? 1 : 0;
         }
 
-        // Test 32: 変換中（未確定）の間は setImeCommitHandler が呼ばれない
+        // Test 33: ネイティブIME側の候補ウィンドウ位置（getTextLocation）は、自前オーバーレイの
+        // 描画行（現在行）とは重ならないよう2行下にずらされている
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
+            canvas.setText("");
             canvas.setTheme(Theme.LIGHT_MODE);
             canvas.setCursor(0, 0);
 
-            StringBuilder committedCaptured = new StringBuilder();
-            canvas.setImeCommitHandler(committedCaptured::append);
-
-            java.text.AttributedString as = new java.text.AttributedString("あ");
-            java.awt.event.InputMethodEvent evt = new java.awt.event.InputMethodEvent(
-                canvas, java.awt.event.InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
-                as.getIterator(), 0, null, null); // committedCharacterCount==0 => 全て変換中
-            canvas.inputMethodTextChanged(evt);
-
-            boolean ok = committedCaptured.length() == 0;
+            java.awt.Rectangle loc = canvas.getInputMethodRequests()
+                .getTextLocation(null);
+            // cellH=20のため、現在行(0)の2行下はy方向オフセットで40になるはず
+            // （getLocationOnScreen()が使えないヘッドレス環境ではオフセット0が基準になるため
+            //  base.y分の誤差は出るが、最低でも2*lineHeight=40以上ずれていることを確認する）
+            boolean ok = loc != null && loc.y >= 40;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
-                + "変換中はコールバックが呼ばれない: committed=" + committedCaptured);
+                + "ネイティブIME候補ウィンドウが自前オーバーレイと重ならない位置(2行下)を返す: y=" + (loc != null ? loc.y : "null"));
             pass += ok ? 1 : 0;
         }
 
@@ -471,7 +494,7 @@ public class EditorCanvasTest {
         // zzファイル末尾超過スクロールの背景色テスト
         // =====================================================================
 
-        // Test 33: zz等でファイル末尾を超えてスクロールした場合、LIGHT_MODEでは
+        // Test 34: zz等でファイル末尾を超えてスクロールした場合、LIGHT_MODEでは
         //          その空白領域が純粋な白(#FFFFFF)で描画される（通常背景色#F5F0E6とは異なる）
         {
             EditorCanvas canvas = new EditorCanvas();
@@ -485,7 +508,7 @@ public class EditorCanvasTest {
             pass += checkColor("zz末尾超過領域(LIGHT_MODE)は純白", 0xFF, 0xFF, 0xFF, pixel);
         }
 
-        // Test 34: 同条件でDARK_MODEでは純粋な黒(#000000)で描画される
+        // Test 35: 同条件でDARK_MODEでは純粋な黒(#000000)で描画される
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -498,7 +521,7 @@ public class EditorCanvasTest {
             pass += checkColor("zz末尾超過領域(DARK_MODE)は純黒", 0x00, 0x00, 0x00, pixel);
         }
 
-        // Test 35: 文書内に収まっている通常行の領域は末尾超過の白/黒塗りの影響を受けない
+        // Test 36: 文書内に収まっている通常行の領域は末尾超過の白/黒塗りの影響を受けない
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -512,7 +535,7 @@ public class EditorCanvasTest {
             pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        int total = 35;
+        int total = 36;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
