@@ -250,6 +250,7 @@ public class Main {
 
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
         Runnable trigger = () -> {
+            if (!isJavaBuffer(editor)) return;
             editor.setStatusMessage("auto-import: 解析中...");
             runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
         };
@@ -262,6 +263,10 @@ public class Main {
         editor.setOnSave(trigger);
         // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
         editor.setOnOrganizeImports(() -> {
+            if (!isJavaBuffer(editor)) {
+                editor.setStatusMessage("E: Javaファイルではありません");
+                return;
+            }
             editor.setStatusMessage("import 整理中...");
             runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗");
         });
@@ -277,6 +282,16 @@ public class Main {
                 debounceTimer.restart();
             }
         });
+    }
+
+    /**
+     * currentFilePath が設定されておりかつ拡張子が ".java" でない場合は
+     * Javaファイルではないと判定する（コンパイル解析が無意味なため）。
+     * ファイルパス未設定（:enew 等の疑似バッファ）は従来どおり解析対象に含める。
+     */
+    private static boolean isJavaBuffer(ModalEditor editor) {
+        String path = editor.getCurrentFilePath();
+        return path == null || path.toLowerCase(java.util.Locale.ROOT).endsWith(".java");
     }
 
     /** バックグラウンド仮想スレッドでコンパイル解析し、EDT で診断反映と auto-import を行う。
