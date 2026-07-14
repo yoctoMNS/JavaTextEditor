@@ -4320,6 +4320,19 @@ public class ModalEditor {
             String[] lines = buffer.getText().split("\n", -1);
             String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
             canvas.ensureCursorColVisible(cursorCol, curLine);
+
+            // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
+            // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、
+            // 画面幅を2倍で扱う uiTextWidth 等の全角対応ロジックとは無関係）。
+            // 上の lines/curLine を再利用し、buffer.getText() の再構築を増やさない。
+            // syncCanvas() はキー入力1回につき1度だけ呼ばれるため、ここで計算しキャッシュしておく。
+            // EditorCanvas側（30fpsのanimTimerでrepaintされるdrawStatusLine）では再計算しない設計。
+            int totalChars = 0;
+            for (int i = 0; i < cursorRow && i < lines.length; i++) {
+                totalChars += lines[i].length() + 1; // +1 は改行文字
+            }
+            totalChars += Math.min(cursorCol, curLine.length()) + 1;
+            canvas.setCursorPositionLabel("(" + (cursorRow + 1) + ":" + totalChars + ")");
             if (mode == Mode.COMMAND) {
                 canvas.setCommandLineText(":" + commandBuffer.toString());
             } else if (mode == Mode.SEARCH) {

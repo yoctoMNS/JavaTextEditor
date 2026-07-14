@@ -25,6 +25,11 @@ public class EditorCanvas extends JPanel {
     private String[] cachedLines = { "" };
     private int cursorRow = 0;
     private int cursorCol = 0;
+    // (行数:トータル文字数) 形式のカーソル位置ラベル。ModalEditor.syncCanvas() が
+    // キー入力1回につき1度だけ計算してキャッシュを差し替える。30fpsのanimTimerによる
+    // repaintのたびにここで再計算すると数十万行規模のファイルで重くなるため、
+    // 描画側（drawStatusLine）は保持済みの文字列をそのまま描くだけにする。
+    private String cursorPositionLabel = "(1:1)";
     private boolean insertMode = false;
     private boolean visualMode = false;
     private boolean visualLineMode = false;
@@ -215,6 +220,7 @@ public class EditorCanvas extends JPanel {
         repaint();
     }
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
+    public void setCursorPositionLabel(String label) { this.cursorPositionLabel = label; repaint(); }
     public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
     public void setTheme(Theme theme) { this.theme = theme; invalidateGlyphCache(); repaint(); }
     public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
@@ -224,6 +230,7 @@ public class EditorCanvas extends JPanel {
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
     public String getCommandLineText() { return commandLineText; }
+    public String getCursorPositionLabel() { return cursorPositionLabel; }
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
     public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
     public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; repaint(); }
@@ -1054,13 +1061,15 @@ public class EditorCanvas extends JPanel {
         int rightX = getWidth() - clockWidth - 4;
         drawUiText(g2, clockLabel, rightX, y, cellW, lineHeight, theme.background);
 
-        // CPU使用率・GPU使用率・メモリ使用率（取得できた項目のみ"|"区切り）は時刻表示の左隣に表示
+        // CPU使用率・GPU使用率・メモリ使用率（取得できた項目のみ"|"区切り）は時刻表示の左隣に表示。
+        // カーソル位置（行数:トータル文字数）はCPU使用率の隣に"|"区切りで表示する。
         String statsLabel = SystemStatsMonitor.INSTANCE.getStatusLabel();
-        if (!statsLabel.isEmpty()) {
-            int statsWidth = uiTextWidth(statsLabel, cellW);
-            rightX -= statsWidth + cellW; // 時刻表示との間に1文字分の余白
-            drawUiText(g2, statsLabel, rightX, y, cellW, lineHeight, theme.background);
-        }
+        String rightStatsLabel = statsLabel.isEmpty()
+            ? cursorPositionLabel
+            : cursorPositionLabel + " | " + statsLabel;
+        int statsWidth = uiTextWidth(rightStatsLabel, cellW);
+        rightX -= statsWidth + cellW; // 時刻表示との間に1文字分の余白
+        drawUiText(g2, rightStatsLabel, rightX, y, cellW, lineHeight, theme.background);
 
         // 診断件数はシステムステータス表示のさらに左隣に表示
         if (!diagnostics.isEmpty()) {
