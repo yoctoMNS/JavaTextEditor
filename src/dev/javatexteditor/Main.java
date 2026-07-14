@@ -253,9 +253,10 @@ public class Main {
             editor.setStatusMessage("auto-import: 解析中...");
             runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
         };
-        // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替えてからコンパイル解析を実行する
+        // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替え、変換中表示を消してからコンパイル解析を実行する
         editor.setOnReturnToNormal(() -> {
             canvas.switchToHalfWidth();
+            canvas.clearImeComposition();
             trigger.run();
         });
         editor.setOnSave(trigger);
@@ -490,6 +491,18 @@ public class Main {
         canvas.setTheme(Theme.LIGHT_MODE);
         ModalEditor editor = new ModalEditor(text, path, canvas);
         setupCompileAnalysis(editor, canvas);
+        // IME（日本語入力等）が確定した文字列を、KEY_TYPEDの1文字コミットと同じ経路で挿入する。
+        // 変換中の未確定文字列自体は EditorCanvas 側でカーソル位置にオーバーレイ表示される。
+        canvas.setImeCommitHandler(committed -> {
+            if (!editor.isInsertMode() && !editor.isCommandMode()) return;
+            for (int i = 0; i < committed.length(); ) {
+                int cp = committed.codePointAt(i);
+                for (char ch : Character.toChars(cp)) {
+                    editor.processKey(0, ch, 0);
+                }
+                i += Character.charCount(cp);
+            }
+        });
         editor.setJdkClassIndex(JDK_INDEX);
         editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
         editor.setBufferListSupplier(Main::getBufferRegistry);
