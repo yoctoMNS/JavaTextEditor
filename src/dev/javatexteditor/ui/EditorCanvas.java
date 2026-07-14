@@ -184,6 +184,14 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         animTimer.start();
         acquireTimerResolutionPin();
         timerResolutionPinHeld = true;
+        // JPanelは既定でisFocusable()==falseのため、setFocusable(true)を呼ばないと
+        // requestFocusInWindow()が常に失敗し、実際のAWTフォーカスオーナーになれない。
+        // InputContext（IME）は「本物のフォーカスオーナー」であるコンポーネントにしか
+        // 関連付けられないため、これが無いとInputMethodListener/InputMethodRequestsを
+        // 実装しても一切呼ばれない（このプロジェクトのキー入力自体はMain.javaのグローバル
+        // KeyEventDispatcherがウィンドウ単位で処理するため、フォーカスが無くても通常入力は
+        // 動いてしまい、この不整合に気づきにくかった）。
+        setFocusable(true);
         enableInputMethods(true);
         addInputMethodListener(this);
     }

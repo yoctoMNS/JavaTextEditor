@@ -472,6 +472,7 @@ public class Main {
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
             refreshCallbacks(frame, root, active);
+            active[0].canvas().requestFocusInWindow();
         });
         leaf.editor().setSplitVerticalCallback(() -> {
             Leaf cur     = active[0];
@@ -481,6 +482,7 @@ public class Main {
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
             refreshCallbacks(frame, root, active);
+            active[0].canvas().requestFocusInWindow();
         });
     }
 
@@ -571,6 +573,7 @@ public class Main {
 
                 rebuildLayout(frame, root[0], active[0]);
                 refreshCallbacks(frame, root, active);
+                active[0].canvas().requestFocusInWindow();
             });
         }
     }
@@ -849,6 +852,7 @@ public class Main {
                         if (l.canvas() == clicked) {
                             active[0] = l;
                             updateBorders(allLeaves(root[0]), active[0]);
+                            active[0].canvas().requestFocusInWindow();
                             break;
                         }
                     }
@@ -856,6 +860,11 @@ public class Main {
             });
 
             frame.setVisible(true);
+            // canvasは既定でフォーカスを持たない(JPanel)ため、表示直後に明示的に
+            // フォーカスを与える。IME(InputContext)は実際のフォーカスオーナーである
+            // コンポーネントにしか関連付けられないため、これが無いと変換中文字列の
+            // オーバーレイ表示（EditorCanvas.inputMethodTextChanged）が呼ばれない。
+            active[0].canvas().requestFocusInWindow();
         });
     }
 

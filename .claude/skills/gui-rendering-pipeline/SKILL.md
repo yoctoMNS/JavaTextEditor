@@ -296,3 +296,13 @@ int b = pixel & 0xFF;
   - カーソルは常に有効な `cursorRow`（実在する行）にしかクランプされないため、この白黒領域にカーソルが描画されることはない（既存のカーソル移動系コマンドの制約をそのまま利用しており、今回新規のクランプ処理は追加していない）。
 - **既存テストへの影響**: `test/dev/javatexteditor/ui/EditorCanvasTest.java` の Test 1/2（LIGHT_MODE/DARK_MODE背景色）・Test 13（clearSelection後の背景色確認）は、いずれも「文書が短い（1〜2行）のに300px高のcanvasでy=100〜150付近のピクセルを検証する」という書き方をしていたため、この変更で白黒塗り領域に入ってしまい失敗するようになった。文書内（実在する行のy範囲）のピクセルに検証対象を変更して修正した（該当行にコメントで理由を記載済み）。
 - **テスト**: `test/dev/javatexteditor/editor/ZzCenterScrollTest.java` の `testZzClampedNearFileEnd` を `testZzCentersEvenPastFileEnd` に改名し、期待値をクランプ後の値からクランプなしの値（101行・visibleRows=14・cursorRow=99 → scrollRow=92）に更新した（計16テスト、他は変更なし）。`test/dev/javatexteditor/ui/EditorCanvasTest.java` に3テスト追加（Test 34〜36）: 文書末尾を大きく超えてスクロールした場合にLIGHT_MODEでは純白・DARK_MODEでは純黒で塗られること、および文書内領域（実在する行）は従来通りの通常背景色のままであることを確認する。IME関連の3テスト（Test 31〜33）と合わせて計36/36 PASS。
+
+## IME実装（InputMethodListener対応）を入れても変換中文字列が表示されなかった追加修正: EditorCanvasがフォーカスを一切持てていなかった問題
+
+- **症状**: 上記「日本語IME変換中の文字列が画面に表示されない不具合の修正」で`EditorCanvas`に`InputMethodListener`/`InputMethodRequests`を実装したにもかかわらず、実機で確認したところ症状が全く変わらず、変換中の文字列は依然としてエディタ画面に描画されなかった。
+- **根本原因**: `JPanel`は既定で`isFocusable() == false`である。本プロジェクトは`Main.java`の`KeyboardFocusManager.addKeyEventDispatcher(...)`（`frame`単位でウィンドウがフォーカスされているかだけを見るグローバルディスパッチャ）でキー入力を処理する設計のため、通常のテキスト編集操作は`EditorCanvas`が実際のAWTフォーカスオーナーになっていなくても問題なく動作していた。そのため、`canvas().requestFocusInWindow()`が呼ばれている箇所（`Ctrl+W`のペイン移動等）はあったものの、それ以外の「アクティブペインが切り替わる」全ての箇所（起動直後・マウスクリックでのペイン切替・`:split`/`:vsplit`直後・ペインを閉じた後）でこの呼び出しが漏れており、`EditorCanvas`が`setFocusable(true)`すら呼んでいなかったため、そもそも`requestFocusInWindow()`を呼んでも常に失敗する状態だった。
+  - AWTのInputContext（IME）は「実際のフォーカスオーナーであるComponent」にのみ関連付けられる。フォーカスオーナーになれないコンポーネントに`enableInputMethods(true)`や`InputMethodListener`をいくら実装しても、AWT側から一切呼び出されない。これが「実装したのに直らない」の直接の原因だった。
+- **修正**:
+  1. `EditorCanvas`のコンストラクタに`setFocusable(true)`を追加した。
+  2. `Main.java`内で`active[0]`（アクティブペイン）が変わる全箇所に`active[0].canvas().requestFocusInWindow()`を追加した: 起動時（`frame.setVisible(true)`直後）・マウスクリックによるペイン切替（`mousePressed`）・`:split`/`:vsplit`直後（`setSplitHorizontalCallback`/`setSplitVerticalCallback`）・ペインを閉じた後（`setExitCallback`）。既存の`Ctrl+W`によるペイン移動（`setMovePanePrevCallback`/`setMovePaneNextCallback`）は元々呼んでいたためそのまま。
+- **教訓**: `KeyboardFocusManager`のグローバルディスパッチャでキー入力を処理する設計は「どのコンポーネントが実際にフォーカスを持っているか」を意識しなくても通常のキー入力自体は動いてしまうため、フォーカス依存の別機能（IME、将来的にコピー&ペーストのシステムクリップボード連携以外でフォーカスに依存する機能等）を追加する際は、必ず「対象コンポーネントが実際にフォーカスオーナーになれているか」を疑って確認すること。今回のように「機能は正しく実装したのに全く効果がない」場合、機能自体のロジックよりも前提条件（フォーカス）を先に疑うべきだった。
