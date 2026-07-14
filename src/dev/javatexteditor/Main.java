@@ -254,10 +254,9 @@ public class Main {
             editor.setStatusMessage("auto-import: 解析中...");
             runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
         };
-        // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替え、変換中表示を消してからコンパイル解析を実行する
+        // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替えてからコンパイル解析を実行する
         editor.setOnReturnToNormal(() -> {
             canvas.switchToHalfWidth();
-            canvas.clearImeComposition();
             trigger.run();
         });
         editor.setOnSave(trigger);
