@@ -328,3 +328,10 @@ int b = pixel & 0xFF;
   - この方式では、ネイティブIME側の浮動ウィンドウが変換中の文字列自体を重複して表示する可能性は残る（「変換中の文字列を自前描画しない」節で述べた通り、多くのプラットフォームでは`getTextLocation()`を実装してもクライアント側の自前描画を完全に信頼する「真のon-the-spot」にはならず、ネイティブ側も自身の浮動ウィンドウに同じ文字列を表示する「over-the-spot」的挙動になりやすいため）。ただし、実際の日本語入力の一般的なUX（インラインの読み仮名表示＋別枠の変換候補選択リスト）に近い見た目になり、位置がずれているため「重なって読めない」状態は解消される。
 - **意図的にこれ以上調査しなかった点**: 「ネイティブ側の浮動ウィンドウを完全に非表示にし、自前描画だけで完結させる」ことは、AWTの入力方式が最終的にはOS/プラットフォーム側の実装に依存するため、標準APIの範囲では確実な制御方法がない（上記「変換中の文字列を自前描画しない」節の「原因の整理」参照）。2行下にずらす方式は実機での見え方を確認できないヘッドレス環境からの推測に基づくヒューリスティックであり、実際のプラットフォーム（Windows IME/macOS/Linux fcitx・ibus等）でのオフセット量の妥当性は要実機確認（既知のテストギャップ）。
 - **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java`のTest 31〜33（計36テスト）。Test 31（変換中オーバーレイの下線色のピクセル検証）・Test 32（確定時のコールバック通知とオーバーレイ解除）を復元し、新たにTest 33（`getInputMethodRequests().getTextLocation(null)`が現在行から2行分下の位置を返すことを検証）を追加した。
+
+## INSERT→NORMAL遷移時の自動半角切り替え（`EditorCanvas.switchToHalfWidth()`）がWindowsで効かない不具合の修正
+
+- **経緯**: INSERTモードで全角入力（日本語IME）中に`Esc`でNORMALモードへ戻ると、IMEが全角のままになりNORMALモードのキーバインドを誤入力してしまう問題への対策として、`switchToHalfWidth()`（`ic.selectInputMethod(Locale.ENGLISH)`のみを呼ぶ実装）が既に存在し、`ModalEditor.onReturnToNormal`経由でINSERT→NORMAL遷移のたびに呼ばれるよう配線済みだった。Linux環境では動作したが、Windows実機では切り替わらないという報告があった。
+- **原因**: `InputContext.selectInputMethod(Locale)`は「指定したLocaleに対応する別のInputMethodエンジンへ切り替える」API であり、Windowsで有効なのは、コントロールパネルの言語設定に日本語IMEとは別に「英語(米国)」等の入力方式（別のキーボードレイアウト）を追加インストールしている場合のみ。日本語IME（Microsoft IME）1つしか入力方式を追加していない一般的な環境では`Locale.ENGLISH`に対応するエンジンが存在せず`UnsupportedOperationException`になり、既存の`try/catch(Exception ignored)`で握りつぶされて何も起きない。
+- **修正**: `switchToHalfWidth()`に`ic.setCompositionEnabled(false)`の呼び出しを追加した（`selectInputMethod`より先に、独立したtry/catchで）。`setCompositionEnabled(false)`はWindows上ではIMM32の`ImmSetOpenStatus(FALSE)`相当に対応し、追加のキーボードレイアウトが無い単一の日本語IME環境でも直接入力（半角英数字）へ切り替えられる。`selectInputMethod(Locale.ENGLISH)`の呼び出しはLinux（IBus/Fcitx等、Localeごとに別エンジンが登録される環境）向けに残しており、どちらか一方しかサポートされないプラットフォームでも他方の例外を握りつぶすだけで済むようにした（両方試す設計）。
+- **意図的にテストを追加しなかった理由**: `InputContext`/IMEの実際の切り替わり確認はOSのネイティブIME実装に依存するため、このコンテナ（ヘッドレス環境）は元より通常のCI環境でも自動テストできない。既存の`ClipboardTest`（システムクリップボード連携）と同種の既知のテストギャップとして扱い、Windows実機での動作確認はユーザー側に委ねた。
