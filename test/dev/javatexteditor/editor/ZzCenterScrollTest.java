@@ -75,13 +75,14 @@ public class ZzCenterScrollTest {
         assertEq("zz near start: cursorRow unchanged", 2, t.editor().getCursorRow());
     }
 
-    static void testZzClampedNearFileEnd() {
-        // 101行、maxScrollRow = 101-14 = 87。cursorRow=99 → 99-7=92 → clamp to 87
+    static void testZzCentersEvenPastFileEnd() {
+        // 101行、visibleRows=14。cursorRow=99 → 99-7=92（Vim本家と同じく文書末尾を超えて
+        // スクロールしてでもカーソル行を中央に置く。上限クランプは行わない）
         TestEditor t = editorWithCanvas(makeLines(100));
         t.editor().setCursor(99, 0);
         sendChar(t.editor(), 'z');
         sendChar(t.editor(), 'z');
-        assertEq("zz: clamped to maxScrollRow near file end", 87, t.canvas().getScrollRow());
+        assertEq("zz: centers cursor even past file end", 92, t.canvas().getScrollRow());
         assertEq("zz near end: cursorRow unchanged", 99, t.editor().getCursorRow());
     }
 
@@ -137,7 +138,7 @@ public class ZzCenterScrollTest {
         testZzCentersCursorLine();
         testZzDoesNotChangeCursorPosition();
         testZzClampedNearFileStart();
-        testZzClampedNearFileEnd();
+        testZzCentersEvenPastFileEnd();
         testZAloneDoesNotScrollYet();
         testZThenOtherKeyFallsThroughToNormalProcessing();
         testZzNotTriggeredInInsertMode();

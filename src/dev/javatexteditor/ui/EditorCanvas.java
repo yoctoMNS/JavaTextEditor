@@ -681,6 +681,16 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                 errorLines.contains(row));
         }
 
+        // 2.5 zz等でファイル末尾を超えてスクロールした場合、行が存在しない領域を
+        //     テーマの通常背景色ではなく純粋な白(ライト)/黒(ダーク)で明示的に塗る。
+        //     カーソルはこの領域には存在し得ない（cursorRowは常に有効な行番号にクランプされる）。
+        int voidScreenRowStart = Math.max(0, lastRow - scrollRow);
+        if (voidScreenRowStart < visibleRows) {
+            int voidY = voidScreenRowStart * lineHeight;
+            g2.setColor(theme == Theme.LIGHT_MODE ? Color.WHITE : Color.BLACK);
+            g2.fillRect(0, voidY, getWidth(), visibleRows * lineHeight - voidY);
+        }
+
         // 3. カーソルを描画する（縦・横スクロールオフセット考慮）
         drawCursor(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth);
 
