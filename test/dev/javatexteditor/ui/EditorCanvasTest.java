@@ -15,8 +15,10 @@ public class EditorCanvasTest {
             canvas.setTheme(Theme.LIGHT_MODE);
 
             BufferedImage img = render(canvas, 400, 300);
-            // ステータス行より上、テキスト描画より右の領域（背景のみ）のピクセルを検証
-            int pixel = img.getRGB(350, 150);
+            // 1行目の描画域内（テキスト描画より右の背景のみの領域）のピクセルを検証。
+            // y=150相当の行は文書末尾を超えるため、その領域は白/黒で塗られる
+            // （後続の「zz末尾超過領域」テスト参照）ので、ここでは行0の内側(y=5)を見る。
+            int pixel = img.getRGB(350, 5);
             pass += checkColor("LIGHT_MODE背景色", 0xF5, 0xF0, 0xE6, pixel);
         }
 
@@ -28,7 +30,8 @@ public class EditorCanvasTest {
             canvas.setTheme(Theme.DARK_MODE);
 
             BufferedImage img = render(canvas, 400, 300);
-            int pixel = img.getRGB(350, 150);
+            // 行0の内側(y=5)を見る（理由はLIGHT_MODE背景色テストのコメント参照）
+            int pixel = img.getRGB(350, 5);
             pass += checkColor("DARK_MODE背景色", 0x1A, 0x1A, 0x1A, pixel);
         }
 
@@ -183,7 +186,9 @@ public class EditorCanvasTest {
             // clearSelection後は行単位ハイライトなし → 普通の背景が描かれる
             canvas.setVisualMode(false);
             BufferedImage img = render(canvas, 400, 300);
-            int pixel = img.getRGB(350, 100);
+            // 行1（y=20〜39、文書内）の内側を見る。y=100相当は文書末尾を超えるため
+            // 白塗り領域になり「ハイライトなし」の検証には使えない。
+            int pixel = img.getRGB(350, 25);
             boolean isBackground = colorMatch(pixel, 0xF5, 0xF0, 0xE6);
             System.out.println((isBackground ? "[OK] " : "[FAIL] ")
                 + "clearSelection 後はハイライトなし（背景色に戻る）");
@@ -412,7 +417,48 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        int total = 30;
+        // Test 31: zz等でファイル末尾を超えてスクロールした場合、LIGHT_MODEでは
+        //          その空白領域が純粋な白(#FFFFFF)で描画される（通常背景色#F5F0E6とは異なる）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("line1\nline2\nline3");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setScrollRow(50); // 文書末尾(3行)をはるかに超えてスクロール
+
+            BufferedImage img = render(canvas, 400, 300);
+            int pixel = img.getRGB(350, 150);
+            pass += checkColor("zz末尾超過領域(LIGHT_MODE)は純白", 0xFF, 0xFF, 0xFF, pixel);
+        }
+
+        // Test 32: 同条件でDARK_MODEでは純粋な黒(#000000)で描画される
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("line1\nline2\nline3");
+            canvas.setTheme(Theme.DARK_MODE);
+            canvas.setScrollRow(50);
+
+            BufferedImage img = render(canvas, 400, 300);
+            int pixel = img.getRGB(350, 150);
+            pass += checkColor("zz末尾超過領域(DARK_MODE)は純黒", 0x00, 0x00, 0x00, pixel);
+        }
+
+        // Test 33: 文書内に収まっている通常行の領域は末尾超過の白/黒塗りの影響を受けない
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("line1\nline2\nline3");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setScrollRow(0); // スクロールなし、3行とも表示範囲内ではない末尾領域が存在する
+
+            BufferedImage img = render(canvas, 400, 300);
+            // 1行目の描画域（(1,1)付近）は背景色のまま（白塗りされない）
+            int pixel = img.getRGB(350, 5);
+            pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
+        }
+
+        int total = 33;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

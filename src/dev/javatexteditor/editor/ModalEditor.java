@@ -4084,14 +4084,13 @@ public class ModalEditor {
 
     /**
      * zz: カーソル行を viewport の垂直中央付近に表示する。カーソルの論理位置（行・列）は変更しない。
-     * ファイル先頭・末尾付近では scrollRow を有効範囲（0 〜 totalLines - visibleRows）にクランプする。
+     * ファイル先頭付近では scrollRow を 0 にクランプするが、ファイル末尾付近では上限クランプを行わない
+     * （Vim本家のzzと同じ挙動。文書末尾を超えた範囲は EditorCanvas 側が空白領域として描画する）。
      */
     private void centerCursorLineInViewport() {
         if (canvas == null) return;
         int visibleRows = getVisibleRows();
-        int totalLines = getLines().length;
-        int maxScrollRow = Math.max(0, totalLines - visibleRows);
-        int newScrollRow = Math.max(0, Math.min(cursorRow - visibleRows / 2, maxScrollRow));
+        int newScrollRow = Math.max(0, cursorRow - visibleRows / 2);
         canvas.setScrollRow(newScrollRow);
     }
 

@@ -271,3 +271,14 @@ int b = pixel & 0xFF;
 - **修正**: `EditorCanvas.drawCursor()` の `if (insertMode) { ... 2px縦棒 ... } else { ... ブロック ... }` という分岐をやめ、常に旧`else`側（ブロック塗り＋文字を背景色で再描画）だけを実行するようにした。
 - **意図的に変更しなかった点**: `insertMode` フィールド・`setInsertMode()`・ステータス行の `"-- INSERT --"`/`"-- NORMAL --"` ラベル表示（`drawStatusLine`）はそのまま残した。要望は「カーソル形状」のみに限定されており、モード名の文字表示までは対象外のため。
 - **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java` の Test 4（旧: 「INSERTモードのカーソルバーが2px幅で描画されているか」）を「INSERTモードでもカーソルはブロック（■）のまま描画されるか」に更新し、Test 3（NORMALモード）と同じアサーション形（`(1,1)` が前景色）に揃えた。
+
+## zz（`centerCursorLineInViewport`）が文書末尾でクランプしていた挙動の廃止・文書末尾を超えた領域の白/黒塗り
+
+- **不具合/要望**: NORMALモード `zz`（カーソル行を viewport 中央に表示する）は、文書末尾付近で `maxScrollRow = totalLines - visibleRows` にクランプしており、カーソル行が実際には画面中央より上に表示されてしまっていた（Vim本家の `zz` は文書末尾を超えてでもカーソル行を中央に置き、はみ出た分は `~` で埋める）。ユーザーから「文書末尾を超えるスクロールが要求されても中央にカーソル行を表示してほしい。また文書末尾を超えた領域はライトテーマなら白、ダークテーマなら黒で描画してほしい」という要望があった。
+- **修正1（`ModalEditor.centerCursorLineInViewport()`）**: `maxScrollRow` によるクランプを削除した。`newScrollRow = Math.max(0, cursorRow - visibleRows / 2)` のみ（先頭方向の 0 クランプだけ残す）。`EditorCanvas.setScrollRow()` はもともと下限（0）しかクランプしておらず上限クランプを持っていなかったため、`ModalEditor` 側の呼び出し元だけを直せば済んだ。
+- **修正2（`EditorCanvas.paintContent()`、本文描画ループ直後）**: 文書行が尽きて描画すべき行がない画面領域（`scrollRow + visibleRows > lines.length` になるすべてのケース）を、`theme.background`（ベージュ/柔らかい黒）ではなく `Color.WHITE`（ライト）/`Color.BLACK`（ダーク）で明示的に塗るようにした。**この白黒塗りは zz 起因のケースに限定せず、「viewportが文書より広い」という状況全般（例: 3行しかない短いファイルを開いた直後、scrollRow=0でも末尾3行目より下は全て白/黒になる）に常に適用される**。これはユーザーに「zz起因のケースだけに絞るか、Vim互換で常時か」を確認した上での決定（`AskUserQuestion`でVim互換・常時適用を選択）。Vimの `~`（文書末尾より下の行に表示される記号）と同じ「文書の外」を視覚的に明示する目的の一貫した挙動として実装した。
+  - 実装は「本文描画ループ（`scrollRow`〜`lastRow-1`）が描いた最後の画面行より下」を `voidScreenRowStart = Math.max(0, lastRow - scrollRow)` として求め、そこから `visibleRows` の末尾（ステータス行の直前）まで1回の `fillRect` で塗るだけ。`lastRow - scrollRow` が負になるケース（scrollRowが文書行数を大きく超えて画面全体が「文書の外」になる場合）に備え `Math.max(0, ...)` でクランプしている。
+  - ステータス行帯（`drawStatusLine()`、本文描画より後に呼ばれる）はこの白黒塗りの対象外（`visibleRows * lineHeight` までしか塗らないため、ステータス行の高さ分は最初から対象範囲に含まれない）。
+  - カーソルは常に有効な `cursorRow`（実在する行）にしかクランプされないため、この白黒領域にカーソルが描画されることはない（既存のカーソル移動系コマンドの制約をそのまま利用しており、今回新規のクランプ処理は追加していない）。
+- **既存テストへの影響**: `test/dev/javatexteditor/ui/EditorCanvasTest.java` の Test 1/2（LIGHT_MODE/DARK_MODE背景色）・Test 13（clearSelection後の背景色確認）は、いずれも「文書が短い（1〜2行）のに300px高のcanvasでy=100〜150付近のピクセルを検証する」という書き方をしていたため、この変更で白黒塗り領域に入ってしまい失敗するようになった。文書内（実在する行のy範囲）のピクセルに検証対象を変更して修正した（該当行にコメントで理由を記載済み）。
+- **テスト**: `test/dev/javatexteditor/editor/ZzCenterScrollTest.java` の `testZzClampedNearFileEnd` を `testZzCentersEvenPastFileEnd` に改名し、期待値をクランプ後の値からクランプなしの値（101行・visibleRows=14・cursorRow=99 → scrollRow=92）に更新した（計16テスト、他は変更なし）。`test/dev/javatexteditor/ui/EditorCanvasTest.java` に3テスト追加（計33テスト）: 文書末尾を大きく超えてスクロールした場合にLIGHT_MODEでは純白・DARK_MODEでは純黒で塗られること、および文書内領域（実在する行）は従来通りの通常背景色のままであることを確認する。
