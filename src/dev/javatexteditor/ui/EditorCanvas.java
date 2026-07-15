@@ -1157,6 +1157,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             "  :w <path>  ファイルを保存",
             "  :q         終了",
             "  K        カーソル位置の JDK API を表示",
+            "  :tutor または :tutorial  対話型チュートリアルを開く",
             "  Ctrl+W              左右ペイン切り替え",
             "  Ctrl+Shift+↑↓←→  アクティブペインのフォントサイズ変更",
             "",
