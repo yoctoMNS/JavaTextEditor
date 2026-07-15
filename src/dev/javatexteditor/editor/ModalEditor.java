@@ -70,7 +70,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -270,6 +270,16 @@ public class ModalEditor {
     private String filerSavedFilePath = null;
     private int filerSavedCursorRow = 0;
     private int filerSavedCursorCol = 0;
+    // Mode.BINARY 状態（:b コマンドで任意のバッファと相互トグルする hexdump 編集モード）。
+    // buffer 自体が「唯一の真実」（hexdumpテキストを直接1文字ずつ上書き編集する）ため、
+    // 別途バイト配列をキャッシュしない。binaryByteCount のみバイト総数として保持し、
+    // カーソル可動域のクランプと保存時の HexDumpFormatter.parse() 呼び出しに使う。
+    // binaryModeOwner は「この buffer インスタンスが Mode.BINARY 用に作られたものか」を
+    // 参照一致で判定するための目印（outputErrorLinesOwner と同じ設計。詳細はCLAUDE.md参照）。
+    private UndoablePieceTable binaryModeOwner = null;
+    private int binaryByteCount = 0;
+    private int binaryCursorOffset = 0;
+    private boolean binaryNibblePending = false; // true = 直前に高位4bitを入力済み、次の1桁で低位4bitを確定
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
     private String savedBufferText = null;       // 元バッファのテキスト
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
@@ -455,6 +465,7 @@ public class ModalEditor {
             case IMPORT_SELECT -> processImportSelectKey(keyCode, keyChar, modifiers);
             case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
             case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
+            case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
         }
         syncCanvas();
         long currentVersion = buffer.getVersion();
@@ -1316,6 +1327,18 @@ public class ModalEditor {
     // COMMMANDモード処理
     // -------------------------------------------------------------------------
 
+    /**
+     * COMMAND モードでコマンド実行後に戻るべきモードを判定する。
+     * buffer が Mode.BINARY 用に作られたインスタンス（binaryModeOwner）と参照一致するなら
+     * :w 等の他コマンド実行後もそのまま BINARY へ戻す（さもないと hexdump の固定レイアウトの
+     * 上に通常の NORMAL 編集キーが効いてしまい構造が壊れる）。:b 自身が呼ばれた場合は
+     * toggleBinaryMode() が mode を明示的に変更済みのため、この判定は素通りする
+     * （呼び出し元は mode==COMMAND のときのみこの戻り値を使うガードになっている）。
+     */
+    private Mode modeAfterCommand() {
+        return (binaryModeOwner == buffer) ? Mode.BINARY : Mode.NORMAL;
+    }
+
     private void processCommandKey(int keyCode, char keyChar) {
         if (keyCode == KeyEvent.VK_ESCAPE) {
             commandBuffer.setLength(0);
@@ -1329,7 +1352,7 @@ public class ModalEditor {
         } else if (keyCode == KeyEvent.VK_ENTER) {
             executeCommand(commandBuffer.toString());
             commandBuffer.setLength(0);
-            if (mode == Mode.COMMAND) mode = Mode.NORMAL;
+            if (mode == Mode.COMMAND) mode = modeAfterCommand();
 
         } else if (keyCode == KeyEvent.VK_TAB) {
             String cmd = commandBuffer.toString();
@@ -1599,7 +1622,7 @@ public class ModalEditor {
             commandBuffer.append("e ").append(fullPath);
             executeCommand(commandBuffer.toString());
             commandBuffer.setLength(0);
-            if (mode == Mode.COMMAND) mode = Mode.NORMAL;
+            if (mode == Mode.COMMAND) mode = modeAfterCommand();
         }
     }
 
@@ -1922,17 +1945,20 @@ public class ModalEditor {
         try {
             Path target = Path.of(item.filePath());
             FileLoadResult result = readFileContentForBuffer(target);
-            buffer = new UndoablePieceTable(result.text());
-            currentFilePath = result.binary() ? null : target.toString();
             fileNameResults = null;
             grepResults = null;
             clearSearchHighlights();
-            cursorRow = result.binary() ? 0 : Math.max(0, item.lineNumber());
-            cursorCol = 0;
-            statusMessage = result.binary()
-                ? "\"" + target.getFileName() + "\" [binary, read-only preview]"
-                : "\"" + target.getFileName() + "\" opened";
-            if (!result.binary() && onFileOpened != null) {
+            if (result.binary()) {
+                enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
+                statusMessage = "\"" + target.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
+            } else {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = target.toString();
+                cursorRow = Math.max(0, item.lineNumber());
+                cursorCol = 0;
+                statusMessage = "\"" + target.getFileName() + "\" opened";
+            }
+            if (onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(target.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
@@ -1971,17 +1997,20 @@ public class ModalEditor {
         try {
             Path p = Path.of(target.filePath());
             FileLoadResult result = readFileContentForBuffer(p);
-            buffer = new UndoablePieceTable(result.text());
-            currentFilePath = result.binary() ? null : p.toString();
             fileNameResults = null;
             grepResults = null;
             clearSearchHighlights();
-            cursorRow = 0;
-            cursorCol = 0;
-            statusMessage = result.binary()
-                ? "\"" + p.getFileName() + "\" [binary, read-only preview]"
-                : "\"" + p.getFileName() + "\" switched";
-            if (!result.binary() && onFileOpened != null) {
+            if (result.binary()) {
+                enterBinaryMode(result.rawBytes(), p.getFileName().toString(), p.toString());
+                statusMessage = "\"" + p.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
+            } else {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = p.toString();
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + p.getFileName() + "\" switched";
+            }
+            if (onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(p.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
@@ -2073,15 +2102,18 @@ public class ModalEditor {
         Path target = base.resolve(relPath);
         try {
             FileLoadResult result = readFileContentForBuffer(target);
-            buffer = new UndoablePieceTable(result.text());
-            currentFilePath = result.binary() ? null : target.toString();
             fileNameResults = null;
             clearSearchHighlights();
-            cursorRow = 0;
-            cursorCol = 0;
-            statusMessage = result.binary()
-                ? "\"" + relPath + "\" [binary, read-only preview]"
-                : "\"" + relPath + "\" opened";
+            if (result.binary()) {
+                enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
+                statusMessage = "\"" + relPath + "\" [binary] " + result.rawBytes().length + " bytes";
+            } else {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = target.toString();
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + relPath + "\" opened";
+            }
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
@@ -2241,6 +2273,8 @@ public class ModalEditor {
         } else if (cmd.startsWith("e ")) {
             String path = cmd.substring(2).trim();
             loadFromFile(resolveRelativeToProjectRoot(path));
+        } else if (cmd.equals("b")) {
+            toggleBinaryMode();
         } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
             openTutorial();
         } else if (cmd.equals("main") || cmd.startsWith("main ")) {
@@ -2486,8 +2520,24 @@ public class ModalEditor {
             }
             Path targetPath = Path.of(resolvedPath).toAbsolutePath();
             Files.createDirectories(targetPath.getParent());
-            Files.writeString(targetPath, buffer.getText());
-            statusMessage = "\"" + targetPath + "\" written";
+            // mode ではなく binaryModeOwner の参照一致で判定する。:w は COMMAND モードの
+            // executeCommand() 内から呼ばれるため、この時点では mode はまだ COMMAND のまま
+            // （BINARY への復帰は processCommandKey の Enter ハンドラが executeCommand() から
+            // 戻った後に modeAfterCommand() で行う）。
+            if (binaryModeOwner == buffer) {
+                byte[] bytes;
+                try {
+                    bytes = HexDumpFormatter.parse(buffer.getText(), binaryByteCount);
+                } catch (RuntimeException e) {
+                    statusMessage = "E: corrupted binary buffer: " + e.getMessage();
+                    return false;
+                }
+                Files.write(targetPath, bytes);
+                statusMessage = "\"" + targetPath + "\" written (" + bytes.length + " bytes)";
+            } else {
+                Files.writeString(targetPath, buffer.getText());
+                statusMessage = "\"" + targetPath + "\" written";
+            }
             buffer.markSaved();
             // 相対パス指定 or 新規ファイルの初回保存でも、以後は常に絶対パスで
             // currentFilePath を保持する（FILER/telescope 等の他経路と形式を揃え、
@@ -2673,25 +2723,182 @@ public class ModalEditor {
         statusMessage = "チュートリアルを開きました — :q で終了、Ctrl+U で元のバッファに戻れます";
     }
 
-    /** ディスク上のファイルをバッファへ格納できるテキストへ変換した結果。 */
-    private record FileLoadResult(String text, boolean binary) {}
+    /**
+     * ディスク上のファイルをバッファへ格納できるテキストへ変換した結果。
+     * binary()==true の場合、text() は使わず rawBytes() を {@link #enterBinaryMode} に渡すこと
+     * （呼び出し側は5箇所あり、いずれも同じ分岐パターンを踏襲する）。
+     */
+    private record FileLoadResult(String text, boolean binary, byte[] rawBytes) {}
 
     /**
      * pathの内容を読み込みバッファ用テキストに変換する。UTF-8として妥当なテキストは
      * そのまま（\r\n→\n正規化のうえ）返す。NULバイトを含む、またはUTF-8として不正な
      * バイト列（画像・実行ファイル等のバイナリ、UTF-16等の他エンコーディング）は
-     * hexdump形式の読み取り専用プレビューテキストに変換して返す（{@link BinaryFileDetector}
-     * 参照）。呼び出し側は binary()==true の場合、currentFilePath を null のままにして
-     * このプレビューが元ファイルへ誤って保存されないようにすること（既存のgrep結果や
-     * compile結果の疑似バッファと同じ「ファイルパスなし＝保存不可」パターン）。
+     * Mode.BINARY（{@link #enterBinaryMode}）へ渡すための生バイト列を返す
+     * （{@link BinaryFileDetector} 参照）。
      */
     private FileLoadResult readFileContentForBuffer(Path path) throws IOException {
         byte[] bytes = Files.readAllBytes(path);
         if (BinaryFileDetector.isBinary(bytes)) {
-            return new FileLoadResult(HexDumpFormatter.format(bytes, path.getFileName().toString()), true);
+            return new FileLoadResult(null, true, bytes);
         }
         String text = new String(bytes, StandardCharsets.UTF_8).replace("\r\n", "\n");
-        return new FileLoadResult(text, false);
+        return new FileLoadResult(text, false, null);
+    }
+
+    // -------------------------------------------------------------------------
+    // Mode.BINARY（:b コマンド・非UTF-8ファイルの自動判定オープンで入る、
+    // hexdumpをその場で1バイトずつ上書き編集できるバイナリエディタ）
+    // -------------------------------------------------------------------------
+
+    /**
+     * bytes を hexdump 表示にして Mode.BINARY へ遷移する。:b コマンド（現在のバッファをbyte[]化）と
+     * 非UTF-8ファイルの自動判定オープン（5箇所のファイルオープン経路）の共通入口。
+     * buffer 自体を編集の唯一の真実として扱うため、bytes 自体はここでの初期描画にのみ使い、
+     * 以後は保持しない（{@link #applyHexDigit} は buffer のテキストを直接書き換える）。
+     */
+    private void enterBinaryMode(byte[] bytes, String fileName, String filePath) {
+        binaryByteCount = bytes.length;
+        binaryCursorOffset = 0;
+        binaryNibblePending = false;
+        buffer = new UndoablePieceTable(HexDumpFormatter.format(bytes, fileName));
+        binaryModeOwner = buffer;
+        currentFilePath = filePath;
+        mode = Mode.BINARY;
+        syncBinaryCursorPosition();
+    }
+
+    /**
+     * Mode.BINARY → 通常テキスト表示へトグルする。buffer の hexdumpテキストを
+     * {@link HexDumpFormatter#parse} でバイト列に復元し、それがUTF-8として妥当な場合のみ
+     * テキスト化して戻る。妥当でない場合（真のバイナリファイル等）は変換すると内容が
+     * 破壊されるため、エラーメッセージを出して Mode.BINARY のまま留まる。
+     */
+    private boolean exitBinaryModeToText() {
+        byte[] bytes;
+        try {
+            bytes = HexDumpFormatter.parse(buffer.getText(), binaryByteCount);
+        } catch (RuntimeException e) {
+            statusMessage = "E: corrupted binary buffer: " + e.getMessage();
+            return false;
+        }
+        if (BinaryFileDetector.isBinary(bytes)) {
+            statusMessage = "E: not valid UTF-8 text — staying in binary mode";
+            return false;
+        }
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        buffer = new UndoablePieceTable(text);
+        binaryModeOwner = null;
+        mode = Mode.NORMAL;
+        cursorRow = 0;
+        cursorCol = 0;
+        statusMessage = "text view";
+        return true;
+    }
+
+    /**
+     * :b — 現在のバッファを Mode.BINARY とテキスト表示の間でトグルする。
+     * バイナリへ入る側は「今まさに編集中のバッファ内容」をUTF-8バイト列化する
+     * （ディスクから読み直さない。CLAUDE.md「:bコマンドの対象」の決定に従う）。
+     */
+    private void toggleBinaryMode() {
+        if (binaryModeOwner == buffer) {
+            exitBinaryModeToText();
+        } else {
+            byte[] bytes = buffer.getText().getBytes(StandardCharsets.UTF_8);
+            String fileName = currentFilePath != null
+                ? Path.of(currentFilePath).getFileName().toString() : "[No Name]";
+            enterBinaryMode(bytes, fileName, currentFilePath);
+        }
+    }
+
+    /** binaryCursorOffset（バイト単位）を hexdumpテキスト上の cursorRow/cursorCol へ変換する。 */
+    private void syncBinaryCursorPosition() {
+        if (binaryByteCount == 0) {
+            cursorRow = 0;
+            cursorCol = 0;
+            return;
+        }
+        int byteInLine = binaryCursorOffset % HexDumpFormatter.BYTES_PER_LINE;
+        cursorRow = 1 + binaryCursorOffset / HexDumpFormatter.BYTES_PER_LINE;
+        cursorCol = HexDumpFormatter.hexDigitColumn(byteInLine) + (binaryNibblePending ? 1 : 0);
+    }
+
+    /** 1バイト単位でカーソルを移動する。末尾/先頭で止まる（ラップアラウンドしない）。 */
+    private void moveBinaryCursor(int deltaBytes) {
+        if (binaryByteCount == 0) return;
+        binaryCursorOffset = Math.max(0, Math.min(binaryByteCount - 1, binaryCursorOffset + deltaBytes));
+        binaryNibblePending = false;
+        syncBinaryCursorPosition();
+    }
+
+    private static boolean isHexDigit(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    /**
+     * カーソル位置のバイトへ16進数1桁を上書きする。1桁目は高位4bit・2桁目は低位4bitを確定し
+     * 自動的に次のバイトへ前進する（HxD等の一般的なバイナリエディタと同じ挙動）。
+     * hexdumpの固定レイアウト上、対象の16進数2桁とASCII欄1文字それぞれを1文字delete+insertで
+     * 直接書き換える（既存の replaceCharAtCursor と同じ「1論理編集が複数undo単位になる」トレードオフ）。
+     */
+    private void applyHexDigit(char c) {
+        if (binaryByteCount == 0) return;
+        int byteInLine = binaryCursorOffset % HexDumpFormatter.BYTES_PER_LINE;
+        int hexCol = HexDumpFormatter.hexDigitColumn(byteInLine);
+        int asciiCol = HexDumpFormatter.asciiColumn(byteInLine);
+        int digitCol = hexCol + (binaryNibblePending ? 1 : 0);
+
+        int digitOffset = offsetAt(cursorRow, digitCol);
+        buffer.delete(digitOffset, 1);
+        buffer.insert(digitOffset, String.valueOf(Character.toLowerCase(c)));
+
+        int hexPairOffset = offsetAt(cursorRow, hexCol);
+        String hexPair = buffer.getTextInRange(hexPairOffset, hexPairOffset + 2);
+        int byteVal;
+        try {
+            byteVal = Integer.parseInt(hexPair, 16);
+        } catch (NumberFormatException e) {
+            byteVal = 0;
+        }
+        char asciiChar = (byteVal >= 0x20 && byteVal < 0x7F) ? (char) byteVal : '.';
+        int asciiOffset = offsetAt(cursorRow, asciiCol);
+        buffer.delete(asciiOffset, 1);
+        buffer.insert(asciiOffset, String.valueOf(asciiChar));
+
+        if (binaryNibblePending) {
+            binaryNibblePending = false;
+            moveBinaryCursor(1);
+        } else {
+            binaryNibblePending = true;
+            syncBinaryCursorPosition();
+        }
+    }
+
+    private void processBinaryKey(int keyCode, char keyChar, int modifiers) {
+        if (keyChar == ':') {
+            commandBuffer.setLength(0);
+            statusMessage = "";
+            mode = Mode.COMMAND;
+            return;
+        }
+        if (keyCode == KeyEvent.VK_LEFT || keyChar == 'h') { moveBinaryCursor(-1); return; }
+        if (keyCode == KeyEvent.VK_RIGHT || keyChar == 'l') { moveBinaryCursor(1); return; }
+        if (keyCode == KeyEvent.VK_DOWN || keyChar == 'j') { moveBinaryCursor(HexDumpFormatter.BYTES_PER_LINE); return; }
+        if (keyCode == KeyEvent.VK_UP || keyChar == 'k') { moveBinaryCursor(-HexDumpFormatter.BYTES_PER_LINE); return; }
+        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+        if (!ctrlDown && keyChar == 'u') { buffer.undo(); clampBinaryCursorAfterUndoRedo(); return; }
+        if (ctrlDown && keyCode == KeyEvent.VK_R) { buffer.redo(); clampBinaryCursorAfterUndoRedo(); return; }
+        if (!ctrlDown && isHexDigit(keyChar)) { applyHexDigit(keyChar); return; }
+    }
+
+    /** undo/redo後、buffer側の行数変化はない前提だがカーソルが範囲外になっていないかだけ保険として揃える。 */
+    private void clampBinaryCursorAfterUndoRedo() {
+        binaryNibblePending = false;
+        if (binaryByteCount > 0) {
+            binaryCursorOffset = Math.max(0, Math.min(binaryByteCount - 1, binaryCursorOffset));
+        }
+        syncBinaryCursorPosition();
     }
 
     private void loadFromFile(String path) {
@@ -2716,16 +2923,19 @@ public class ModalEditor {
         try {
             pushBuffer();
             FileLoadResult result = readFileContentForBuffer(p);
-            buffer = new UndoablePieceTable(result.text());
-            currentFilePath = result.binary() ? null : path;
-            cursorRow = 0;
-            cursorCol = 0;
             resetSearchAndResultState();
-            statusMessage = result.binary()
-                ? "\"" + path + "\" [binary, read-only preview]"
-                : "\"" + path + "\" opened";
-            if (!result.binary() && onFileOpened != null) {
-                String name = Path.of(path).getFileName().toString();
+            String name = p.getFileName().toString();
+            if (result.binary()) {
+                enterBinaryMode(result.rawBytes(), name, path);
+                statusMessage = "\"" + path + "\" [binary] " + result.rawBytes().length + " bytes";
+            } else {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = path;
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + path + "\" opened";
+            }
+            if (onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(name, path));
             }
         } catch (IOException e) {
@@ -2882,18 +3092,19 @@ public class ModalEditor {
         Path target = base.resolve(r.filePath());
         try {
             FileLoadResult result = readFileContentForBuffer(target);
-            buffer = new UndoablePieceTable(result.text());
-            currentFilePath = result.binary() ? null : target.toString();
             inJdkSourceBuffer = false;
             grepResults = null;
             clearSearchHighlights();
-            // 目的の行へジャンプ（1-indexed → 0-indexed）。バイナリはhexdumpに行の概念が
-            // ないため先頭に留める。
-            cursorRow = result.binary() ? 0 : Math.max(0, r.lineNumber() - 1);
-            cursorCol = 0;
-            statusMessage = result.binary()
-                ? "\"" + r.filePath() + "\" [binary, read-only preview]"
-                : "\"" + r.filePath() + "\" line " + r.lineNumber();
+            if (result.binary()) {
+                enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
+                statusMessage = "\"" + r.filePath() + "\" [binary] " + result.rawBytes().length + " bytes";
+            } else {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = target.toString();
+                cursorRow = Math.max(0, r.lineNumber() - 1);
+                cursorCol = 0;
+                statusMessage = "\"" + r.filePath() + "\" line " + r.lineNumber();
+            }
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
@@ -4458,6 +4669,7 @@ public class ModalEditor {
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
+    public boolean isBinaryMode()         { return mode == Mode.BINARY; }
     public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
     public boolean isCompletionActive()   { return completionActive; }

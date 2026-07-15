@@ -649,3 +649,100 @@ project-root/
   （新設・4テストメソッド／7アサーション）。`:e`コマンドでバイナリファイルを開いてもクラッシュしない
   こと・hexdumpプレビューが表示されること・`currentFilePath`が`null`になること・`:w`保存を試みても
   元ファイルのバイト列が変化しないこと・通常のUTF-8テキストファイルは従来通り開けることを検証。
+  **（2026-07 追記: 下記「`:b`コマンド」節により、この読み取り専用プレビュー方式は廃止された。
+  `BinaryFileOpenTest.java`は編集可能なMode.BINARYを検証するテストへ全面的に書き換え済み。
+  このセクションの記述は経緯の記録として残す。）**
+
+## `:b`コマンド（Mode.BINARY — hexdumpをその場で編集できるバイナリエディタ）
+
+上記「任意のファイル種別を開けるようにする対応」で導入した読み取り専用hexdumpプレビューを、
+「`:b`コマンドで明示的にバイナリエディタとして起動・編集できるようにしてほしい」という要望を受けて
+編集可能なMode.BINARYへ全面的に置き換えた。実装前に`AskUserQuestion`でユーザーと3点確認している。
+
+- **`:b`の対象は「現在編集中のバッファ」**（引数なし）。`:e <path>`のように別ファイルを開く機能ではなく、
+  今まさに開いている・編集中のバッファ内容をバイナリ表示とテキスト表示の間でトグルする。
+- **既存の読み取り専用プレビューは廃止し、`:b`の編集可能版へ統一した**。非UTF-8ファイルの自動判定
+  オープン（`:e`・FILER・telescope・`\f`/`\g`・`gr`・Ctrl+U/Ctrl+P経由の計5箇所、いずれも
+  `readFileContentForBuffer()`を呼ぶ）は、従来`currentFilePath`を`null`にして保存不可の
+  読み取り専用テキストを表示していたが、今後はすべて`enterBinaryMode()`を呼びMode.BINARYへ入る
+  （`currentFilePath`は実際のファイルパスを保持し、`:w`で保存できる）。
+- **カーソルは1バイト単位**（h/l/矢印で±1バイト、j/k/矢印で±16バイト＝1行）。テキスト文字単位の
+  カーソルではなく、hexdump上の「16進数2桁のペア」を1つの移動単位として扱う。末尾/先頭で止まり
+  ラップアラウンドしない（`:bnext`/`:bprev`のクランプ方式と統一）。
+- **上書き入力は16進数字2桁の自動確定・自動前進方式**（HxD等の一般的なバイナリエディタと同じ）。
+  カーソル位置のバイトに対し1桁目は高位4bit・2桁目は低位4bitを確定し、2桁目確定時に自動的に
+  次のバイトへ前進する。ASCII欄は表示のみで直接編集はできない（16進数字入力からの再計算で
+  自動更新される）。挿入・削除・末尾への追記は一切できない（ファイルサイズは常に固定）。
+
+### アーキテクチャ
+
+- **`buffer`（既存の`UndoablePieceTable`）自体を唯一の真実（source of truth）とし、別途
+  `byte[]`をキャッシュしない**。hexdumpテキストは`HexDumpFormatter.format()`で初期描画した後、
+  1バイト編集のたびに対応する16進数2桁＋ASCII欄1文字だけを`buffer.delete()`+`buffer.insert()`で
+  直接上書きする（既存の`r`コマンド・`toggleCaseUnderCursor()`と同じ「1論理編集が複数delete+insert
+  undo単位になる」トレードオフをそのまま踏襲）。編集操作は必ずこの1文字delete+insertの経路のみを
+  通るため、hexdumpの固定レイアウト（行数・列位置）は編集中も常に保たれる。これにより、
+  「hexdumpテキストを解析してバイト列に戻す」`:w`時の`HexDumpFormatter.parse()`が安全に成立する
+  （構造が壊れていないことを編集経路そのものが保証しているため、パース失敗を心配する必要がない）。
+  当初検討した「別途`byte[]`を保持し編集の都度同期する」設計は、undo/redoが実際に書き換えるのは
+  `buffer`のテキストの方だけなので、別配列を持つと**undo後に配列とテキストがズレる**バグを
+  構造的に抱えることが分かり、不採用にした。
+- **`HexDumpFormatter`に`hexDigitColumn(i)`/`asciiColumn(i)`（行内バイトインデックス0〜15から
+  列位置を計算する固定レイアウト契約）と`parse(text, byteCount)`（`format()`の逆変換）を追加した**。
+  `format()`自体は列計算をインラインの`StringBuilder`ループのまま維持し、新設した2つの列計算
+  ヘルパーと数学的に同じ結果になることをテスト（`HexDumpFormatterTest`）で確認している。
+  `parse()`はレイアウトが壊れている場合（本来到達しないはずだが）`NumberFormatException`/
+  `StringIndexOutOfBoundsException`/`IllegalStateException`を送出し、呼び出し側（`saveToFile()`・
+  `exitBinaryModeToText()`）で捕捉してエラーメッセージ表示に変換する。
+- **`binaryModeOwner`（`UndoablePieceTable`型フィールド）で「現在の`buffer`がMode.BINARY用に
+  作られたインスタンスか」を参照一致判定する**。F10/F11の`outputErrorLinesOwner`と全く同じ設計
+  （CLAUDE.md該当節参照）。この参照一致方式のおかげで、Mode.BINARY中に`:grep`・`:cd`・telescope
+  選択等どの経路で`buffer`が別インスタンスに差し替わっても、それらの30箇所超の既存コードには
+  一切手を入れずに「もうバイナリバッファではない」という状態変化を自動的に検知できる。
+- **COMMAND モードのEnterハンドラ（2箇所）を`modeAfterCommand()`ヘルパー経由に変更した**。
+  従来「`if (mode == Mode.COMMAND) mode = Mode.NORMAL;`」と無条件にNORMALへ戻していたのを、
+  `binaryModeOwner == buffer`なら`Mode.BINARY`へ戻すよう変更。これにより、Mode.BINARY中に
+  `:`でCOMMANDモードへ入り`:w`等（`:b`以外）を実行した場合も正しくMode.BINARYへ復帰する
+  （さもないとhexdumpの固定レイアウトの上にNORMALモードの通常編集キーが効いてしまい構造が壊れる）。
+  `:b`自身（`toggleBinaryMode()`）は`mode`を明示的に変更するため、このガードには依存しない。
+- **バイナリ→テキストのトグル（2回目の`:b`）は、`HexDumpFormatter.parse()`で復元したバイト列が
+  UTF-8として妥当な場合のみ成功する**。妥当でない場合（NULバイトを含む、または不正なバイト列＝
+  真のバイナリファイル等）はテキスト化すると内容が破壊されるため、エラーメッセージ
+  （`"E: not valid UTF-8 text — staying in binary mode"`）を出してMode.BINARYのまま留まる。
+  テキスト→バイナリのトグルは常に成功する（`buffer.getText().getBytes(UTF_8)`は必ず妥当なバイト列
+  になるため）。**バイナリ側の編集内容はトグルのたびに失われず往復する**（ディスクから読み直さず、
+  常に「今の`buffer`の内容」を変換元にするため）。
+- **`saveToFile()`のバイナリ判定は`mode == Mode.BINARY`ではなく`binaryModeOwner == buffer`のみで
+  行う**。`:w`は`executeCommand()`（COMMANDモード中）から呼ばれるため、その時点では`mode`はまだ
+  `Mode.COMMAND`であり`Mode.BINARY`への復帰は`executeCommand()`から戻った後の`modeAfterCommand()`
+  が行う。実装時に`mode == Mode.BINARY`を条件に含めてしまい、`:w`が常にhexdumpの生テキストを
+  そのままファイルへ書き込んでしまう（元ファイルのバイト列を破壊する）バグを一度作り込んで
+  テストで検出・修正した経緯がある。次にこの判定を触る開発者は同じ罠に注意すること。
+- **`modified`（未保存変更）フラグは既存の`UndoablePieceTable`の仕組みをそのまま利用**しており、
+  Mode.BINARY専用の変更は不要だった（1バイト編集は必ず`buffer.delete()`+`insert()`を経由するため、
+  既存の`insert`/`delete`が`modified = true`にする仕組みがそのまま機能する）。
+- **既知の制約（意図的に対応しなかった点）**: `:b`でテキスト⇔バイナリをトグルすると、切替前の
+  バッファに未保存の変更（`isModified()==true`）があっても、切替後は新しい`UndoablePieceTable`
+  インスタンスに差し替わるため`modified`は`false`から始まる（内容自体は失われないが、
+  `:wa`/`:qa`の未保存検知はトグル直後だけ正しく働かない可能性がある）。これは`loadFromFile()`・
+  `switchToRelativeBuffer()`等、既存の全バッファ切替経路が持つのと同じ性質（Ctrl+U/Ctrl+P節の
+  「未保存の編集内容を保持したままバッファを切り替える仕組みは持たない」と同種）であり、
+  今回新たに導入した制約ではないため、あえてハック的な回避策は追加していない。
+- **意図的にスコープ外とした点**: 挿入・削除によるファイルサイズ変更、ASCII欄からの直接編集、
+  `gg`/`G`等の追加ジャンプキー、複数バイトの範囲選択・矩形編集（VISUAL BLOCKとの統合）は
+  いずれも今回の要望（16進数値の上書きのみ）の範囲外のため未実装。
+
+### テスト
+
+- `test/dev/javatexteditor/buffer/HexDumpFormatterTest.java`に4テスト追加（計10テスト）:
+  `parse(format(bytes))`が単一行・複数行(20バイト)いずれも完全に一致すること、0バイトの往復、
+  `hexDigitColumn`/`asciiColumn`の単調増加性。
+- `test/dev/javatexteditor/editor/BinaryEditModeTest.java`（新設・8テストメソッド/16アサーション）:
+  16進数2桁上書きと`:w`保存後のファイル内容、1桁目/2桁目でのカーソル自動前進、先頭/末尾での
+  カーソルクランプ、undo（`u`）による編集の取り消し、`:b`によるテキスト⇔バイナリの内容保持往復、
+  バイナリモード中の編集がトグル後のテキストに反映されること、不正なUTF-8バイト列はテキストへ
+  戻せずMode.BINARYのまま留まること、Mode.BINARY中に`:w`等`:b`以外のコマンドを実行しても
+  Mode.BINARYへ復帰すること。
+- `test/dev/javatexteditor/editor/BinaryFileOpenTest.java`は新方式に合わせて全面的に書き換えた
+  （読み取り専用前提のアサーションを、Mode.BINARYへ入ること・`currentFilePath`が実パスになること・
+  無編集での`:w`がバイト列を完全に保つことの検証に置き換えた）。
