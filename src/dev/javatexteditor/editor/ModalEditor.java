@@ -5355,10 +5355,16 @@ public class ModalEditor {
      */
     private <T> T withTimeout(Supplier<T> task) {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        Future<T> future = null;
         try {
-            Future<T> future = executor.submit(task::get);
+            future = executor.submit(task::get);
             return future.get(PROJECT_SYMBOL_SEARCH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
+            // タイムアウトした検索タスクへ割り込み、ProjectSearcher 側の協調キャンセル
+            //（walk の TERMINATE / 並列 grep タスクの早期リターン）を発動させる。
+            // これが無いとタイムアウト後もバックグラウンドの検索が走り続け、
+            // Shift+K を連打するとスレッドが積み重なる既知の残課題があった（軽量化 Phase 3 で解消）。
+            future.cancel(true);
             return null;
         } catch (Exception e) {
             return null;

@@ -10,6 +10,10 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -19,6 +23,14 @@ import java.util.regex.PatternSyntaxException;
  * Java SE 標準の Files.walkFileTree() と java.util.regex を使用。
  * バイナリファイルや読み取れないファイルは静かにスキップする。
  * マッチは大文字小文字を区別しない（CASE_INSENSITIVE。FileNameSearcher と同じ方針）。
+ *
+ * 軽量化リファクタリング Phase 3:
+ * 「①逐次 walk でパス収集 → ②仮想スレッドでファイルごとに並列 grep → ③submit 順に連結」
+ * の2段階構成。結果順序は従来の逐次実装（walk 順・ファイル内は行昇順）と同一。
+ * 呼び出し元から見た同期的なブロッキング契約（processKey 直後に結果を assert できる）は
+ * 変更していない。walk と各 grep タスクは割り込みを検査するため、呼び出し側
+ * （ModalEditor.withTimeout）がタイムアウトで future.cancel(true) すると協調的に停止する
+ *（従来はタイムアウト後も walkFileTree が走り続けるスレッド残留が既知の残課題だった）。
  */
 public class ProjectSearcher {
 
@@ -69,18 +81,30 @@ public class ProjectSearcher {
      */
     public List<SearchResult> search(Path baseDir, String pattern, boolean fullScan) {
         Pattern regex = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);
-        List<SearchResult> results = new ArrayList<>();
 
         if (!Files.isDirectory(baseDir)) {
-            return results;
+            return new ArrayList<>();
         }
 
+        List<Path> candidates = collectCandidateFiles(baseDir, fullScan);
+        return grepFilesInParallel(candidates, regex, baseDir);
+    }
+
+    /**
+     * 第1段階: 対象ファイルのパスだけを逐次 walk で収集する（メタデータのみ・内容は読まない）。
+     * スキップ規則・2MB上限は従来の visitFile 内判定と同一。
+     */
+    private List<Path> collectCandidateFiles(Path baseDir, boolean fullScan) {
+        List<Path> candidates = new ArrayList<>();
         try {
             Files.walkFileTree(baseDir, new SimpleFileVisitor<Path>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        return FileVisitResult.TERMINATE; // タイムアウトによる協調キャンセル
+                    }
                     if (attrs.size() <= MAX_FILE_SIZE_BYTES) {
-                        searchFile(file, regex, baseDir, results);
+                        candidates.add(file);
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -93,6 +117,9 @@ public class ProjectSearcher {
 
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        return FileVisitResult.TERMINATE; // タイムアウトによる協調キャンセル
+                    }
                     if (fullScan) {
                         return FileVisitResult.CONTINUE;
                     }
@@ -106,19 +133,51 @@ public class ProjectSearcher {
         } catch (IOException e) {
             // walkFileTree 自体は通常 IOException を投げないが念のため
         }
+        return candidates;
+    }
 
+    /**
+     * 第2段階: 候補ファイルを仮想スレッドで並列に grep する。
+     * Future を submit 順に get して連結するため、結果順序は逐次実装（walk 順）と同一。
+     * ファイル I/O 主体の処理のためファイル数ぶんの仮想スレッドを一括生成してよい
+     *（実際の同時 I/O はキャリアスレッド数に律速され、FD を使い果たすことはない）。
+     */
+    private List<SearchResult> grepFilesInParallel(List<Path> files, Pattern regex, Path baseDir) {
+        List<SearchResult> results = new ArrayList<>();
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<List<SearchResult>>> futures = new ArrayList<>(files.size());
+            for (Path file : files) {
+                futures.add(executor.submit(() -> searchFile(file, regex, baseDir)));
+            }
+            for (Future<List<SearchResult>> future : futures) {
+                results.addAll(future.get());
+            }
+        } catch (InterruptedException e) {
+            // withTimeout 側の future.cancel(true)（タイムアウト）による割り込み。
+            // 割り込みフラグを立て直すことで try-with-resources の close() が
+            // shutdownNow() 相当の即時停止に切り替わり、残タスクは searchFile 冒頭の
+            // 割り込みチェックで速やかに空リストを返して終了する。
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            // searchFile は IOException 等を内部で握りつぶして空リストを返すため通常到達しない
+        }
         return results;
     }
 
-    private void searchFile(Path file, Pattern regex, Path baseDir, List<SearchResult> results) {
+    /** 1ファイルを grep してそのファイル内の一致（行昇順）を返す。共有状態は持たない（並列実行のため）。 */
+    private List<SearchResult> searchFile(Path file, Pattern regex, Path baseDir) {
+        List<SearchResult> results = new ArrayList<>();
+        if (Thread.currentThread().isInterrupted()) {
+            return results; // タイムアウト後の残タスクは読み込みを始めず即終了する
+        }
         // バイナリファイルのクイックチェック（先頭 8KB を読んで NUL バイトがあればスキップ）
         try {
             byte[] head = readHead(file, 8192);
             for (byte b : head) {
-                if (b == NUL) return;
+                if (b == NUL) return results;
             }
         } catch (IOException e) {
-            return;
+            return results;
         }
 
         List<String> lines;
@@ -126,9 +185,9 @@ public class ProjectSearcher {
             lines = Files.readAllLines(file, StandardCharsets.UTF_8);
         } catch (MalformedInputException e) {
             // UTF-8 でデコードできないファイル（バイナリ等）はスキップ
-            return;
+            return results;
         } catch (IOException e) {
-            return;
+            return results;
         }
 
         String relativePath = baseDir.relativize(file).toString();
@@ -142,6 +201,7 @@ public class ProjectSearcher {
                 results.add(new SearchResult(relativePath, i + 1, line));
             }
         }
+        return results;
     }
 
     private byte[] readHead(Path file, int maxBytes) throws IOException {
