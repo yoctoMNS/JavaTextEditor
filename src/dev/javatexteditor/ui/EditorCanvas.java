@@ -307,11 +307,28 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * 一切知る術がなく、変換中の文字列を表示する浮動ウィンドウがカーソルと無関係な位置
      * （画面端等）に表示されてしまう。
      *
-     * 一方で、この浮動ウィンドウ（ネイティブ側）自体にも変換中の文字列が表示されるため、
-     * カーソルのすぐ下（1行分だけ下）を返すと、EditorCanvas自前の drawImeComposition() の
-     * 表示（カーソル位置そのもの＝現在行）と重なって見えることが実機検証で判明した。
-     * そのため、意図的にさらに1行分（計2行分）下にずらした位置を返し、自前のリアルタイム
-     * 入力表示（現在行）とネイティブ側の変換候補ウィンドウ（2行下）が重ならないようにしている。
+     * 【2026-07修正】以前はここで「カーソル位置より2行分下」という人為的なオフセットを
+     * 返していた（自前の drawImeComposition() オーバーレイ＝現在行の表示とネイティブ側の
+     * 変換候補ウィンドウが重ならないようにする狙いだったが、実機未検証のままの推測値だった）。
+     * しかしWindows 11実機での検証で、この人為的なオフセットが原因で逆に不具合が起きることが
+     * 判明した: カーソルが画面下寄りにある状態でさらに2行分下の座標を報告すると、その座標が
+     * 画面（モニタ）下端を超えてしまい、Windows側のIMEが「上に反転して表示する」判断を行う際の
+     * 基準点も人為的にずれたものになる。その結果、反転後の候補ウィンドウがカーソルから大きく
+     * 離れた位置（画面上部の無関係な行）に重なって表示されてしまっていた。
+     *
+     * 正しい修正は、カーソルの実際の画面座標をそのまま返すこと。IME側（Windows/macOS/Linux
+     * いずれも）はこの座標を基準に、画面の残り空間を見て候補ウィンドウを下または上に自動配置する
+     * ロジックを標準で持っており、これは他の多くの非JTextComponent系ネイティブアプリ（ターミナル
+     * エミュレータ等）が採用している一般的な方式でもある。人為的なオフセットで「先回りして」
+     * ずらす必要はなく、むしろその方が実際の画面端付近での誤配置を誘発する。
+     *
+     * ネイティブの候補ウィンドウは通常この矩形の下端（= 現在行の下）を起点に表示されるため、
+     * 自前の drawImeComposition() オーバーレイ（現在行そのもの）と直接重なることは基本的にない。
+     * なお、変換中の未確定文字列自体をネイティブ側が別途カーソル直上に描画する場合（プラット
+     * フォームのover-the-spot挙動）、自前オーバーレイと同じ文字列が二重に見える可能性は残るが、
+     * これは同一内容の重複描画であり、今回報告された「候補ウィンドウが無関係なテキストと重なって
+     * 読めなくなる」問題とは別種の軽微な既知の制約として許容する（実機再検証が必要な場合は
+     * .claude/skills/gui-rendering-pipeline/SKILL.md 参照）。
      */
     private final InputMethodRequests imeRequests = new InputMethodRequests() {
         @Override
@@ -329,7 +346,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             String line = (cursorRow < cachedLines.length) ? cachedLines[cursorRow] : "";
             int x = xForCol(line, cursorCol, charWidth) - scrollCol * charWidth + gutterWidth;
             int y = screenRow * lineHeight;
-            return new Rectangle(base.x + x, base.y + y + 2 * lineHeight, 1, lineHeight);
+            return new Rectangle(base.x + x, base.y + y, 1, lineHeight);
         }
 
         @Override

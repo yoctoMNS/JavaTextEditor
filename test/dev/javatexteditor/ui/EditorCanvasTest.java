@@ -419,7 +419,9 @@ public class EditorCanvasTest {
 
         // =====================================================================
         // IME変換中文字列のリアルタイムオーバーレイ表示テスト
-        // （ネイティブIME側の候補ウィンドウ位置は意図的に2行下へずらしており重ならない）
+        // （ネイティブIME側の候補ウィンドウ位置は実際のカーソル座標をそのまま返す。
+        //  2026-07: 「2行下にずらす」人為的オフセットはWindows11実機で誤配置・重なりを
+        //  引き起こすことが判明したため撤去した。詳細はEditorCanvas.imeRequestsのJavadoc参照）
         // =====================================================================
 
         // Test 31: IME変換中の未確定文字列がカーソル位置にリアルタイムでオーバーレイ表示される
@@ -470,8 +472,9 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        // Test 33: ネイティブIME側の候補ウィンドウ位置（getTextLocation）は、自前オーバーレイの
-        // 描画行（現在行）とは重ならないよう2行下にずらされている
+        // Test 33: ネイティブIME側の候補ウィンドウ位置（getTextLocation）は、人為的なオフセット
+        // を加えず、実際のカーソル行の画面座標をそのまま返す（Windows11実機で「2行下」オフセット
+        // が誤配置・重なりを引き起こすことが判明したため撤去した。IME自身の画面端判定に委ねる）
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -481,12 +484,11 @@ public class EditorCanvasTest {
 
             java.awt.Rectangle loc = canvas.getInputMethodRequests()
                 .getTextLocation(null);
-            // cellH=20のため、現在行(0)の2行下はy方向オフセットで40になるはず
-            // （getLocationOnScreen()が使えないヘッドレス環境ではオフセット0が基準になるため
-            //  base.y分の誤差は出るが、最低でも2*lineHeight=40以上ずれていることを確認する）
-            boolean ok = loc != null && loc.y >= 40;
+            // getLocationOnScreen()が使えないヘッドレス環境ではbase=(0,0)になるため、
+            // 現在行(0)のy座標はオフセットなしでちょうど0になるはず
+            boolean ok = loc != null && loc.y == 0;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
-                + "ネイティブIME候補ウィンドウが自前オーバーレイと重ならない位置(2行下)を返す: y=" + (loc != null ? loc.y : "null"));
+                + "ネイティブIME候補ウィンドウがカーソルの実座標(オフセットなし)を返す: y=" + (loc != null ? loc.y : "null"));
             pass += ok ? 1 : 0;
         }
 
