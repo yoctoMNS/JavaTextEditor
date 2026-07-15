@@ -143,6 +143,12 @@ for (int i = 0; i < N; i++) sb.append("...");
 PieceTable t = new PieceTable(sb.toString()); // O(1)
 ```
 
+> **追記（2026-07 軽量化リファクタリング Phase 1）**: `PieceTable.insert()` に連続挿入のピース結合が、
+> `length()` に O(1) キャッシュが入ったため、上記の「NG」パターン（`t.insert(t.length(), ...)` の反復）は
+> 連続タイピングに関しては O(n) 相当で完走するようになった（`LargeFileTest.testTypingAtLengthOffset20k`
+> が回帰テストとして固定）。ただしランダムな位置への編集の蓄積ではピース数が増え、線形走査のコストが
+> 戻ってくる点は変わらないため、「大きな初期テキストはコンストラクタに渡す」指針は引き続き有効。
+
 ## マルチバイト文字の扱い
 
 Java の `String` は UTF-16 で、全角文字（U+0000〜U+FFFF）は `charAt()` 1文字 = オフセット1。

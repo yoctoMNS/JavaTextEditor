@@ -14,6 +14,7 @@ public class LargeFileTest {
     private static final long THRESHOLD_GETTEXT_100K = 1000; // 10万行 getText
     private static final long THRESHOLD_UNDO_50      = 500;  // 50回アンドゥ
     private static final long THRESHOLD_OFFSETLINE   = 1000; // 1000行目のオフセット計算
+    private static final long THRESHOLD_TYPING_20K   = 500;  // 連続タイピング2万キー相当
 
     public static void main(String[] args) {
         testOpen100kLines();
@@ -22,6 +23,8 @@ public class LargeFileTest {
         testGetTextOn100kLines();
         testUndoRedo50Times();
         testOffsetOfLineLargeDocument();
+        testSequentialTyping20k();
+        testTypingAtLengthOffset20k();
 
         int fail = total - pass;
         System.out.println("---");
@@ -137,6 +140,36 @@ public class LargeFileTest {
 
         // 正確性チェック: 0行目は0
         check("大規模文書 offsetOfLine(0)==0", 0, t.offsetOfLine(0));
+    }
+
+    // 連続タイピング2万キー相当（Phase 1 ピース結合の回帰テスト）。
+    // 結合が無いと1キーごとにピースが増え、この操作は O(K^2)（数十秒規模）に劣化する。
+    static void testSequentialTyping20k() {
+        PieceTable t = new PieceTable("");
+        long start = System.currentTimeMillis();
+        int offset = 0;
+        for (int i = 0; i < 20_000; i++) {
+            t.insert(offset, "x");
+            offset++;
+        }
+        long elapsed = System.currentTimeMillis() - start;
+        System.out.println("[PERF] 連続タイピング2万キー: " + elapsed + "ms (threshold=" + THRESHOLD_TYPING_20K + "ms)");
+        checkPerf("連続タイピング2万キーが閾値内", THRESHOLD_TYPING_20K, elapsed);
+        check("連続タイピング後length==20000", true, t.length() == 20_000);
+    }
+
+    // かつて editor-testing-strategy スキルで「NG（O(n²)）」とされていた
+    // 「t.length() を毎回呼ぶ」パターンが、length() O(1)化＋ピース結合で実用速度になったことの固定
+    static void testTypingAtLengthOffset20k() {
+        PieceTable t = new PieceTable("");
+        long start = System.currentTimeMillis();
+        for (int i = 0; i < 20_000; i++) {
+            t.insert(t.length(), "y");
+        }
+        long elapsed = System.currentTimeMillis() - start;
+        System.out.println("[PERF] length()参照タイピング2万キー: " + elapsed + "ms (threshold=" + THRESHOLD_TYPING_20K + "ms)");
+        checkPerf("length()参照タイピング2万キーが閾値内", THRESHOLD_TYPING_20K, elapsed);
+        check("length()参照タイピング後length==20000", true, t.length() == 20_000);
     }
 
     static void checkPerf(String name, long threshold, long actual) {
