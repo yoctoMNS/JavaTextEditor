@@ -9,6 +9,8 @@ import dev.javatexteditor.analysis.JdkTypeInfo;
 import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
+import dev.javatexteditor.buffer.BinaryFileDetector;
+import dev.javatexteditor.buffer.HexDumpFormatter;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.projectbuild.BuildDiagnostic;
 import dev.javatexteditor.projectbuild.BuildResult;
@@ -1918,16 +1920,18 @@ public class ModalEditor {
         if (item.filePath() == null) return;
         try {
             Path target = Path.of(item.filePath());
-            String content = Files.readString(target).replace("\r\n", "\n");
-            buffer = new UndoablePieceTable(content);
-            currentFilePath = target.toString();
+            FileLoadResult result = readFileContentForBuffer(target);
+            buffer = new UndoablePieceTable(result.text());
+            currentFilePath = result.binary() ? null : target.toString();
             fileNameResults = null;
             grepResults = null;
             clearSearchHighlights();
-            cursorRow = Math.max(0, item.lineNumber());
+            cursorRow = result.binary() ? 0 : Math.max(0, item.lineNumber());
             cursorCol = 0;
-            statusMessage = "\"" + target.getFileName() + "\" opened";
-            if (onFileOpened != null) {
+            statusMessage = result.binary()
+                ? "\"" + target.getFileName() + "\" [binary, read-only preview]"
+                : "\"" + target.getFileName() + "\" opened";
+            if (!result.binary() && onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(target.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
@@ -1965,16 +1969,18 @@ public class ModalEditor {
         if (target.filePath() == null) return;
         try {
             Path p = Path.of(target.filePath());
-            String content = Files.readString(p).replace("\r\n", "\n");
-            buffer = new UndoablePieceTable(content);
-            currentFilePath = p.toString();
+            FileLoadResult result = readFileContentForBuffer(p);
+            buffer = new UndoablePieceTable(result.text());
+            currentFilePath = result.binary() ? null : p.toString();
             fileNameResults = null;
             grepResults = null;
             clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
-            statusMessage = "\"" + p.getFileName() + "\" switched";
-            if (onFileOpened != null) {
+            statusMessage = result.binary()
+                ? "\"" + p.getFileName() + "\" [binary, read-only preview]"
+                : "\"" + p.getFileName() + "\" switched";
+            if (!result.binary() && onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(p.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
@@ -2065,14 +2071,16 @@ public class ModalEditor {
         Path base = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
         Path target = base.resolve(relPath);
         try {
-            String content = Files.readString(target).replace("\r\n", "\n");
-            buffer = new UndoablePieceTable(content);
-            currentFilePath = target.toString();
+            FileLoadResult result = readFileContentForBuffer(target);
+            buffer = new UndoablePieceTable(result.text());
+            currentFilePath = result.binary() ? null : target.toString();
             fileNameResults = null;
             clearSearchHighlights();
             cursorRow = 0;
             cursorCol = 0;
-            statusMessage = "\"" + relPath + "\" opened";
+            statusMessage = result.binary()
+                ? "\"" + relPath + "\" [binary, read-only preview]"
+                : "\"" + relPath + "\" opened";
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
@@ -2664,6 +2672,27 @@ public class ModalEditor {
         statusMessage = "チュートリアルを開きました — :q で終了、Ctrl+U で元のバッファに戻れます";
     }
 
+    /** ディスク上のファイルをバッファへ格納できるテキストへ変換した結果。 */
+    private record FileLoadResult(String text, boolean binary) {}
+
+    /**
+     * pathの内容を読み込みバッファ用テキストに変換する。UTF-8として妥当なテキストは
+     * そのまま（\r\n→\n正規化のうえ）返す。NULバイトを含む、またはUTF-8として不正な
+     * バイト列（画像・実行ファイル等のバイナリ、UTF-16等の他エンコーディング）は
+     * hexdump形式の読み取り専用プレビューテキストに変換して返す（{@link BinaryFileDetector}
+     * 参照）。呼び出し側は binary()==true の場合、currentFilePath を null のままにして
+     * このプレビューが元ファイルへ誤って保存されないようにすること（既存のgrep結果や
+     * compile結果の疑似バッファと同じ「ファイルパスなし＝保存不可」パターン）。
+     */
+    private FileLoadResult readFileContentForBuffer(Path path) throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        if (BinaryFileDetector.isBinary(bytes)) {
+            return new FileLoadResult(HexDumpFormatter.format(bytes, path.getFileName().toString()), true);
+        }
+        String text = new String(bytes, StandardCharsets.UTF_8).replace("\r\n", "\n");
+        return new FileLoadResult(text, false);
+    }
+
     private void loadFromFile(String path) {
         Path p = Path.of(path);
         if (!Files.exists(p)) {
@@ -2685,14 +2714,16 @@ public class ModalEditor {
         }
         try {
             pushBuffer();
-            String content = Files.readString(p).replace("\r\n", "\n");
-            buffer = new UndoablePieceTable(content);
-            currentFilePath = path;
+            FileLoadResult result = readFileContentForBuffer(p);
+            buffer = new UndoablePieceTable(result.text());
+            currentFilePath = result.binary() ? null : path;
             cursorRow = 0;
             cursorCol = 0;
             resetSearchAndResultState();
-            statusMessage = "\"" + path + "\" opened";
-            if (onFileOpened != null) {
+            statusMessage = result.binary()
+                ? "\"" + path + "\" [binary, read-only preview]"
+                : "\"" + path + "\" opened";
+            if (!result.binary() && onFileOpened != null) {
                 String name = Path.of(path).getFileName().toString();
                 onFileOpened.accept(new BufferPicker.BufferEntry(name, path));
             }
@@ -2849,16 +2880,19 @@ public class ModalEditor {
         Path base = (grepBaseDir != null) ? grepBaseDir : getProjectRoot();
         Path target = base.resolve(r.filePath());
         try {
-            String content = Files.readString(target).replace("\r\n", "\n");
-            buffer = new UndoablePieceTable(content);
-            currentFilePath = target.toString();
+            FileLoadResult result = readFileContentForBuffer(target);
+            buffer = new UndoablePieceTable(result.text());
+            currentFilePath = result.binary() ? null : target.toString();
             inJdkSourceBuffer = false;
             grepResults = null;
             clearSearchHighlights();
-            // 目的の行へジャンプ（1-indexed → 0-indexed）
-            cursorRow = Math.max(0, r.lineNumber() - 1);
+            // 目的の行へジャンプ（1-indexed → 0-indexed）。バイナリはhexdumpに行の概念が
+            // ないため先頭に留める。
+            cursorRow = result.binary() ? 0 : Math.max(0, r.lineNumber() - 1);
             cursorCol = 0;
-            statusMessage = "\"" + r.filePath() + "\" line " + r.lineNumber();
+            statusMessage = result.binary()
+                ? "\"" + r.filePath() + "\" [binary, read-only preview]"
+                : "\"" + r.filePath() + "\" line " + r.lineNumber();
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }

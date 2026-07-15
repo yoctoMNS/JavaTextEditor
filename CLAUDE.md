@@ -600,3 +600,52 @@ project-root/
   F10/F11未実行時はSPC+bの候補に出ないこと、実行後は候補に出て選択すると元の内容が復元されること、
   別の疑似バッファ（`*run*`）へ画面が差し替わった後でも`*compile*`のキャッシュが保持され続けることを
   検証。
+
+## 任意のファイル種別を開けるようにする対応（バイナリファイルの読み取り専用hexdumpプレビュー）
+
+- **要望**: 「いかなる種類のファイルもテキストエディタで開くことができるように」という依頼。
+- **調査結果**: `loadFromFile()`（`:e`コマンド・FILER・Shift+K定義ジャンプが経由）に加え、
+  `openTelescopeSelection()`（SPC+f等）・`switchToRelativeBuffer()`（Ctrl+U/Ctrl+P・`:bnext`/`:bprev`）・
+  `jumpToFileNameResult()`（`\f`）・`jumpToGrepResult()`（`\g`/`gr`）の計4箇所が独立して
+  `Files.readString(path)`（charset省略＝UTF-8決め打ち）を呼んでおり、ファイルを開く処理が5系統に
+  分散していた。バイナリ・非UTF-8ファイルは`MalformedInputException`（`IOException`のサブクラス）で
+  失敗し、クラッシュはしないが`statusMessage`にJDK内部のそっけないエラーが出るだけで開けなかった。
+- **方針決定**: 実装前に`AskUserQuestion`で2点確認した。
+  1. 非UTF-8ファイルの扱い: 「バイナリと判定したファイルは編集不可の読み取り専用プレビュー
+     （hexdump風表示）として開く」を選択（クリップボード機能のISO-8859-1可逆変換をそのまま
+     編集可能にする案、主要日本語エンコーディングを自動判定する案は不採用）。
+  2. ファイルサイズ上限: 「上限なし」を選択（`WordIndex`/`ProjectSearcher`の2MB上限は流用しない）。
+- **実装**:
+  - `dev.javatexteditor.buffer.BinaryFileDetector`（新設）: NULバイトを含む、または
+    `UTF_8.newDecoder().onMalformedInput/onUnmappableCharacter(REPORT)`で厳密デコードに失敗する
+    バイト列をバイナリと判定する純粋ロジック（Swing非依存）。`new String(bytes, UTF_8)`は不正
+    バイト列を`U+FFFD`に静かに置換してしまい判定に使えないため、あえて`CharsetDecoder`を直接使う。
+  - `dev.javatexteditor.buffer.HexDumpFormatter`（新設）: `hexdump -C`/`xxd`と同じ配置
+    （オフセット8桁・16進数16バイト・ASCII表現、印字不可能な文字は`.`）の読み取り専用プレビュー
+    テキストを生成する。1行目に`*binary* <ファイル名> — N bytes — read-only preview`という
+    ヘッダを置く（既存のgrep結果・filer一覧等の疑似バッファと同じ「ヘッダ行＋本体」構成を踏襲）。
+  - `ModalEditor.readFileContentForBuffer(Path)`（新設・private、`FileLoadResult(String text,
+    boolean binary)`を返す）にファイル読み込みロジックを一本化し、上記5箇所すべてから呼ぶように
+    変更した（FILERの`openSelectedEntry()`とShift+Kの定義ジャンプは`loadFromFile()`経由のため
+    追加変更なしで自動的に対応済み）。
+  - **`binary()==true`の場合、`currentFilePath`をnullのままにする設計にした**。これにより`:w`での
+    保存は既存の「no file name」エラーに自然にフォールバックし、元ファイルへの誤保存（バイト破損）を
+    構造的に防止する。新たな「読み取り専用モード」のフラグやキー入力ブロック機構は追加していない
+    （既存の`*grep*`/`*compile*`等の疑似バッファと全く同じ「ファイルパスなし＝保存不可」パターンを
+    そのまま踏襲しただけで、`modal-editing-engine`側の変更は不要だった）。
+  - 保存側のバイナリ書き戻し（クリップボード機能と同じISO-8859-1可逆変換等）は実装していない。
+    「読み取り専用プレビュー」という方針決定のため、そもそも保存経路自体が不要という判断。
+    クリップボード機能（Ctrl+Shift+V）のISO-8859-1可逆変換は「バイナリを貼り付けて編集可能にする」
+    という別要件のための設計であり、今回はあえて踏襲しなかった点に注意（混同しないこと）。
+- **意図的にスコープ外とした点**:
+  - ファイルサイズ上限は設けていない（ユーザー選択）。数GB級のファイルを開くと
+    `Files.readAllBytes`＋hexdump文字列構築がヒープを圧迫し`OutOfMemoryError`のリスクが残る、
+    という既知の制約として許容した。
+  - Shift_JIS/EUC-JP等、UTF-8以外の日本語テキストファイルも（UTF-8として不正なバイト列を含むため）
+    バイナリと同じ扱い（hexdumpプレビュー、編集不可）になる。エンコーディング自動判定は
+    ユーザーが不採用と判断した選択肢のため、日本語テキストとして正しく開く機能は未実装。
+- **テスト**: `test/dev/javatexteditor/buffer/BinaryFileDetectorTest.java`（新設・7テスト）・
+  `HexDumpFormatterTest.java`（新設・6テスト）・`test/dev/javatexteditor/editor/BinaryFileOpenTest.java`
+  （新設・4テストメソッド／7アサーション）。`:e`コマンドでバイナリファイルを開いてもクラッシュしない
+  こと・hexdumpプレビューが表示されること・`currentFilePath`が`null`になること・`:w`保存を試みても
+  元ファイルのバイト列が変化しないこと・通常のUTF-8テキストファイルは従来通り開けることを検証。
