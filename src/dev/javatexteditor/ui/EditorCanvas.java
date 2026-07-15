@@ -378,8 +378,17 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     };
 
     public void setText(String text) {
+        setText(text, text.split("\n", -1));
+    }
+
+    /**
+     * 行分割済み配列を伴う高速経路（ModalEditor.syncCanvas() のキャッシュ用。軽量化 Phase 2）。
+     * lines は必ず text.split("\n", -1) と同一内容であること。
+     * 渡された配列はコピーせずそのまま保持するため、呼び出し側は以後この配列を変更してはならない。
+     */
+    public void setText(String text, String[] lines) {
         this.text = text;
-        this.cachedLines = text.split("\n", -1);
+        this.cachedLines = lines;
         repaint();
     }
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }

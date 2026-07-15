@@ -755,7 +755,7 @@ project-root/
 | Phase | 対象 | 状態 |
 |---|---|---|
 | 1 | `PieceTable`: 連続挿入のピース結合・`length()`のO(1)キャッシュ・`addBuffer.toString()`コピー排除・`offsetOfLine()`の全文再構築排除 | ✅ 完了（`insert()`が「オフセット==ピース境界かつ直前ピースがaddBuffer末尾を指す」場合にピースを伸長する結合を追加。`length()`は`totalLength`フィールドでO(1)化。`getText()`/`getTextInRange()`は`addBuffer.toString()`によるADDピースごとの追加バッファ全体コピーを廃止しCharSequence範囲appendに変更。`offsetOfLine()`は全文再構築なしのピース直接走査に変更。undoスナップショット（`List.copyOf`によるピース参照コピー）とは独立のため1insert=1undoの粒度は不変（PieceTableTest Test 17で固定）。PieceTableTest 26/26・LargeFileTest 16/16 PASS。連続タイピング2万キー相当が1〜2ms（旧実装ではO(K²)的にピース数に比例して劣化する設計だった）） |
-| 2 | `syncCanvas()`: `getVersion()`＋バッファ参照一致による全文再構築キャッシュ（カーソル移動キーでは再構築ゼロ、編集キーでは1回のみ） | 未着手 |
+| 2 | `syncCanvas()`: `getVersion()`＋バッファ参照一致による全文再構築キャッシュ（カーソル移動キーでは再構築ゼロ、編集キーでは1回のみ） | ✅ 完了（`refreshCanvasTextCache()`を新設し`canvasTextOwner`＝バッファ参照一致＋`canvasTextVersion`＝`getVersion()`一致で失効判定。`syncCanvas()`内の2箇所の`buffer.getText()`直接呼び出しをキャッシュ経由に置換。**実装中に指示書の想定を超える発見があった**: `ModalEditor.getLines()`（`moveCursor()`等69箇所から呼ばれる別経路）が`syncCanvas()`とは独立に`buffer.getText().split("\n",-1)`を呼んでおり、カーソル移動1キーごとに全文再構築する支配的なホットパスだったため、同じキャッシュを`getLines()`にも適用した。`EditorRenderPerfTest`（10万行文書でカーソル移動1000回）はこの修正前は4612ms（閾値2000ms超過でFAIL）、修正後は18ms（256倍高速化）。`SyncCanvasCacheTest` 8/8・`EditorRenderPerfTest` 4/4 PASS） |
 | 3 | `ProjectSearcher`: 「逐次パス収集→仮想スレッド並列grep」の2段階化・タイムアウト時の`future.cancel(true)`による協調キャンセル（結果順序・同期契約・1500ms/2MB/スキップ規則は不変） | 未着手 |
 
 （各Phase完了時、実行者がこの表の状態・関連SKILL.md・上記2ドキュメントを更新する。ベースライン: 全70テストクラス中69クラスPASS・`ScrollTest`のみ既知2件FAIL＝仕様判断未決のため修正禁止）
