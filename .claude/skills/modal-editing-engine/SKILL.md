@@ -198,6 +198,25 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
   ネスト解決・Visual中の`%`拡張・charwise/linewise/blockwiseの`>`/`<`・空行/0未満クランプ・
   expandtab/shiftround・`gv`の範囲/種別復元。
 
+## `D`（カーソル位置から行末まで削除、2026-07 追加）
+
+- **`Shift+D` は Vim の `D`（`d$` 相当）と同じ「カーソル位置から行末までを削除する」単発コマンド**として実装した。
+  `dd`（`pendingSequence = "d"` からの2打鍵）とは独立しており、`KeymapRegistry` に
+  `bind(Mode.NORMAL, KeyBinding.ofChar('D', "delete.to.eol"), "delete.to.eol")` を追加しただけの単発アクション。
+  `d`+`$`（operator-pendingモーション）は②の既存スコープ外方針のまま未実装のため、`D` はそれを経由せず
+  独自に `deleteToEndOfLine()` を直接呼ぶ。
+- **アクション名 `"delete.to.eol"` は INSERT モードの Ctrl+K（行末まで削除、`.claude/skills`上部の
+  「Shift+Enter」節の少し上を参照）と同じ文字列を再利用しているが衝突しない**。`KeymapRegistry.Mode`
+  が NORMAL/INSERT で別マップに分かれており、`processNormalKey`/`processInsertKey` もそれぞれ独立した
+  `switch` のため、同名アクションでも別々の実装にディスパッチされる。
+- **`deleteToEndOfLine()` は削除した文字列を `yankRegister` に `YankType.CHAR` として保存する**（Vim の
+  `D` が charwise レジスタに入れる挙動に合わせた）。カーソル列が既に行末（削除対象が0文字）の場合は
+  何もしない no-op。削除後のカーソル位置は `Math.max(0, cursorCol - 1)`（行が空になった場合は列0、
+  それ以外は削除前のカーソル列の1つ手前＝新しい行末の最後の文字）で、`deleteCurrentLine()` 等
+  既存メソッドと同じクランプ規約に揃えた。
+- **テスト**: `test/dev/javatexteditor/editor/DeleteToEndOfLineTest.java`（新設・10テスト）。行途中/
+  行頭からの削除・行末でのno-op・ヤンクレジスタへの反映・他行への非影響・NORMALモード維持・undoを検証。
+
 ## テスト（完了条件）
 
 - 変更後は `./scripts/build.sh && ./scripts/test.sh` で全テスト PASS を確認する。

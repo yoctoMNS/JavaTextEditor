@@ -95,6 +95,7 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('P', "paste.before"), "paste.before");
         bind(Mode.NORMAL, KeyBinding.ofChar('y', "yank.pending"), "yank.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('d', "delete.pending"), "delete.pending");
+        bind(Mode.NORMAL, KeyBinding.ofChar('D', "delete.to.eol"), "delete.to.eol");
         // マクロ記録(q)・再生(@)
         bind(Mode.NORMAL, KeyBinding.ofChar('q', "macro.record.pending"), "macro.record.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('@', "macro.play.pending"),   "macro.play.pending");

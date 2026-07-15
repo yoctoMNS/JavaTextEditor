@@ -753,6 +753,7 @@ public class ModalEditor {
                 mode = Mode.VISUAL_BLOCK;
             }
             case "delete.char" -> deleteCharAtCursor();
+            case "delete.to.eol" -> deleteToEndOfLine();
             case "paste.after" -> pasteAfter();
             case "paste.before" -> pasteBefore();
             case "clipboard.paste" -> pasteFromSystemClipboard(true);
@@ -3768,6 +3769,19 @@ public class ModalEditor {
         int newLineLen = cursorRow < newLines.length ? newLines[cursorRow].length() : 0;
         cursorCol = Math.min(cursorCol, Math.max(0, newLineLen - 1));
         if (cursorCol < 0) cursorCol = 0;
+    }
+
+    /** カーソル位置から行末までを削除してヤンクレジスタに保存する（Vim の D 相当） */
+    private void deleteToEndOfLine() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return;
+        String line = lines[cursorRow];
+        if (cursorCol >= line.length()) return;
+        String deleted = line.substring(cursorCol);
+        yankRegister = deleted;
+        yankType = YankType.CHAR;
+        buffer.delete(offsetOfCursor(), deleted.length());
+        cursorCol = Math.max(0, cursorCol - 1);
     }
 
     /** r1〜r2 行（両端含む）を削除する。カーソルを r1 にリセットする */
