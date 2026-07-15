@@ -3994,8 +3994,15 @@ public class ModalEditor {
         return offsetAt(cursorRow, cursorCol);
     }
 
+    // 軽量化リファクタリング Phase 2: 当初 syncCanvas() 内の2箇所のみを対象にする想定だったが、
+    // 実測（EditorRenderPerfTest）により getLines() こそがカーソル移動のたびに呼ばれる支配的な
+    // ホットパスであることが判明した（本メソッドは moveCursor() 等から69箇所で呼ばれ、
+    // 呼ばれるたびに buffer.getText().split("\n", -1) で文書全体を再構築していた）。
+    // syncCanvas() と全く同じキャッシュ（canvasTextOwner/canvasTextVersion）を経由させることで、
+    // canvas の有無に関わらず「テキスト未変更なら再構築ゼロ」という Phase 2 の目標をこの経路にも適用する。
     private String[] getLines() {
-        return buffer.getText().split("\n", -1);
+        refreshCanvasTextCache();
+        return canvasCachedLines;
     }
 
     // -------------------------------------------------------------------------
@@ -4665,9 +4672,37 @@ public class ModalEditor {
         }
     }
 
+    // ===== syncCanvas() 用テキストキャッシュ（軽量化リファクタリング Phase 2） =====
+    // buffer.getText() と split("\n", -1) は文書全体を再構築する O(n) 処理で、
+    // 以前は syncCanvas() が1キー入力ごとに getText() を2回・split を2回実行していた
+    //（EditorCanvas.setText() 内の split を含む）。テキストが変化しないキー（カーソル移動等）
+    // では再構築自体が不要なため、UndoablePieceTable.getVersion()（insert/delete/undo/redo で
+    // 必ず増分する既存の版数）と buffer インスタンスの参照一致で有効性を判定するキャッシュを持つ。
+    // buffer は疑似バッファ切替等で別インスタンスに差し替わることがあるが、outputErrorLinesOwner /
+    // binaryModeOwner と同じ「参照一致による自動失効」パターンにより、差し替え箇所（約30箇所）に
+    // 一切手を入れずキャッシュも自動失効する。
+    private UndoablePieceTable canvasTextOwner = null;
+    private long canvasTextVersion = -1;
+    private String canvasCachedText = "";
+    private String[] canvasCachedLines = { "" };
+    // テスト用: キャッシュミスで全文再構築が起きた回数（SyncCanvasCacheTest が参照）
+    private long canvasTextRebuildCount = 0;
+
+    private void refreshCanvasTextCache() {
+        if (canvasTextOwner == buffer && canvasTextVersion == buffer.getVersion()) {
+            return; // テキスト未変更: 再構築しない（カーソル移動等はここを通る）
+        }
+        canvasCachedText = buffer.getText();
+        canvasCachedLines = canvasCachedText.split("\n", -1);
+        canvasTextOwner = buffer;
+        canvasTextVersion = buffer.getVersion();
+        canvasTextRebuildCount++;
+    }
+
     public void syncCanvas() {
         if (canvas != null) {
-            canvas.setText(buffer.getText());
+            refreshCanvasTextCache();
+            canvas.setText(canvasCachedText, canvasCachedLines);
             canvas.setErrorLines(outputErrorLinesOwner == buffer ? outputErrorLines : java.util.Set.of());
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
@@ -4688,14 +4723,14 @@ public class ModalEditor {
             }
 
             canvas.ensureCursorVisible(cursorRow);
-            String[] lines = buffer.getText().split("\n", -1);
+            String[] lines = canvasCachedLines;
             String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
             canvas.ensureCursorColVisible(cursorCol, curLine);
 
             // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
             // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、
             // 画面幅を2倍で扱う uiTextWidth 等の全角対応ロジックとは無関係）。
-            // 上の lines/curLine を再利用し、buffer.getText() の再構築を増やさない。
+            // canvasCachedLines を再利用し、buffer.getText() の再構築を増やさない。
             // syncCanvas() はキー入力1回につき1度だけ呼ばれるため、ここで計算しキャッシュしておく。
             // EditorCanvas側（30fpsのanimTimerでrepaintされるdrawStatusLine）では再計算しない設計。
             int totalChars = 0;
@@ -4748,6 +4783,8 @@ public class ModalEditor {
 
     public KeymapRegistry getKeymap()   { return keymap; }
     public String getText()            { return buffer.getText(); }
+    /** テスト用: syncCanvas() のテキストキャッシュが再構築された回数（軽量化 Phase 2）。 */
+    public long getCanvasTextRebuildCount() { return canvasTextRebuildCount; }
     public int getCursorRow()          { return cursorRow; }
     public int getCursorCol()          { return cursorCol; }
     public boolean isNormalMode()      { return mode == Mode.NORMAL; }
