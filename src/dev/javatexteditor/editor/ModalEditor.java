@@ -12,6 +12,11 @@ import dev.javatexteditor.analysis.ReceiverTypeResolver;
 import dev.javatexteditor.buffer.BinaryFileDetector;
 import dev.javatexteditor.buffer.HexDumpFormatter;
 import dev.javatexteditor.buffer.UndoablePieceTable;
+import dev.javatexteditor.classfile.ClassFile;
+import dev.javatexteditor.classfile.ClassFileFormatException;
+import dev.javatexteditor.classfile.ClassFileFormatter;
+import dev.javatexteditor.classfile.ClassFileParser;
+import dev.javatexteditor.classfile.MnemonicFormatter;
 import dev.javatexteditor.projectbuild.BuildDiagnostic;
 import dev.javatexteditor.projectbuild.BuildResult;
 import dev.javatexteditor.refactor.RenameRefactorer;
@@ -1948,7 +1953,13 @@ public class ModalEditor {
             fileNameResults = null;
             grepResults = null;
             clearSearchHighlights();
-            if (result.binary()) {
+            if (result.classFileBytes() != null) {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = null;
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + target.getFileName() + "\" [class, read-only preview]";
+            } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + target.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
@@ -1958,7 +1969,8 @@ public class ModalEditor {
                 cursorCol = 0;
                 statusMessage = "\"" + target.getFileName() + "\" opened";
             }
-            if (onFileOpened != null) {
+            trackClassFileBuffer(result);
+            if (result.classFileBytes() == null && onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(target.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
@@ -2000,7 +2012,13 @@ public class ModalEditor {
             fileNameResults = null;
             grepResults = null;
             clearSearchHighlights();
-            if (result.binary()) {
+            if (result.classFileBytes() != null) {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = null;
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + p.getFileName() + "\" [class, read-only preview]";
+            } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), p.getFileName().toString(), p.toString());
                 statusMessage = "\"" + p.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
@@ -2010,7 +2028,8 @@ public class ModalEditor {
                 cursorCol = 0;
                 statusMessage = "\"" + p.getFileName() + "\" switched";
             }
-            if (onFileOpened != null) {
+            trackClassFileBuffer(result);
+            if (result.classFileBytes() == null && onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(p.getFileName().toString(), currentFilePath));
             }
         } catch (IOException e) {
@@ -2104,7 +2123,13 @@ public class ModalEditor {
             FileLoadResult result = readFileContentForBuffer(target);
             fileNameResults = null;
             clearSearchHighlights();
-            if (result.binary()) {
+            if (result.classFileBytes() != null) {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = null;
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + relPath + "\" [class, read-only preview]";
+            } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + relPath + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
@@ -2114,6 +2139,7 @@ public class ModalEditor {
                 cursorCol = 0;
                 statusMessage = "\"" + relPath + "\" opened";
             }
+            trackClassFileBuffer(result);
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
@@ -2277,6 +2303,8 @@ public class ModalEditor {
             toggleBinaryMode();
         } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
             openTutorial();
+        } else if (cmd.equals("nimo")) {
+            showClassFileMnemonic();
         } else if (cmd.equals("main") || cmd.startsWith("main ")) {
             executeMain(cmd.equals("main") ? "" : cmd.substring(5).trim());
         } else if (cmd.startsWith("grep! ")) {
@@ -2725,25 +2753,74 @@ public class ModalEditor {
 
     /**
      * ディスク上のファイルをバッファへ格納できるテキストへ変換した結果。
-     * binary()==true の場合、text() は使わず rawBytes() を {@link #enterBinaryMode} に渡すこと
-     * （呼び出し側は5箇所あり、いずれも同じ分岐パターンを踏襲する）。
+     * classFileBytes は .class ファイル（マジックナンバー一致）を開いた場合のみ非null（:nimo用に
+     * 生バイト列を保持する。この場合 binary() は false のままにし、Mode.BINARY には入らず
+     * 読み取り専用の構造ビューとして表示する。currentFilePath は他の読み取り専用プレビュー同様
+     * null 扱いにすること）。binary()==true の場合、text() は使わず rawBytes() を
+     * {@link #enterBinaryMode} に渡すこと（呼び出し側は5箇所あり、いずれも同じ分岐パターンを踏襲する）。
      */
-    private record FileLoadResult(String text, boolean binary, byte[] rawBytes) {}
+    private record FileLoadResult(String text, boolean binary, byte[] rawBytes, byte[] classFileBytes, String classFileDisplayName) {}
+
+    private static final int CLASS_FILE_MAGIC_0 = 0xCA;
+    private static final int CLASS_FILE_MAGIC_1 = 0xFE;
+    private static final int CLASS_FILE_MAGIC_2 = 0xBA;
+    private static final int CLASS_FILE_MAGIC_3 = 0xBE;
+
+    /** バイト列の先頭4バイトがJVM仕様のクラスファイル・マジックナンバー(0xCAFEBABE)と一致するか。 */
+    private static boolean looksLikeClassFile(byte[] bytes) {
+        return bytes.length >= 4
+                && (bytes[0] & 0xFF) == CLASS_FILE_MAGIC_0
+                && (bytes[1] & 0xFF) == CLASS_FILE_MAGIC_1
+                && (bytes[2] & 0xFF) == CLASS_FILE_MAGIC_2
+                && (bytes[3] & 0xFF) == CLASS_FILE_MAGIC_3;
+    }
 
     /**
      * pathの内容を読み込みバッファ用テキストに変換する。UTF-8として妥当なテキストは
-     * そのまま（\r\n→\n正規化のうえ）返す。NULバイトを含む、またはUTF-8として不正な
-     * バイト列（画像・実行ファイル等のバイナリ、UTF-16等の他エンコーディング）は
-     * Mode.BINARY（{@link #enterBinaryMode}）へ渡すための生バイト列を返す
-     * （{@link BinaryFileDetector} 参照）。
+     * そのまま（\r\n→\n正規化のうえ）返す。マジックナンバーが .class ファイルと一致する場合は
+     * {@link dev.javatexteditor.classfile.ClassFileParser} で構造解析し、JVM仕様通りの
+     * 文字化けしない構造ビュー（{@link dev.javatexteditor.classfile.ClassFileFormatter}）を
+     * 読み取り専用プレビューとして返す。解析に失敗した場合（壊れた.class等）は通常のバイナリ判定
+     * にフォールスルーする。NULバイトを含む、またはUTF-8として不正なバイト列（画像・実行ファイル等
+     * のバイナリ、UTF-16等の他エンコーディング）は Mode.BINARY（{@link #enterBinaryMode}）へ
+     * 渡すための生バイト列を返す（{@link BinaryFileDetector} 参照）。
      */
     private FileLoadResult readFileContentForBuffer(Path path) throws IOException {
         byte[] bytes = Files.readAllBytes(path);
+        String displayName = path.getFileName().toString();
+        if (looksLikeClassFile(bytes)) {
+            try {
+                ClassFile classFile = ClassFileParser.parse(bytes);
+                String text = ClassFileFormatter.format(classFile, displayName);
+                return new FileLoadResult(text, false, null, bytes, displayName);
+            } catch (ClassFileFormatException e) {
+                // 壊れた.class: 通常のバイナリ判定（Mode.BINARY）にフォールスルーする
+            }
+        }
         if (BinaryFileDetector.isBinary(bytes)) {
-            return new FileLoadResult(null, true, bytes);
+            return new FileLoadResult(null, true, bytes, null, null);
         }
         String text = new String(bytes, StandardCharsets.UTF_8).replace("\r\n", "\n");
-        return new FileLoadResult(text, false, null);
+        return new FileLoadResult(text, false, null, null, null);
+    }
+
+    /**
+     * readFileContentForBuffer() が .class ファイルを検出した場合、:nimo コマンド用に
+     * 生バイト列とファイル名を記録する。classFileBufferOwner に buffer 参照そのものを控えておくことで、
+     * 別のバッファへ切り替わった時点で参照不一致により自動的に :nimo が無効化される
+     * （outputErrorLinesOwner と同じ「参照一致による自動失効」パターンを踏襲）。
+     * buffer への代入（`buffer = new UndoablePieceTable(result.text())`）の直後に呼ぶこと。
+     */
+    private void trackClassFileBuffer(FileLoadResult result) {
+        if (result.classFileBytes() != null) {
+            classFileBytes = result.classFileBytes();
+            classFileName = result.classFileDisplayName();
+            classFileBufferOwner = buffer;
+        } else {
+            classFileBytes = null;
+            classFileName = null;
+            classFileBufferOwner = null;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -2925,7 +3002,13 @@ public class ModalEditor {
             FileLoadResult result = readFileContentForBuffer(p);
             resetSearchAndResultState();
             String name = p.getFileName().toString();
-            if (result.binary()) {
+            if (result.classFileBytes() != null) {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = null;
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + path + "\" [class, read-only preview]";
+            } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), name, path);
                 statusMessage = "\"" + path + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
@@ -2935,7 +3018,8 @@ public class ModalEditor {
                 cursorCol = 0;
                 statusMessage = "\"" + path + "\" opened";
             }
-            if (onFileOpened != null) {
+            trackClassFileBuffer(result);
+            if (result.classFileBytes() == null && onFileOpened != null) {
                 onFileOpened.accept(new BufferPicker.BufferEntry(name, path));
             }
         } catch (IOException e) {
@@ -3095,7 +3179,13 @@ public class ModalEditor {
             inJdkSourceBuffer = false;
             grepResults = null;
             clearSearchHighlights();
-            if (result.binary()) {
+            if (result.classFileBytes() != null) {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = null;
+                cursorRow = 0;
+                cursorCol = 0;
+                statusMessage = "\"" + r.filePath() + "\" [class, read-only preview]";
+            } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + r.filePath() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
@@ -3105,6 +3195,7 @@ public class ModalEditor {
                 cursorCol = 0;
                 statusMessage = "\"" + r.filePath() + "\" line " + r.lineNumber();
             }
+            trackClassFileBuffer(result);
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
@@ -4718,6 +4809,36 @@ public class ModalEditor {
     private String lastRunBufferText = null;
     private static final String PSEUDO_COMPILE_PATH = "*compile*";
     private static final String PSEUDO_RUN_PATH = "*run*";
+
+    // .classファイルビューア（:nimo コマンド）用の状態。classFileBufferOwner は
+    // outputErrorLinesOwner と同じ「参照一致による自動失効」パターン: buffer が別の
+    // 疑似バッファ/ファイルに差し替わった時点で参照が一致しなくなり :nimo は自動的に無効化される。
+    private byte[] classFileBytes = null;
+    private String classFileName = null;
+    private UndoablePieceTable classFileBufferOwner = null;
+
+    /** :nimo — 現在開いている.classファイル構造ビューをニーモニック（javap -c風）表示に切り替える。 */
+    private void showClassFileMnemonic() {
+        if (classFileBytes == null || classFileBufferOwner != buffer) {
+            statusMessage = "E: not viewing a .class file";
+            return;
+        }
+        try {
+            ClassFile parsed = ClassFileParser.parse(classFileBytes);
+            String text = MnemonicFormatter.format(parsed, classFileName);
+            buffer = new UndoablePieceTable(text);
+            currentFilePath = null;
+            clearSearchHighlights();
+            cursorRow = 0;
+            cursorCol = 0;
+            // 引き続き同じ.classバイト列を指しているので、mnemonic表示バッファもこの後の
+            // 追跡対象として維持する（もう一度 :nimo しても同じ内容が再表示されるだけ）。
+            classFileBufferOwner = buffer;
+            statusMessage = "\"" + classFileName + "\" mnemonic view";
+        } catch (ClassFileFormatException e) {
+            statusMessage = "E: failed to disassemble: " + e.getMessage();
+        }
+    }
 
     public void showCompileResult(BuildResult result) {
         StringBuilder sb = new StringBuilder();
