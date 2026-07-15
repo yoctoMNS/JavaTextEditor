@@ -104,47 +104,58 @@ public class SourceAnalyzer {
     private void collectTopLevelSymbols(Tree typeDecl, CompilationUnitTree unit,
                                         SourcePositions positions, List<SymbolEntry> symbols) {
         switch (typeDecl) {
-            case ClassTree ct -> {
-                SymbolKind kind = switch (ct.getKind()) {
-                    case INTERFACE -> SymbolKind.INTERFACE;
-                    case ENUM -> SymbolKind.ENUM;
-                    default -> SymbolKind.CLASS;
-                };
-
-                long startPos = positions.getStartPosition(unit, ct);
-                int lineNum = (int) unit.getLineMap().getLineNumber(startPos) - 1;
-                int offset = (int) startPos;
-
-                String superTypeName = simpleTypeNameOf(ct.getExtendsClause());
-                symbols.add(new SymbolEntry(ct.getSimpleName().toString(), kind, lineNum, offset, superTypeName));
-
-                // クラス内のメソッド・フィールド・コンストラクタを収集（ネストしたクラスは除外）
-                for (Tree member : ct.getMembers()) {
-                    switch (member) {
-                        case MethodTree mt -> {
-                            long mStart = positions.getStartPosition(unit, mt);
-                            int mLine = (int) unit.getLineMap().getLineNumber(mStart) - 1;
-                            int mOffset = (int) mStart;
-                            String name = mt.getName().toString();
-                            SymbolKind mKind = name.equals("<init>")
-                                ? SymbolKind.CONSTRUCTOR : SymbolKind.METHOD;
-                            // コンストラクタ名はクラス名にする
-                            String displayName = mKind == SymbolKind.CONSTRUCTOR
-                                ? ct.getSimpleName().toString() : name;
-                            symbols.add(new SymbolEntry(displayName, mKind, mLine, mOffset, null));
-                        }
-                        case VariableTree vt -> {
-                            long vStart = positions.getStartPosition(unit, vt);
-                            int vLine = (int) unit.getLineMap().getLineNumber(vStart) - 1;
-                            int vOffset = (int) vStart;
-                            symbols.add(new SymbolEntry(
-                                vt.getName().toString(), SymbolKind.FIELD, vLine, vOffset, null));
-                        }
-                        default -> {} // ネストしたクラスは収集しない
-                    }
-                }
-            }
+            case ClassTree ct -> collectClassSymbols(ct, unit, positions, symbols);
             default -> {} // 型宣言以外（エラーノード等）は無視
+        }
+    }
+
+    /**
+     * クラス/インタフェース/enum 1つ分の宣言・メンバーを収集する。ネストした型宣言
+     * （内部クラス・静的ネストクラス）は同じロジックで再帰的に処理し、そのメンバー
+     * （メソッド・フィールド・コンストラクタ）も含めてフラットな symbols リストに追加する。
+     * これにより「ネストクラス内で自分自身の兄弟メソッドを無資格呼び出しした際に
+     * Shift+K で見つからない」という不具合（symbol-definition-navigation スキル参照）を解消する。
+     */
+    private void collectClassSymbols(ClassTree ct, CompilationUnitTree unit,
+                                      SourcePositions positions, List<SymbolEntry> symbols) {
+        SymbolKind kind = switch (ct.getKind()) {
+            case INTERFACE -> SymbolKind.INTERFACE;
+            case ENUM -> SymbolKind.ENUM;
+            default -> SymbolKind.CLASS;
+        };
+
+        long startPos = positions.getStartPosition(unit, ct);
+        int lineNum = (int) unit.getLineMap().getLineNumber(startPos) - 1;
+        int offset = (int) startPos;
+
+        String superTypeName = simpleTypeNameOf(ct.getExtendsClause());
+        symbols.add(new SymbolEntry(ct.getSimpleName().toString(), kind, lineNum, offset, superTypeName));
+
+        // クラス内のメソッド・フィールド・コンストラクタ・ネストした型宣言を収集
+        for (Tree member : ct.getMembers()) {
+            switch (member) {
+                case MethodTree mt -> {
+                    long mStart = positions.getStartPosition(unit, mt);
+                    int mLine = (int) unit.getLineMap().getLineNumber(mStart) - 1;
+                    int mOffset = (int) mStart;
+                    String name = mt.getName().toString();
+                    SymbolKind mKind = name.equals("<init>")
+                        ? SymbolKind.CONSTRUCTOR : SymbolKind.METHOD;
+                    // コンストラクタ名はクラス名にする
+                    String displayName = mKind == SymbolKind.CONSTRUCTOR
+                        ? ct.getSimpleName().toString() : name;
+                    symbols.add(new SymbolEntry(displayName, mKind, mLine, mOffset, null));
+                }
+                case VariableTree vt -> {
+                    long vStart = positions.getStartPosition(unit, vt);
+                    int vLine = (int) unit.getLineMap().getLineNumber(vStart) - 1;
+                    int vOffset = (int) vStart;
+                    symbols.add(new SymbolEntry(
+                        vt.getName().toString(), SymbolKind.FIELD, vLine, vOffset, null));
+                }
+                case ClassTree nested -> collectClassSymbols(nested, unit, positions, symbols);
+                default -> {} // それ以外（イニシャライザブロック等）は無視
+            }
         }
     }
 

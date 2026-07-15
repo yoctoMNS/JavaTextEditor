@@ -33,8 +33,9 @@ public class SourceAnalyzerTest {
         // --- ファイル解析テスト ---
         test_analyzeFile();
 
-        // --- ネストしたクラスは収集しない ---
-        test_nestedClassNotIncluded();
+        // --- ネストしたクラス（自身とメンバー）も収集する ---
+        test_nestedClassIncluded();
+        test_nestedClassMembersIncluded();
 
         // --- 行番号テスト ---
         test_lineNumbers();
@@ -272,8 +273,8 @@ public class SourceAnalyzerTest {
         }
     }
 
-    static void test_nestedClassNotIncluded() {
-        System.out.println("test_nestedClassNotIncluded");
+    static void test_nestedClassIncluded() {
+        System.out.println("test_nestedClassIncluded");
         String src = """
             public class Outer {
                 class Inner {}
@@ -283,9 +284,34 @@ public class SourceAnalyzerTest {
         SourceIndex idx = parse(src);
         List<SymbolEntry> classes = idx.symbols().stream()
             .filter(s -> s.kind() == SymbolKind.CLASS).toList();
-        // Outer は収集、Inner はネストしているので収集しない
-        assertEquals("only top-level class", 1, classes.size());
-        assertEquals("class is Outer", "Outer", classes.get(0).name());
+        // Outer・Inner の両方が収集される（Shift+K がネストクラスのメンバーも
+        // 見つけられるよう、ネストした型宣言自身もCLASS種別として登録するようにした）
+        assertEquals("top-level and nested class", 2, classes.size());
+        List<String> names = classes.stream().map(SymbolEntry::name).toList();
+        assertTrue("has Outer", names.contains("Outer"));
+        assertTrue("has Inner", names.contains("Inner"));
+    }
+
+    static void test_nestedClassMembersIncluded() {
+        System.out.println("test_nestedClassMembersIncluded");
+        String src = """
+            public class Outer {
+                static class Inner {
+                    void caller() {
+                        helper();
+                    }
+                    void helper() {}
+                    int innerField;
+                }
+            }
+            """;
+        SourceIndex idx = parse(src);
+        assertTrue("has Inner.helper method", idx.symbols().stream()
+            .anyMatch(s -> s.kind() == SymbolKind.METHOD && s.name().equals("helper")));
+        assertTrue("has Inner.caller method", idx.symbols().stream()
+            .anyMatch(s -> s.kind() == SymbolKind.METHOD && s.name().equals("caller")));
+        assertTrue("has Inner.innerField field", idx.symbols().stream()
+            .anyMatch(s -> s.kind() == SymbolKind.FIELD && s.name().equals("innerField")));
     }
 
     static void test_lineNumbers() {
