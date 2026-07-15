@@ -94,6 +94,43 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
+        // Test 5c: charCellWidthが環境依存文字（丸数字・ローマ数字・単位記号・囲みCJK文字・
+        // 幾何学模様等）を全角(2)と判定するか
+        {
+            boolean ok = EditorCanvas.charCellWidth(0x2460) == 2   // ① 丸数字
+                && EditorCanvas.charCellWidth(0x2160) == 2         // Ⅰ ローマ数字
+                && EditorCanvas.charCellWidth(0x25A0) == 2         // ■ 幾何学模様
+                && EditorCanvas.charCellWidth(0x2606) == 2         // ☆ 記号
+                && EditorCanvas.charCellWidth(0x3231) == 2         // ㈱ 囲みCJK文字
+                && EditorCanvas.charCellWidth(0x339C) == 2         // ㎜ CJK互換用文字（単位記号）
+                && EditorCanvas.charCellWidth(0xF900) == 2         // CJK互換漢字
+                && EditorCanvas.charCellWidth(0xAC00) == 2;        // 가 ハングル音節
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "charCellWidth判定（環境依存文字等）");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 5d: 非ASCIIフォールバック描画が割り当てセルの外へはみ出さないこと
+        // （drawClippedSwingChar()によるクリップの回帰テスト）。
+        // セル幅(cellW)を最小の5px・セル高(cellH)を最大の80pxに設定すると、
+        // Swingフォールバックフォントは cellH*0.75=60pt相当になり、実際に描画される
+        // グリフの幅は割り当てられた1文字分のセル幅（全角でも2*5=10px）を大きく超える。
+        // クリップが効いていなければ、この巨大なグリフが右方向に大きくはみ出すはずである。
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setInitialCellSize(5, 80);
+            canvas.setText("あ"); // ひらがな、全角(2セル)判定 → 割り当て幅は 2*5=10px
+            canvas.setCursor(0, 5); // カーソルを行末より後ろに置き、カーソル描画と重ねない
+
+            BufferedImage img = render(canvas, 400, 300);
+            // 割り当てられたセルの右端(x=10)より十分外側(x=20)は、クリップが効いていれば
+            // 背景色のまま。クリップが無ければ60ptフォントのグリフがここまで到達するはず。
+            int pixel = img.getRGB(20, 40);
+            pass += checkColor("非ASCIIフォールバックがセル外へはみ出さない（クリップ検証）",
+                0xF5, 0xF0, 0xE6, pixel);
+        }
+
         // Test 6: scrollRow の初期値は 0
         {
             EditorCanvas canvas = new EditorCanvas();
@@ -553,7 +590,7 @@ public class EditorCanvasTest {
             pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        int total = 37;
+        int total = 39;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

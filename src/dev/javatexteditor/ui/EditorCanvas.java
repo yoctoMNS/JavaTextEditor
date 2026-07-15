@@ -514,10 +514,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             if (ttfFont.isSupported(cp)) {
                 g2.drawImage(getUiGlyph(cp, cw, ch, color), x, y - ch, null);
             } else {
-                Color prev = g2.getColor();
-                g2.setColor(color);
-                g2.drawString(new String(Character.toChars(cp)), x, swingBaselineY);
-                g2.setColor(prev);
+                drawClippedSwingChar(g2, cp, x, y - ch, cw * widthMult, ch, swingBaselineY, color);
             }
             x += cw * widthMult;
             i += Character.charCount(cp);
@@ -939,13 +936,38 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                         : getGlyphFg(codePoint);
                     g2.drawImage(glyph, x, y - cellTopOffset, null);
                 } else {
-                    g2.setColor(isErrorLine ? ERROR_COLOR : theme.foreground);
-                    g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
+                    drawClippedSwingChar(g2, codePoint, x, y - cellTopOffset, charPixelWidth, cellH,
+                        swingBaselineY, isErrorLine ? ERROR_COLOR : theme.foreground);
                 }
             }
             x += charPixelWidth;
             i += Character.charCount(codePoint);
             if (x >= getWidth()) break;
+        }
+    }
+
+    /**
+     * 非ASCIIフォールバック（Swingフォント）で1文字だけ描画する。
+     * charCellWidth()の静的なUnicode範囲判定と、実際にフォントが描画するグリフ幅は
+     * 完全には一致しない場合がある（未知の記号・環境依存文字・想定外のフォント合成等）。
+     * このメソッドは割り当てられたセル矩形(cellX, cellTopY, cellPixelWidth, cellPixelHeight)に
+     * 描画を必ずクリップすることで、charCellWidth()の判定漏れや実フォントの字形が
+     * 想定より広い場合でも、次のセル（隣の文字）へ描画がはみ出て重なることを構造的に
+     * 防ぐ最終防波堤として機能する。
+     */
+    private void drawClippedSwingChar(Graphics2D g2, int codePoint, int cellX, int cellTopY,
+            int cellPixelWidth, int cellPixelHeight, int baselineY, Color color) {
+        if (cellPixelWidth <= 0 || cellPixelHeight <= 0) return;
+        Graphics2D clipped = (Graphics2D) g2.create(cellX, cellTopY, cellPixelWidth, cellPixelHeight);
+        try {
+            clipped.setFont(g2.getFont());
+            clipped.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            clipped.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            clipped.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+            clipped.setColor(color);
+            clipped.drawString(new String(Character.toChars(codePoint)), 0, baselineY - cellTopY);
+        } finally {
+            clipped.dispose();
         }
     }
 
@@ -973,9 +995,9 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             if (ttfFont.isSupported(codePoint)) {
                 g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
             } else {
-                g2.setColor(theme.background);
                 int swingBaselineY = (screenRow + 1) * lineHeight - ttfFont.descentPixels(lineHeight);
-                g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
+                drawClippedSwingChar(g2, codePoint, x, yTop, blockWidth, lineHeight,
+                    swingBaselineY, theme.background);
             }
         }
     }
@@ -1336,16 +1358,47 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     /**
+     * 全角（2セル）と判定するUnicodeコードポイント範囲（両端含む、昇順）。
+     * CJK・ひらがな・カタカナに加え、丸数字(①②③)・ローマ数字(Ⅰ Ⅱ Ⅲ)・
+     * 単位記号(㎜㎝㎞)・囲みCJK文字(㈱㈲㈹)等、Shift_JISのいわゆる
+     * 「機種依存文字（環境依存文字）」（NEC選定IBM拡張文字を含む）に該当する記号、
+     * および幾何学模様(■□▲△▼▽◆◇○●)等、日本語の文章・箇条書きで一般的に
+     * 全角幅で描画される記号ブロックを網羅する。
+     * 厳密なUnicode East Asian Width判定（Ambiguous/Wideの完全な区別）は行わず、
+     * 日本語環境で慣習的に全角表示される範囲を実用上十分な精度でカバーする。
+     */
+    private static final int[][] WIDE_RANGES = {
+        {0x2150, 0x218F}, // 数字に準じる記号・ローマ数字（Ⅰ Ⅱ Ⅲ ⅰ ⅱ ⅲ等）
+        {0x2460, 0x24FF}, // 囲み英数字（①②③ Ⓐ Ⓑ等）- 環境依存文字の代表例
+        {0x25A0, 0x27BF}, // 幾何学模様(■□▲△▼▽◆◇○●)・その他の記号・装飾記号(☆★☂等)
+        {0x2E80, 0x2EFF}, // CJK部首補助
+        {0x2F00, 0x2FDF}, // 康熙部首
+        {0x3000, 0x303F}, // CJK記号・句読点（「」『』、。〜等）
+        {0x3040, 0x30FF}, // ひらがな・カタカナ
+        {0x3200, 0x32FF}, // 囲みCJK文字・月（㈱㈲㈹㊤㊥等）- 環境依存文字の代表例
+        {0x3300, 0x33FF}, // CJK互換用文字（㎜㎝㎞㌢㌫等の単位記号）- 環境依存文字の代表例
+        {0x3400, 0x4DBF}, // CJK統合漢字拡張A
+        {0x4E00, 0x9FFF}, // CJK統合漢字
+        {0xAC00, 0xD7A3}, // ハングル音節
+        {0xF900, 0xFAFF}, // CJK互換漢字
+        {0xFE30, 0xFE4F}, // CJK互換形記号
+        {0xFF01, 0xFF60}, // 全角英数・記号（全角ASCII相当）
+        {0xFFE0, 0xFFE6}, // 全角記号（￠￡￢￤￥￦）
+        {0x20000, 0x2FFFF}, // CJK統合漢字拡張B〜F等（補助漢字面、サロゲートペア）
+    };
+
+    /**
      * 1文字（コードポイント）が全角（2セル分）か半角（1セル分）かを判定する。
-     * 厳密なUnicode East Asian Width判定は複雑だが、Javaプログラミング用途では
-     * CJK・ひらがな・カタカナの範囲を押さえれば実用上十分。
+     * 上記WIDE_RANGESに含まれない文字（未知の記号・絵文字等）はデフォルトで
+     * 半角(1)判定になるが、この判定が実際のフォントの字形幅とずれていても、
+     * 描画側（drawClippedSwingChar()）が割り当てセルへの描画を強制的にクリップ
+     * するため、隣の文字と重なって見えることは無い（判定はあくまで見た目の
+     * 自然さのためで、重なり防止の保証はクリップ側が担う）。
      */
     public static int charCellWidth(int codePoint) {
-        if (codePoint >= 0x3000 && codePoint <= 0x303F) return 2; // CJK記号・句読点（「」『』、。〜等）
-        if (codePoint >= 0x3040 && codePoint <= 0x30FF) return 2; // ひらがな・カタカナ
-        if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return 2; // CJK統合漢字
-        if (codePoint >= 0xFF01 && codePoint <= 0xFF60) return 2; // 全角英数・記号（全角ASCII相当）
-        if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return 2; // 全角記号（￠￡￢￤￥￦）
+        for (int[] range : WIDE_RANGES) {
+            if (codePoint >= range[0] && codePoint <= range[1]) return 2;
+        }
         return 1; // 半角カタカナ(0xFF61-0xFF9F)等はここでdefaultの1になる
     }
 }
