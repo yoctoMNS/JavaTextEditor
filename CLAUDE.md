@@ -517,6 +517,47 @@ project-root/
   ⑳telescope-pickerと同種）。ヘッドフル環境での実クリップボード往復・画像/音声バイナリの貼り付けは
   手動確認が必要。
 
+### クリップボード貼り付けが対応できないコンテンツがあった不具合の修正（imageFlavor・javaFileListFlavor対応）
+
+- **不具合**: 「いかなるクリップボードにコピーされている内容も貼り付けられるようにしてほしい」という要望を受けて
+  調査したところ、`readClipboardBinary()`は`contents.getTransferDataFlavors()`のうち`InputStream`を返す
+  `DataFlavor`（`getRepresentationClass()`が`InputStream`のサブタイプ）しか扱っておらず、それ以外は
+  `"unsupported clipboard content"`になっていた。実際には以下2ケースが素通りしていた。
+  1. **`DataFlavor.imageFlavor`**: 表現クラスが`java.awt.Image`であり`InputStream`ではない。Windowsの
+     スクリーンショットツール等、OSクリップボードが画像を`CF_BITMAP`/`CF_DIB`相当で公開する場合はこの
+     Flavorのみが提供され、ストリーム系Flavorが存在しないことがある（＝上記「画像・音声等バイナリの
+     クリップボード内容の扱い」節が「imageFlavor等の非テキストDataFlavorは基本的にInputStream経由で読める」
+     と記述していたのは不正確だった。実際にはOS・アプリ依存で、ストリーム系Flavorが存在しない画像コピーも
+     普通に起こりうる）。
+  2. **`DataFlavor.javaFileListFlavor`**: ファイルマネージャ等で「ファイルそのもの」をコピーした場合に
+     公開されるFlavor。表現クラスは`java.util.List`（`List<File>`）であり、`InputStream`でも文字列でもない。
+- **修正**: `pasteFromSystemClipboard()`の分岐を「stringFlavor → javaFileListFlavor → ストリーム系/
+  imageFlavorのバイナリ」の3段に拡張した。
+  - `javaFileListFlavor`はファイルの**中身**ではなく、絶対パスを1行1件の改行区切り文字列に変換して
+    挿入するようにした（`readClipboardFilePaths()`）。ファイル一覧そのものは「生バイト列」という概念を
+    持たない（0〜複数件のファイル参照であり、巨大ファイル・ディレクトリを含みうる）ため、既存の
+    「バイナリそのものを貼り付ける」方針をそのまま適用せず、他アプリとの相互運用で実際に使い道がある
+    「パス文字列としての貼り付け」を採用した（多くのターミナル/エディタがファイルD&D時にパスを
+    挿入するのと同じ挙動）。
+  - `imageFlavor`は`readClipboardBinary()`のフォールバックとして追加した。`contents.getTransferData(
+    DataFlavor.imageFlavor)`で得た`java.awt.Image`を`ImageIO.write(..., "png", ...)`でPNGバイト列へ
+    エンコードし、既存の「バイナリそのもの＝ISO-8859-1で可逆的に文字列化してバッファへ挿入」という
+    方針にそのまま乗せた（`BufferedImage`以外の`Image`実装は`Graphics2D.drawImage()`で一度描画して
+    `BufferedImage`化してからエンコードする）。
+- **純粋ロジックの分離**: パス結合（`joinFilePaths`）とPNGエンコード（`encodeImageAsPng`/内部の
+  `toBufferedImage`）を`dev.javatexteditor.editor.ClipboardBinaryCodec`（新設・package-private）に
+  切り出した。`Transferable`/`Clipboard`（実クリップボードへの依存）を一切持たない純粋ロジックのため、
+  実クリップボードなしでヘッドレス環境でも完全にテストできる（`ClipboardTest`が「実クリップボード往復は
+  ヘッドレスでは検証不能」としていた既知のギャップを、変換ロジック部分に限り解消した）。`ModalEditor`
+  側は`readClipboardFilePaths()`/`readClipboardBinary()`からこのクラスへ委譲するだけになっている。
+- **意図的にスコープ外とした点**: `javaFileListFlavor`でファイルの中身（バイト列）を読み込んで挿入する
+  という選択肢もあったが、複数ファイル・ディレクトリ・巨大ファイルを指しうるため「貼り付け」1操作の
+  意味論として過剰と判断し採用しなかった。テキスト系Flavor（`text/html`・`text/rtf`等）は`stringFlavor`
+  が同時に公開されるのが通例のため（既存実装で問題なく動作）、今回追加のハンドリングはしていない。
+- **テスト**: `test/dev/javatexteditor/editor/ClipboardBinaryCodecTest.java`（新設・6テスト）で
+  `joinFilePaths`（単一/複数/空リスト）と`encodeImageAsPng`（ISO-8859-1往復でのバイト完全一致・
+  デコード後のピクセル復元）を検証。`ClipboardTest`（既存11テスト）は変更なしで引き続き全PASS。
+
 ## F10/F11/F12（`*compile*`/`*run*`疑似バッファ）のリアルタイムログ表示・標準エラー赤字化
 
 - **要望**: javac/javaコマンド実行時のバッファ画面を、完了を待たずリアルタイムにログ表示し、かつ標準エラー出力を赤字で区別してほしいという依頼。従来は`ProjectBuilder.compile()`/`Main.runJavaClass()`ともプロセス・コンパイルタスクの完了を同期的に待ってから`ModalEditor.showCompileResult()`/`showRunOutput()`で一括描画しており、実行中は`*compile*`/`*run*`疑似バッファが完全に固まって見えていた。
