@@ -50,6 +50,8 @@ public class OpenjdkSourceTracingTest {
         testFindCSymbolInFileMatchesOnlyGivenFile();
         testFindCSymbolInFileReturnsEmptyForMissingFile();
         testFindCSymbolInFileReturnsEmptyWithoutNativeSrcDir();
+        testFindCSymbolCanPickUnrelatedFileWhenNameIsDuplicated();
+        testFindCSymbolInFilePrefersCurrentlyDisplayedFile();
 
         testReadJavaSourceByFqcnWithModulePrefix();
         testReadJavaSourceByFqcnWithoutModulePrefix();
@@ -340,6 +342,77 @@ public class OpenjdkSourceTracingTest {
         Optional<OpenjdkSourceTracer.CSymbolLocation> loc =
             tracer.findCSymbolInFile("java.base/share/native/launcher/main.c", "main");
         check("nativeSrcDir が無ければ empty (graceful degradation)", loc.isEmpty(), "");
+    }
+
+    /**
+     * symbol-definition-navigation スキル「不具合B」の再現テスト。
+     * findCSymbol()（木全体を無順序に走査し .findFirst() で返す）は、同名の static
+     * ヘルパー関数が複数ファイルに存在すると、ユーザーが実際に見ているファイル以外の
+     * 定義へ誤ってヒットしうることを確認する（ModalEditor が findCSymbol 単独に頼らず
+     * まず findCSymbolInFile を試す修正の動機となった挙動）。
+     */
+    private static void testFindCSymbolCanPickUnrelatedFileWhenNameIsDuplicated() throws Exception {
+        Path dir = Files.createTempDirectory("native-dup-test");
+        Path aDir = dir.resolve("a");
+        Files.createDirectories(aDir);
+        Files.writeString(aDir.resolve("first.c"), """
+            static void helper(void) {
+                return;
+            }
+
+            void caller(void) {
+                helper();
+            }
+            """);
+        Path bDir = dir.resolve("b");
+        Files.createDirectories(bDir);
+        Files.writeString(bDir.resolve("second.c"), """
+            static void helper(void) {
+                return;
+            }
+            """);
+
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc = tracer.findCSymbol("helper");
+        check("findCSymbol は何かしらの定義を見つける（どちらかは不定）",
+            loc.isPresent(), "");
+    }
+
+    /**
+     * 上記の曖昧さを、現在表示中ファイルを先に指定する findCSymbolInFile で回避できることを確認する。
+     * ModalEditor.lookupJdkDocAndJump() の (A) ブロックは、currentFilePath から復元した
+     * 相対パスでまず findCSymbolInFile を試し、見つかった場合はそれを使う（findCSymbol へは
+     * フォールバックしない）ため、"a/first.c" を見ているときは常に "a/first.c" 自身の
+     * helper() へジャンプできる。
+     */
+    private static void testFindCSymbolInFilePrefersCurrentlyDisplayedFile() throws Exception {
+        Path dir = Files.createTempDirectory("native-dup-test2");
+        Path aDir = dir.resolve("a");
+        Files.createDirectories(aDir);
+        Files.writeString(aDir.resolve("first.c"), """
+            static void helper(void) {
+                return;
+            }
+
+            void caller(void) {
+                helper();
+            }
+            """);
+        Path bDir = dir.resolve("b");
+        Files.createDirectories(bDir);
+        Files.writeString(bDir.resolve("second.c"), """
+            static void helper(void) {
+                return;
+            }
+            """);
+
+        OpenjdkSourceTracer tracer = new OpenjdkSourceTracer(null, dir);
+        Optional<OpenjdkSourceTracer.CSymbolLocation> loc =
+            tracer.findCSymbolInFile("a/first.c", "helper");
+        check("a/first.c 自身の helper() が見つかる",
+            loc.isPresent() && loc.get().relativePath().endsWith("a/first.c"),
+            loc.map(OpenjdkSourceTracer.CSymbolLocation::relativePath).orElse("empty"));
+        check("定義行はファイル内の1行目（0-indexed）", loc.isPresent() && loc.get().lineNumber() == 0, "");
     }
 
     // --- readJavaSourceByFqcn tests (":main javac" 用: Class<?> を経由しないソース取得) ---
