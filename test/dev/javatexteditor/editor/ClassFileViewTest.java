@@ -154,7 +154,9 @@ public class ClassFileViewTest {
         ModalEditor ed = new ModalEditor("");
         openViaCommand(ed, broken.toString());
 
-        assertTrue("壊れた.classはhexdumpプレビューにフォールバックする", ed.getText().startsWith("*binary*"));
-        assertEquals("フォールバック時もcurrentFilePathはnull", null, ed.getCurrentFilePath());
+        assertTrue("壊れた.classはMode.BINARYのhexdump編集モードにフォールバックする", ed.getText().startsWith("*binary*"));
+        assertTrue("フォールバック時はMode.BINARYに入る", ed.isBinaryMode());
+        assertEquals("Mode.BINARYは編集可能なためcurrentFilePathは実パスになる",
+                broken.toString(), ed.getCurrentFilePath());
     }
 }
