@@ -1341,9 +1341,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * CJK・ひらがな・カタカナの範囲を押さえれば実用上十分。
      */
     public static int charCellWidth(int codePoint) {
+        if (codePoint >= 0x3000 && codePoint <= 0x303F) return 2; // CJK記号・句読点（「」『』、。〜等）
         if (codePoint >= 0x3040 && codePoint <= 0x30FF) return 2; // ひらがな・カタカナ
         if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return 2; // CJK統合漢字
-        if (codePoint >= 0xFF00 && codePoint <= 0xFFEF) return 2; // 全角英数・記号
-        return 1;
+        if (codePoint >= 0xFF01 && codePoint <= 0xFF60) return 2; // 全角英数・記号（全角ASCII相当）
+        if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return 2; // 全角記号（￠￡￢￤￥￦）
+        return 1; // 半角カタカナ(0xFF61-0xFF9F)等はここでdefaultの1になる
     }
 }

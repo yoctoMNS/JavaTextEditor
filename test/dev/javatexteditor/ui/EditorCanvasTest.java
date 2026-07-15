@@ -78,6 +78,22 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
+        // Test 5b: charCellWidthがCJK記号・句読点（「」等）と半角カタカナを正しく判定するか
+        // （マルチバイト文字の重なり不具合の回帰テスト。0x300C「かぎ括弧」は
+        //  CJK Symbols and Punctuation ブロックに属し、旧実装では判定範囲(0x3040〜)の
+        //  手前で漏れて半角(1)扱いになっていたため、後続文字が重なって描画されていた）
+        {
+            boolean ok = EditorCanvas.charCellWidth(0x300C) == 2   // 「
+                && EditorCanvas.charCellWidth(0x300D) == 2         // 」
+                && EditorCanvas.charCellWidth(0x3001) == 2         // 、
+                && EditorCanvas.charCellWidth(0x3002) == 2         // 。
+                && EditorCanvas.charCellWidth(0x3000) == 2         // 全角スペース
+                && EditorCanvas.charCellWidth(0xFF71) == 1         // 半角カタカナ「ｱ」
+                && EditorCanvas.charCellWidth(0xFF9F) == 1;        // 半角カタカナ濁点
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "charCellWidth判定（CJK記号・半角カタカナ）");
+            pass += ok ? 1 : 0;
+        }
+
         // Test 6: scrollRow の初期値は 0
         {
             EditorCanvas canvas = new EditorCanvas();
@@ -537,7 +553,7 @@ public class EditorCanvasTest {
             pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        int total = 36;
+        int total = 37;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
