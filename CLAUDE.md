@@ -747,3 +747,15 @@ project-root/
 - `test/dev/javatexteditor/editor/BinaryFileOpenTest.java`は新方式に合わせて全面的に書き換えた
   （読み取り専用前提のアサーションを、Mode.BINARYへ入ること・`currentFilePath`が実パスになること・
   無編集での`:w`がバイト列を完全に保つことの検証に置き換えた）。
+
+## 軽量性リファクタリング計画（2026-07-15 策定・Phase 1〜3）
+
+「軽量エディタ」の主張と実装の間に4つの深刻なギャップ（①`PieceTable`のピース結合欠如による編集セッション全体のO(K²)劣化・②`syncCanvas()`の1キー入力あたり4回のO(n)全文再構築・③Shift+K/`gr`/`:grep`のO(ファイル数)逐次走査とタイムアウト後のスレッド残留・④編集中の文書サイズ比例メモリチャーン）があることを実コード調査で確認し、解消計画を策定した（計画書・実行指示書は別ブランチ`claude/editor-performance-analysis-3no2jf`の`docs/PERF_REFACTORING_PLAN.md`/`docs/PERF_REFACTORING_INSTRUCTIONS.md`に存在し、mainマージ待ち。両ドキュメントがmainに反映され次第、この節からのリンクを有効化する）。
+
+| Phase | 対象 | 状態 |
+|---|---|---|
+| 1 | `PieceTable`: 連続挿入のピース結合・`length()`のO(1)キャッシュ・`addBuffer.toString()`コピー排除・`offsetOfLine()`の全文再構築排除 | ✅ 完了（`insert()`が「オフセット==ピース境界かつ直前ピースがaddBuffer末尾を指す」場合にピースを伸長する結合を追加。`length()`は`totalLength`フィールドでO(1)化。`getText()`/`getTextInRange()`は`addBuffer.toString()`によるADDピースごとの追加バッファ全体コピーを廃止しCharSequence範囲appendに変更。`offsetOfLine()`は全文再構築なしのピース直接走査に変更。undoスナップショット（`List.copyOf`によるピース参照コピー）とは独立のため1insert=1undoの粒度は不変（PieceTableTest Test 17で固定）。PieceTableTest 26/26・LargeFileTest 16/16 PASS。連続タイピング2万キー相当が1〜2ms（旧実装ではO(K²)的にピース数に比例して劣化する設計だった）） |
+| 2 | `syncCanvas()`: `getVersion()`＋バッファ参照一致による全文再構築キャッシュ（カーソル移動キーでは再構築ゼロ、編集キーでは1回のみ） | 未着手 |
+| 3 | `ProjectSearcher`: 「逐次パス収集→仮想スレッド並列grep」の2段階化・タイムアウト時の`future.cancel(true)`による協調キャンセル（結果順序・同期契約・1500ms/2MB/スキップ規則は不変） | 未着手 |
+
+（各Phase完了時、実行者がこの表の状態・関連SKILL.md・上記2ドキュメントを更新する。ベースライン: 全70テストクラス中69クラスPASS・`ScrollTest`のみ既知2件FAIL＝仕様判断未決のため修正禁止）

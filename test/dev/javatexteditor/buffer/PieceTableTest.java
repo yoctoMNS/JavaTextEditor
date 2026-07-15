@@ -64,7 +64,58 @@ public class PieceTableTest {
         pass += check("offsetOfLine(1)==6", "6", String.valueOf(t11.offsetOfLine(1)));
         pass += check("offsetOfLine(2)==12", "12", String.valueOf(t11.offsetOfLine(2)));
 
-        int total = 15;
+        // Test 12: 連続タイピングのピース結合（Phase 1）: 連続insertでピースが増えない
+        PieceTable t12 = new PieceTable("");
+        t12.insert(0, "a");
+        t12.insert(1, "b");
+        t12.insert(2, "c");
+        pass += check("連続挿入の結合: テキスト", "abc", t12.getText());
+        pass += check("連続挿入の結合: ピース数1", "1", String.valueOf(t12.getPieces().size()));
+
+        // Test 13: 文書中間での連続タイピングも結合される
+        PieceTable t13 = new PieceTable("AB");
+        t13.insert(1, "x");
+        t13.insert(2, "y");
+        t13.insert(3, "z");
+        pass += check("中間連続挿入: テキスト", "AxyzB", t13.getText());
+        pass += check("中間連続挿入: ピース数3", "3", String.valueOf(t13.getPieces().size()));
+
+        // Test 14: 離れた位置への挿入は結合されない（正しさ優先）
+        PieceTable t14 = new PieceTable("abcdef");
+        t14.insert(1, "X");
+        t14.insert(4, "Y");
+        pass += check("離れた挿入: テキスト", "aXbcYdef", t14.getText());
+
+        // Test 15: 削除で追加バッファ末尾の所有が切れた後の挿入は結合しない（誤結合防止）
+        PieceTable t15 = new PieceTable("");
+        t15.insert(0, "abc");
+        t15.delete(2, 1);       // "ab"（ピース末尾と addBuffer 末尾がズレる）
+        t15.insert(2, "d");     // 誤って結合すると "abc"+"d" の断片になり壊れる
+        pass += check("削除後の挿入: テキスト", "abd", t15.getText());
+
+        // Test 16: length() キャッシュの整合性（挿入・削除・範囲外にはみ出す削除）
+        PieceTable t16 = new PieceTable("hello");
+        t16.insert(5, " world");
+        t16.delete(0, 6);
+        pass += check("length==getText().length()",
+            String.valueOf(t16.getText().length()), String.valueOf(t16.length()));
+        t16.delete(3, 100);     // 実在部分だけ消える既存仕様
+        pass += check("範囲外削除後のlength整合",
+            String.valueOf(t16.getText().length()), String.valueOf(t16.length()));
+
+        // Test 17: 結合された連続挿入でも undo 粒度は1操作ずつ（スナップショット互換）
+        UndoablePieceTable t17 = new UndoablePieceTable("");
+        t17.insert(0, "a");
+        t17.insert(1, "b");
+        t17.insert(2, "c");
+        t17.undo();
+        pass += check("結合後undo1回目", "ab", t17.getText());
+        t17.undo();
+        pass += check("結合後undo2回目", "a", t17.getText());
+        t17.redo();
+        pass += check("結合後redo", "ab", t17.getText());
+
+        int total = 26;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
