@@ -27,6 +27,7 @@ import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.EditorCanvas;
+import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
@@ -3823,10 +3824,11 @@ public class ModalEditor {
 
     /**
      * システムクリップボードの内容をカーソル位置へ貼り付ける。文字列（stringFlavor）が
-     * 取得できればそのまま挿入する。画像・音声等の非テキストデータの場合は、ストリーム系
-     * DataFlavor から生バイト列を読み出し、ISO-8859-1（1バイト=1文字の可逆マッピング）で
-     * デコードしてバイト列そのものをバッファへ挿入する（getBytes(ISO_8859_1)で元のバイト列
-     * を復元可能）。
+     * 取得できればそのまま挿入する。ファイルマネージャ等でコピーしたファイル（javaFileListFlavor）
+     * の場合は絶対パスを1行1件で挿入する。画像（imageFlavor）・音声等の非テキストデータの場合は、
+     * ストリーム系 DataFlavor またはImageからエンコードした生バイト列を、ISO-8859-1
+     * （1バイト=1文字の可逆マッピング）でデコードしてバイト列そのものをバッファへ挿入する
+     * （getBytes(ISO_8859_1)で元のバイト列を復元可能）。
      *
      * @param asNormalMode true の場合 NORMAL モードと同じカーソルクランプを行う（P相当）。
      *                     false の場合 INSERT モード中の挿入として扱い、クランプしない。
@@ -3849,6 +3851,8 @@ public class ModalEditor {
         try {
             if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
                 text = (String) contents.getTransferData(DataFlavor.stringFlavor);
+            } else if (contents.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+                text = readClipboardFilePaths(contents);
             } else {
                 byte[] bytes = readClipboardBinary(contents);
                 if (bytes == null) {
@@ -3871,7 +3875,19 @@ public class ModalEditor {
         }
     }
 
-    /** 文字列以外の DataFlavor（image/audio 等）から生バイト列を読み出す。取得不能なら null。 */
+    /** ファイルマネージャ等でコピーされたファイル一覧を、絶対パスを改行区切りにした文字列へ変換する。 */
+    @SuppressWarnings("unchecked")
+    private String readClipboardFilePaths(Transferable contents) throws UnsupportedFlavorException, IOException {
+        List<File> files = (List<File>) contents.getTransferData(DataFlavor.javaFileListFlavor);
+        return ClipboardBinaryCodec.joinFilePaths(files);
+    }
+
+    /**
+     * 文字列・ファイル一覧以外の DataFlavor（image/audio 等）から生バイト列を読み出す。
+     * ストリーム系 DataFlavor を優先し、見つからなければ imageFlavor（java.awt.Image、
+     * スクリーンショットツール等が公開する非ストリーム形式）をPNGへエンコードして返す。
+     * いずれも取得不能なら null。
+     */
     private byte[] readClipboardBinary(Transferable contents) throws UnsupportedFlavorException, IOException {
         for (DataFlavor flavor : contents.getTransferDataFlavors()) {
             if (!InputStream.class.isAssignableFrom(flavor.getRepresentationClass())) continue;
@@ -3879,6 +3895,12 @@ public class ModalEditor {
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 in.transferTo(out);
                 return out.toByteArray();
+            }
+        }
+        if (contents.isDataFlavorSupported(DataFlavor.imageFlavor)) {
+            Object data = contents.getTransferData(DataFlavor.imageFlavor);
+            if (data instanceof Image image) {
+                return ClipboardBinaryCodec.encodeImageAsPng(image);
             }
         }
         return null;
