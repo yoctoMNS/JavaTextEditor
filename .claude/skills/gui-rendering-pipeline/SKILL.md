@@ -339,6 +339,21 @@ int b = pixel & 0xFF;
 - **教訓**: IME候補ウィンドウの表示位置はOS側の空間判定ロジックに委ねるのが正しく、アプリケーション側で「重ならないように」と座標を先回りしてずらす対処は、ヘッドレス環境で実機検証できないまま推測値を採用すると、画面端という境界条件で新たな不具合を生みやすい。今後IME関連の座標計算を変更する場合は、`getTextLocation()`は常に実際のカーソル座標をそのまま返す方針を維持し、見た目の重なり対策が必要な場合は自前描画側（`drawImeComposition()`等）の表示内容・タイミングの調整で対応することを優先する。
 - **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java`のTest 33を、「`getTextLocation(null)`が現在行から2行分下の位置を返す」検証から「オフセットなしでカーソルの実座標（ヘッドレス環境でbase=(0,0)、現在行0のためy==0）をそのまま返す」検証に更新した（計36/36 PASS）。実際のWindows11実機での最終的な見た目確認（候補ウィンドウが画面端でも正しく表示されるか）はヘッドレス環境のため引き続き検証できておらず、既知のテストギャップとして残る。
 
+## `:wrap` / `:nowrap`（画面端での折り返し表示）の実装
+
+- **要望**: `:wrap`で画面端に達した長い行を折り返して表示し、`:nowrap`で折り返さない（従来通りの横スクロール表示に戻す）機能を追加してほしいという依頼。
+- **状態の持ち方**: `ModalEditor`に`wrapEnabled`（既定`false`＝nowrap相当。従来の横スクロール表示と完全に後方互換）を追加し、`:wrap`/`:nowrap`コマンドで切り替える。`syncCanvas()`が`canvas.setWrapEnabled(wrapEnabled)`を呼び、`EditorCanvas`側にも同名フィールドを持たせるモデル→ビューの同期パターン（`setInsertMode`等と同じ）を踏襲した。
+- **wrap時は横スクロール(`scrollCol`)を完全に無効化する**。`ensureCursorColVisible()`はwrap時、`scrollCol`を常に`0`に強制するだけの早期returnになる（横スクロールする必要がそもそも無いため）。
+- **折返しの単位はセル（半角=1・全角=2）で、全角文字が折返し境界をまたがない**よう`EditorCanvas.wrapSegments(line, visibleCols)`が貪欲法で行を`{開始charIndex, 終了charIndex}`のセグメント列に分割する。空行でも必ず1セグメント（`{0,0}`）を返す。
+- **描画は「wrapPlan」（`List<WrapRow>`、各要素が1画面行=1論理行の1セグメントに対応）を`paintContent()`内で一度だけ構築し、本文描画・カーソル・ガター・診断アンダーライン・選択ハイライト・検索ハイライトの全てで使い回す設計**にした。`scrollRow`は常に文書行の境界（折返し途中ではなく行頭）を指す前提を維持し、`buildWrapPlan()`は`scrollRow`から`visibleRows`分（画面に収まる分だけ）のセグメントを積み上げる。これにより「1論理行が画面上で複数行になる」ことをO(可視領域)の作業量で扱える（数十万行規模のファイルでも`buildWrapPlan`が全文書を舐めることはない）。
+- **`scrollRow`の意味は変えていない**（wrap時も非wrap時も「先頭に表示する文書行番号」のまま）。折返しで生じる画面行のカウントは`wrapPlan`がその場で計算するだけで、`scrollRow`自体を「画面行番号」に変換するような設計変更はしなかった（`zz`等、既存の`canvas.setScrollRow()`直接呼び出し箇所に一切手を入れずに済むため）。
+- **`ensureCursorVisible()`のwrap時実装（`ensureCursorVisibleWrapped()`）**は、`scrollRow`からカーソル行までの折返し行数を積算し、`visibleRows`に収まるよう`scrollRow`を1行ずつ前進させる（非wrap時の「カーソル行が画面下端を超えたら`scrollRow`をカーソル行-可視行数+1に一気に飛ばす」というO(1)実装とは異なり、折返し行数はスクロール位置に依存するため積算が必要）。`G`・`gg`・`:行番号`等で`scrollRow`からカーソル行までの距離が`WRAP_SCROLL_SCAN_LIMIT`（4096行）を超える大きなジャンプの場合は、正確な積算を打ち切り「`scrollRow = cursorRow - visibleRows + 1`」の近似値にフォールバックする（数十万行規模のファイルで無制限にO(距離)の計算が走るのを防ぐ、③`project-wide-search`の`WRAP_SCROLL_SCAN_LIMIT`的な安全装置と同じ設計思想）。
+- **カーソル・IME候補ウィンドウ位置・補完ポップアップのアンカー計算は`wrapScreenPosition()`（`scrollRow`から対象行までの折返し行数を辿って画面座標を求める）に一本化**した。`paintContent()`内（`wrapPlan`が既に手元にある場面）ではさらに軽量な`findSegmentPixel(wrapPlan, ...)`（構築済みプランを線形走査するだけ）を使う。IMEの`getTextLocation()`は`paintContent()`のサイクル外で任意のタイミングで呼ばれるため`wrapPlan`を持たず、`wrapScreenPosition()`を直接使う。
+- **選択ハイライト・検索ハイライトの行内範囲描画は`drawWrappedRangeSpan()`に共通化**した。1つの文書行が複数の`wrapPlan`エントリ（セグメント）にまたがる場合、各エントリとの交差区間だけを塗るセグメント単位の分割描画になる。VISUAL LINEモードは元々行全体を塗るため、そのモードのみ「該当`docRow`を持つ`wrapPlan`エントリ全てを全幅で塗る」という別経路（`drawSelectionHighlightWrapped()`内で分岐）にした。
+- **ガター（E/Wマーカー）は折返しの継続行（`segStart != 0`）には表示しない**。診断は論理行単位の情報であり、折返し2行目以降にも同じマーカーが繰り返し表示されると冗長なため、先頭セグメントのみに限定した。一方、診断のアンダーライン（波線）は継続行も含め全セグメントの下に描画する（アンダーラインは「このセグメントの文字列の下」という視覚的な意味合いが強く、マーカーとは性質が異なるため）。
+- **意図的にスコープ外とした点**: `j`/`k`によるカーソル移動はVim本家と同じく折返し後の画面行単位ではなく、常に論理行（文書行）単位のままとした（Vimの`gj`/`gk`相当の画面行移動キーは本プロジェクトでは未実装。今回の要望はあくまで「表示の折返し」であり、カーソル移動の意味論変更は求められていないため）。`:split`/`:vsplit`の各ペインは独立した`ModalEditor`+`EditorCanvas`を持つため、`:wrap`はアクティブペインのみに効く（ペイン間で共有されない。既存の`cellW`/`cellH`等ペインローカルな表示設定と同じ扱い）。
+- **テスト**: `test/dev/javatexteditor/editor/WrapCommandTest.java`（新設・6テスト）で`:wrap`/`:nowrap`コマンドの状態遷移・`syncCanvas()`経由での`EditorCanvas`への反映を検証。`test/dev/javatexteditor/ui/EditorCanvasTest.java`にTest 37〜43（7テスト追加・計43/43）で、wrap時に長い行が2画面行目まで折り返して描画されること（nowrap時は同条件で「文書末尾超過」の白塗り領域になることとの対比）・折返し先セグメントのカーソル座標・`ensureCursorColVisible`が横スクロールしないこと・`ensureCursorVisible`の折返し考慮scrollRow計算を検証した。
+
 ## INSERT→NORMAL遷移時の自動半角切り替え（`EditorCanvas.switchToHalfWidth()`）がWindowsで効かない不具合の修正
 
 - **経緯**: INSERTモードで全角入力（日本語IME）中に`Esc`でNORMALモードへ戻ると、IMEが全角のままになりNORMALモードのキーバインドを誤入力してしまう問題への対策として、`switchToHalfWidth()`（`ic.selectInputMethod(Locale.ENGLISH)`のみを呼ぶ実装）が既に存在し、`ModalEditor.onReturnToNormal`経由でINSERT→NORMAL遷移のたびに呼ばれるよう配線済みだった。Linux環境では動作したが、Windows実機では切り替わらないという報告があった。

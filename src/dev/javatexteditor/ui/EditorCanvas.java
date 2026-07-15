@@ -45,6 +45,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private Theme theme = Theme.LIGHT_MODE;
     private int scrollRow = 0;
     private int scrollCol = 0;              // 横スクロール（セル単位）
+    // :wrap / :nowrap（画面端での折り返し表示）。true時は横スクロール(scrollCol)を使わず、
+    // 長い行を視覚的に複数のスクリーン行へ折り返して表示する。詳細は
+    // .claude/skills/gui-rendering-pipeline/SKILL.md「:wrap / :nowrap（画面端での折り返し表示）」参照。
+    private boolean wrapEnabled = false;
     private int cachedLineHeight = 20;      // 初回 paint 前の近似値
     private int cachedCharWidth  = 10;      // 初回 paint 前の近似値
     private String commandLineText = null;  // null = 通常のモード表示
@@ -342,9 +346,22 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             int lineHeight = cachedLineHeight > 0 ? cachedLineHeight : 16;
             int charWidth  = cachedCharWidth  > 0 ? cachedCharWidth  : 8;
             int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
-            int screenRow = cursorRow - scrollRow;
             String line = (cursorRow < cachedLines.length) ? cachedLines[cursorRow] : "";
-            int x = xForCol(line, cursorCol, charWidth) - scrollCol * charWidth + gutterWidth;
+            int screenRow;
+            int x;
+            if (wrapEnabled) {
+                int[] pos = wrapScreenPosition(cachedLines, cursorRow, cursorCol, charWidth, gutterWidth);
+                if (pos != null) {
+                    screenRow = pos[0];
+                    x = pos[1];
+                } else {
+                    screenRow = cursorRow - scrollRow;
+                    x = gutterWidth;
+                }
+            } else {
+                screenRow = cursorRow - scrollRow;
+                x = xForCol(line, cursorCol, charWidth) - scrollCol * charWidth + gutterWidth;
+            }
             int y = screenRow * lineHeight;
             return new Rectangle(base.x + x, base.y + y, 1, lineHeight);
         }
@@ -399,6 +416,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public int getScrollRow() { return scrollRow; }
     public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); repaint(); }
     public int getScrollCol() { return scrollCol; }
+    public void setWrapEnabled(boolean wrapEnabled) { this.wrapEnabled = wrapEnabled; repaint(); }
+    public boolean isWrapEnabled() { return wrapEnabled; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
     public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
     public String getCommandLineText() { return commandLineText; }
@@ -604,6 +623,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * ModalEditor がカーソル移動後に呼ぶことでスクロールを追従させる。
      */
     public void ensureCursorVisible(int cursorRow) {
+        if (wrapEnabled) {
+            ensureCursorVisibleWrapped(cursorRow);
+            return;
+        }
         int visibleRows = computeVisibleRows(cachedLineHeight);
         if (cursorRow < scrollRow) {
             scrollRow = cursorRow;
@@ -614,6 +637,42 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         }
     }
 
+    // 大きなジャンプ(G・gg・:行番号等)でこの行数を超えて scrollRow から離れている場合、
+    // 折返し数を1行ずつ積算する正確な計算を打ち切り、近似値にフォールバックする
+    // （数十万行規模のファイルでO(距離)の計算が際限なく重くなるのを防ぐ）。
+    private static final int WRAP_SCROLL_SCAN_LIMIT = 4096;
+
+    /**
+     * wrap有効時、カーソル行の折返しが画面に収まるよう scrollRow を調整する。
+     * scrollRow は常に文書行の境界（折返しの途中ではなく行頭）を指す前提を維持する。
+     */
+    private void ensureCursorVisibleWrapped(int cursorRow) {
+        int visibleRows = computeVisibleRows(cachedLineHeight);
+        if (cursorRow < scrollRow) {
+            scrollRow = cursorRow;
+            repaint();
+            return;
+        }
+        if (cursorRow - scrollRow > WRAP_SCROLL_SCAN_LIMIT) {
+            // 近似: 正確な折返し計算はせず、カーソル行がおおよそ画面内に収まる位置へ寄せる
+            scrollRow = Math.max(0, cursorRow - visibleRows + 1);
+            repaint();
+            return;
+        }
+        int visibleCols = computeVisibleColsForWrap();
+        int used = 0;
+        for (int r = scrollRow; r <= cursorRow && r < cachedLines.length; r++) {
+            used += wrapSegmentCount(cachedLines[r], visibleCols);
+        }
+        boolean changed = false;
+        while (used > visibleRows && scrollRow < cursorRow) {
+            used -= wrapSegmentCount(cachedLines[scrollRow], visibleCols);
+            scrollRow++;
+            changed = true;
+        }
+        if (changed) repaint();
+    }
+
     /**
      * カーソル列が表示範囲に収まるよう scrollCol を調整する。
      * ModalEditor がカーソル移動後に呼ぶことで横スクロールを追従させる。
@@ -622,6 +681,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * @param line     カーソルがいる行の文字列（全角幅計算に使用）
      */
     public void ensureCursorColVisible(int col, String line) {
+        if (wrapEnabled) {
+            // wrap有効時は横スクロールを行わない（長い行は折返して表示するため）
+            if (scrollCol != 0) { scrollCol = 0; repaint(); }
+            return;
+        }
         int cursorCells = cellsForCol(line, col);
         int visibleCols = computeVisibleCols();
         if (cursorCells < scrollCol) {
@@ -654,6 +718,139 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private int computeVisibleRows(int lineHeight) {
         if (lineHeight <= 0) return 1;
         return Math.max(1, (getHeight() - lineHeight) / lineHeight);
+    }
+
+    // -------------------------------------------------------------------------
+    // :wrap / :nowrap（画面端での折り返し表示）
+    // -------------------------------------------------------------------------
+
+    /** wrap時、1画面行に収まるセル数（ガター幅を除いた実効幅）を返す */
+    private int computeVisibleColsForWrap() {
+        int charWidth = (cachedCharWidth > 0) ? cachedCharWidth : cellW;
+        if (charWidth <= 0) return 80;
+        int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+        return Math.max(1, (getWidth() - gutterWidth) / charWidth);
+    }
+
+    /**
+     * wrap時、1論理行を画面上のセグメント（各要素は {開始charIndex, 終了charIndex(exclusive)}）に
+     * 分割する。全角文字（2セル）がセグメント境界をまたがないよう、セル単位で貪欲に区切る。
+     * 空行でも必ず1セグメント（{0,0}）を返す。
+     */
+    private static List<int[]> wrapSegments(String line, int visibleCols) {
+        List<int[]> segs = new java.util.ArrayList<>();
+        int start = 0;
+        int cells = 0;
+        int i = 0;
+        while (i < line.length()) {
+            int cp = line.codePointAt(i);
+            int w = charCellWidth(cp);
+            int len = Character.charCount(cp);
+            if (cells > 0 && cells + w > visibleCols) {
+                segs.add(new int[]{start, i});
+                start = i;
+                cells = 0;
+            }
+            cells += w;
+            i += len;
+        }
+        segs.add(new int[]{start, line.length()});
+        return segs;
+    }
+
+    private static int wrapSegmentCount(String line, int visibleCols) {
+        return wrapSegments(line, visibleCols).size();
+    }
+
+    /** wrap時の画面描画1行分。docRow の [segStart, segEnd) の範囲がこのスクリーン行に表示される。 */
+    private record WrapRow(int docRow, int segStart, int segEnd) {}
+
+    /** scrollRow を起点に、画面に収まる分（最大 visibleRows 行）の折返しプランを構築する。 */
+    private List<WrapRow> buildWrapPlan(String[] lines, int visibleRows, int visibleCols) {
+        List<WrapRow> plan = new java.util.ArrayList<>(visibleRows);
+        int row = scrollRow;
+        while (plan.size() < visibleRows && row < lines.length) {
+            for (int[] seg : wrapSegments(lines[row], visibleCols)) {
+                if (plan.size() >= visibleRows) break;
+                plan.add(new WrapRow(row, seg[0], seg[1]));
+            }
+            row++;
+        }
+        return plan;
+    }
+
+    /** 構築済みの wrapPlan から、指定した文書上の行・列が描画されるスクリーン行とX座標を探す。 */
+    private static int[] findSegmentPixel(List<WrapRow> wrapPlan, String line, int docRow, int col,
+            int charWidth, int gutterWidth) {
+        for (int screenRow = 0; screenRow < wrapPlan.size(); screenRow++) {
+            WrapRow wr = wrapPlan.get(screenRow);
+            if (wr.docRow() != docRow) continue;
+            boolean isLastSeg = wr.segEnd() == line.length();
+            if (col >= wr.segStart() && (col < wr.segEnd() || isLastSeg)) {
+                int x = xForCol(line, col, charWidth) - xForCol(line, wr.segStart(), charWidth) + gutterWidth;
+                return new int[]{screenRow, x};
+            }
+        }
+        return null;
+    }
+
+    /**
+     * wrap時、指定した文書上の行・列が画面上のどのスクリーン行・X座標(ピクセル)に描画されるかを
+     * scrollRow から辿って計算する（wrapPlan が手元にない paintContent() 外からの呼び出し用。
+     * IME候補ウィンドウの位置計算で使う）。対象行が scrollRow より前の場合は null を返す。
+     */
+    private int[] wrapScreenPosition(String[] lines, int docRow, int col, int charWidth, int gutterWidth) {
+        if (docRow < scrollRow || docRow >= lines.length) return null;
+        int visibleCols = computeVisibleColsForWrap();
+        int screenRow = 0;
+        for (int r = scrollRow; r < docRow; r++) {
+            screenRow += wrapSegmentCount(lines[r], visibleCols);
+        }
+        String line = lines[docRow];
+        for (int[] seg : wrapSegments(line, visibleCols)) {
+            boolean isLastSeg = seg[1] == line.length();
+            if (col >= seg[0] && (col < seg[1] || isLastSeg)) {
+                int x = xForCol(line, col, charWidth) - xForCol(line, seg[0], charWidth) + gutterWidth;
+                return new int[]{screenRow, x};
+            }
+            screenRow++;
+        }
+        return null;
+    }
+
+    /**
+     * 行内の [colStart, colEndExclusive) 範囲のハイライトを、wrapPlan上の該当スクリーン行すべてに
+     * 分割して描画する（選択範囲・検索ハイライトで共用）。範囲が0幅の場合（空行等）は
+     * 非wrap時と同様に1文字分だけハイライトする。
+     */
+    private void drawWrappedRangeSpan(Graphics2D g2, List<WrapRow> wrapPlan, String line, int docRow,
+            int colStart, int colEndExclusive, int charWidth, int lineHeight, int gutterWidth) {
+        boolean any = false;
+        for (int screenRow = 0; screenRow < wrapPlan.size(); screenRow++) {
+            WrapRow wr = wrapPlan.get(screenRow);
+            if (wr.docRow() != docRow) continue;
+            int from = Math.max(colStart, wr.segStart());
+            int to = Math.min(colEndExclusive, wr.segEnd());
+            if (from >= to) continue;
+            any = true;
+            int xStart = xForCol(line, from, charWidth) - xForCol(line, wr.segStart(), charWidth) + gutterWidth;
+            int xEnd = xForCol(line, to, charWidth) - xForCol(line, wr.segStart(), charWidth) + gutterWidth;
+            int drawStart = Math.max(xStart, gutterWidth);
+            int drawEnd = Math.min(xEnd, getWidth());
+            if (drawStart < drawEnd) {
+                g2.fillRect(drawStart, screenRow * lineHeight, drawEnd - drawStart, lineHeight);
+            }
+        }
+        if (!any && colEndExclusive <= colStart) {
+            int[] pos = findSegmentPixel(wrapPlan, line, docRow, colStart, charWidth, gutterWidth);
+            if (pos != null) {
+                int drawStart = Math.max(pos[1], gutterWidth);
+                int drawEnd = Math.min(pos[1] + charWidth, getWidth());
+                if (drawStart < drawEnd) {
+                    g2.fillRect(drawStart, pos[0] * lineHeight, drawEnd - drawStart, lineHeight);
+                }
+            }
+        }
     }
 
     @Override
@@ -690,7 +887,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         // ガター幅: 診断がある場合のみ "E " / "W " / "  " 2文字分を確保
         int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
-        int scrollOffsetX = scrollCol * charWidth;
+        int scrollOffsetX = wrapEnabled ? 0 : scrollCol * charWidth;
 
         // 再描画範囲がステータス行の帯に収まっている場合（歩行アニメーションのティック）は、
         // 本文（数十万行規模になりうる）の再描画を丸ごとスキップし、ステータス行だけ塗り直す。
@@ -717,33 +914,49 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             return;
         }
 
-        // 1.5 選択ハイライト（VISUALモード時）
         String[] lines = cachedLines;
+        int visibleRows = computeVisibleRows(lineHeight);
+        List<WrapRow> wrapPlan = wrapEnabled
+            ? buildWrapPlan(lines, visibleRows, computeVisibleColsForWrap())
+            : null;
+
+        // 1.5 選択ハイライト（VISUALモード時）
         if (visualMode && selAnchorRow >= 0) {
             drawSelectionHighlight(g2, lines,
-                charWidth, lineHeight, scrollOffsetX, gutterWidth);
+                charWidth, lineHeight, scrollOffsetX, gutterWidth, wrapPlan);
         }
 
         // 1.6 検索ハイライト（/pattern、*、# による検索結果）
         if (!searchHighlights.isEmpty()) {
-            drawSearchHighlights(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth);
+            drawSearchHighlights(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth, wrapPlan);
         }
 
-        // 2. 表示行範囲（scrollRow 〜 scrollRow+visibleRows）のみ描画する
+        // 2. 表示行範囲（scrollRow 〜 scrollRow+visibleRows。wrap時は折返し込みの画面行数）のみ描画する
         g2.setColor(theme.foreground);
-        int visibleRows = computeVisibleRows(lineHeight);
-        int lastRow = Math.min(lines.length, scrollRow + visibleRows);
-        for (int row = scrollRow; row < lastRow; row++) {
-            int screenRow = row - scrollRow;
-            int y = (screenRow + 1) * lineHeight;
-            drawLineWithFullWidthSupport(g2, lines[row], y, charWidth, scrollOffsetX, gutterWidth,
-                errorLines.contains(row));
+        int voidScreenRowStart;
+        if (wrapPlan != null) {
+            for (int screenRow = 0; screenRow < wrapPlan.size(); screenRow++) {
+                WrapRow wr = wrapPlan.get(screenRow);
+                String seg = lines[wr.docRow()].substring(wr.segStart(), wr.segEnd());
+                int y = (screenRow + 1) * lineHeight;
+                drawLineWithFullWidthSupport(g2, seg, y, charWidth, 0, gutterWidth,
+                    errorLines.contains(wr.docRow()));
+            }
+            voidScreenRowStart = wrapPlan.size();
+        } else {
+            int lastRow = Math.min(lines.length, scrollRow + visibleRows);
+            for (int row = scrollRow; row < lastRow; row++) {
+                int screenRow = row - scrollRow;
+                int y = (screenRow + 1) * lineHeight;
+                drawLineWithFullWidthSupport(g2, lines[row], y, charWidth, scrollOffsetX, gutterWidth,
+                    errorLines.contains(row));
+            }
+            voidScreenRowStart = Math.max(0, lastRow - scrollRow);
         }
 
         // 2.5 zz等でファイル末尾を超えてスクロールした場合、行が存在しない領域を
         //     テーマの通常背景色ではなく純粋な白(ライト)/黒(ダーク)で明示的に塗る。
         //     カーソルはこの領域には存在し得ない（cursorRowは常に有効な行番号にクランプされる）。
-        int voidScreenRowStart = Math.max(0, lastRow - scrollRow);
         if (voidScreenRowStart < visibleRows) {
             int voidY = voidScreenRowStart * lineHeight;
             g2.setColor(theme == Theme.LIGHT_MODE ? Color.WHITE : Color.BLACK);
@@ -751,16 +964,16 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         }
 
         // 3. カーソルを描画する（縦・横スクロールオフセット考慮）
-        drawCursor(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth);
+        drawCursor(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth, wrapPlan);
 
         // 4. ガター（診断マーカー）を描画する
         if (gutterWidth > 0) {
-            drawGutter(g2, charWidth, lineHeight, gutterWidth);
+            drawGutter(g2, charWidth, lineHeight, gutterWidth, wrapPlan);
         }
 
         // 5. エラー・警告アンダーラインを描画する
         if (!diagByLine.isEmpty()) {
-            drawDiagnosticUnderlines(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth);
+            drawDiagnosticUnderlines(g2, lines, charWidth, lineHeight, scrollOffsetX, gutterWidth, wrapPlan);
         }
 
         // 6. ステータス行を描画する（画面最下部）
@@ -869,11 +1082,23 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         // カーソル行の文字列でセルオフセットを計算（全角対応）
         String[] lines = cachedLines;
-        String anchorLine = (completionAnchorRow < lines.length) ? lines[completionAnchorRow] : "";
-        int cellOffset = cellsForCol(anchorLine, completionAnchorCol);
-
-        int anchorScreenRow = completionAnchorRow - scrollRow;
-        int popupX = gutterWidth + cellOffset * charWidth - scrollCol * charWidth;
+        int anchorScreenRow;
+        int popupX;
+        if (wrapEnabled) {
+            int[] pos = wrapScreenPosition(lines, completionAnchorRow, completionAnchorCol, charWidth, gutterWidth);
+            if (pos != null) {
+                anchorScreenRow = pos[0];
+                popupX = pos[1];
+            } else {
+                anchorScreenRow = completionAnchorRow - scrollRow;
+                popupX = gutterWidth;
+            }
+        } else {
+            String anchorLine = (completionAnchorRow < lines.length) ? lines[completionAnchorRow] : "";
+            int cellOffset = cellsForCol(anchorLine, completionAnchorCol);
+            anchorScreenRow = completionAnchorRow - scrollRow;
+            popupX = gutterWidth + cellOffset * charWidth - scrollCol * charWidth;
+        }
         int popupY = (anchorScreenRow + 1) * lineHeight; // カーソル行の下
 
         // 画面右端・下端をはみ出さないよう調整
@@ -950,12 +1175,20 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     private void drawCursor(Graphics2D g2, String[] lines, int charWidth,
-            int lineHeight, int scrollOffsetX, int gutterWidth) {
-        int screenRow = cursorRow - scrollRow;
-        if (screenRow < 0 || screenRow >= computeVisibleRows(lineHeight)) return;
-
+            int lineHeight, int scrollOffsetX, int gutterWidth, List<WrapRow> wrapPlan) {
         String line = (cursorRow < lines.length) ? lines[cursorRow] : "";
-        int x = xForCol(line, cursorCol, charWidth) - scrollOffsetX + gutterWidth;
+        int screenRow;
+        int x;
+        if (wrapPlan != null) {
+            int[] pos = findSegmentPixel(wrapPlan, line, cursorRow, cursorCol, charWidth, gutterWidth);
+            if (pos == null) return;
+            screenRow = pos[0];
+            x = pos[1];
+        } else {
+            screenRow = cursorRow - scrollRow;
+            if (screenRow < 0 || screenRow >= computeVisibleRows(lineHeight)) return;
+            x = xForCol(line, cursorCol, charWidth) - scrollOffsetX + gutterWidth;
+        }
         int yTop = screenRow * lineHeight;
 
         if (x + charWidth < 0 || x >= getWidth()) return;
@@ -998,14 +1231,26 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     /** ガター列に診断マーカー（E / W）を描画する */
-    private void drawGutter(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
-        int visibleRows = computeVisibleRows(lineHeight);
-        int lastRow = Math.min(cachedLines.length, scrollRow + visibleRows);
-
+    private void drawGutter(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth, List<WrapRow> wrapPlan) {
         // ガター背景（テーマ背景より少し暗く）
         g2.setColor(theme.background.darker());
         g2.fillRect(0, 0, gutterWidth, getHeight() - lineHeight);
 
+        if (wrapPlan != null) {
+            for (int screenRow = 0; screenRow < wrapPlan.size(); screenRow++) {
+                WrapRow wr = wrapPlan.get(screenRow);
+                if (wr.segStart() != 0) continue; // 折返しの継続行にはマーカーを出さない
+                DiagnosticKind kind = diagByLine.get(wr.docRow());
+                if (kind == null) continue;
+                int y = (screenRow + 1) * lineHeight;
+                g2.setColor(kind == DiagnosticKind.ERROR ? ERROR_COLOR : WARNING_COLOR);
+                g2.drawString(kind == DiagnosticKind.ERROR ? "E" : "W", 0, y);
+            }
+            return;
+        }
+
+        int visibleRows = computeVisibleRows(lineHeight);
+        int lastRow = Math.min(cachedLines.length, scrollRow + visibleRows);
         for (int row = scrollRow; row < lastRow; row++) {
             DiagnosticKind kind = diagByLine.get(row);
             if (kind == null) continue;
@@ -1018,7 +1263,23 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     /** エラー・警告行のテキスト下に波線状アンダーラインを描画する */
     private void drawDiagnosticUnderlines(Graphics2D g2, String[] lines,
-            int charWidth, int lineHeight, int scrollOffsetX, int gutterWidth) {
+            int charWidth, int lineHeight, int scrollOffsetX, int gutterWidth, List<WrapRow> wrapPlan) {
+        if (wrapPlan != null) {
+            for (int screenRow = 0; screenRow < wrapPlan.size(); screenRow++) {
+                WrapRow wr = wrapPlan.get(screenRow);
+                DiagnosticKind kind = diagByLine.get(wr.docRow());
+                if (kind == null) continue;
+                String line = lines[wr.docRow()];
+                int segPixelWidth = xForCol(line, wr.segEnd(), charWidth) - xForCol(line, wr.segStart(), charWidth);
+                if (segPixelWidth == 0) segPixelWidth = charWidth; // 空行は1文字分
+                int yUnder = (screenRow + 1) * lineHeight + 1;
+                int xStart = gutterWidth;
+                int xEnd = Math.min(xStart + segPixelWidth, getWidth());
+                drawWaveUnderline(g2, kind, xStart, xEnd, yUnder);
+            }
+            return;
+        }
+
         int visibleRows = computeVisibleRows(lineHeight);
         int lastRow = Math.min(lines.length, scrollRow + visibleRows);
 
@@ -1045,16 +1306,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             xEnd = Math.min(xEnd, getWidth());
             if (xStart >= xEnd) continue;
 
-            g2.setColor(kind == DiagnosticKind.ERROR ? ERROR_COLOR : WARNING_COLOR);
-            // 波線: 4pxごとに上下に振動
-            int amplitude = 1;
-            int period = 4;
-            for (int x = xStart; x < xEnd - period; x += period) {
-                g2.drawLine(x,           yUnder + amplitude,
-                            x + period/2, yUnder - amplitude);
-                g2.drawLine(x + period/2, yUnder - amplitude,
-                            x + period,   yUnder + amplitude);
-            }
+            drawWaveUnderline(g2, kind, xStart, xEnd, yUnder);
+        }
+    }
+
+    /** 波線状のアンダーラインを [xStart, xEnd) の範囲に描画する（4pxごとに上下に振動）。 */
+    private void drawWaveUnderline(Graphics2D g2, DiagnosticKind kind, int xStart, int xEnd, int yUnder) {
+        if (xStart >= xEnd) return;
+        g2.setColor(kind == DiagnosticKind.ERROR ? ERROR_COLOR : WARNING_COLOR);
+        int amplitude = 1;
+        int period = 4;
+        for (int x = xStart; x < xEnd - period; x += period) {
+            g2.drawLine(x,           yUnder + amplitude,
+                        x + period/2, yUnder - amplitude);
+            g2.drawLine(x + period/2, yUnder - amplitude,
+                        x + period,   yUnder + amplitude);
         }
     }
 
@@ -1076,7 +1342,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     private void drawSelectionHighlight(Graphics2D g2, String[] lines,
-            int charWidth, int lineHeight, int scrollOffsetX, int gutterWidth) {
+            int charWidth, int lineHeight, int scrollOffsetX, int gutterWidth, List<WrapRow> wrapPlan) {
         int r1 = selAnchorRow, c1 = selAnchorCol;
         int r2 = selCursorRow, c2 = selCursorCol;
         if (r1 > r2 || (r1 == r2 && c1 > c2)) {
@@ -1085,6 +1351,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         }
 
         g2.setColor(theme.accent);
+
+        if (wrapPlan != null) {
+            drawSelectionHighlightWrapped(g2, wrapPlan, lines, r1, c1, r2, c2, charWidth, lineHeight, gutterWidth);
+            return;
+        }
 
         if (visualBlockMode) {
             for (int row = Math.max(r1, scrollRow);
@@ -1135,9 +1406,46 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         }
     }
 
+    /** wrap時の選択ハイライト。VISUAL LINEは折返し先の各スクリーン行も全幅で塗り、
+     *  それ以外は drawWrappedRangeSpan() で行内範囲をセグメントごとに分割して塗る。 */
+    private void drawSelectionHighlightWrapped(Graphics2D g2, List<WrapRow> wrapPlan, String[] lines,
+            int r1, int c1, int r2, int c2, int charWidth, int lineHeight, int gutterWidth) {
+        if (visualLineMode) {
+            for (int screenRow = 0; screenRow < wrapPlan.size(); screenRow++) {
+                WrapRow wr = wrapPlan.get(screenRow);
+                if (wr.docRow() >= r1 && wr.docRow() <= r2) {
+                    g2.fillRect(gutterWidth, screenRow * lineHeight, getWidth() - gutterWidth, lineHeight);
+                }
+            }
+            return;
+        }
+        for (int row = r1; row <= r2; row++) {
+            if (row < 0 || row >= lines.length) continue;
+            String line = lines[row];
+            int colStart, colEndExclusive;
+            if (visualBlockMode) {
+                colStart = Math.min(c1, line.length());
+                colEndExclusive = Math.min(c2 + 1, line.length());
+            } else {
+                colStart = (row == r1) ? c1 : 0;
+                int colEnd = (row == r2) ? c2 : Math.max(0, line.length() - 1);
+                colEndExclusive = Math.min(colEnd + 1, line.length());
+            }
+            drawWrappedRangeSpan(g2, wrapPlan, line, row, colStart, colEndExclusive, charWidth, lineHeight, gutterWidth);
+        }
+    }
+
     private void drawSearchHighlights(Graphics2D g2, String[] lines, int charWidth,
-            int lineHeight, int scrollOffsetX, int gutterWidth) {
+            int lineHeight, int scrollOffsetX, int gutterWidth, List<WrapRow> wrapPlan) {
         g2.setColor(SEARCH_HIGHLIGHT_COLOR);
+        if (wrapPlan != null) {
+            for (int[] h : searchHighlights) {
+                int row = h[0], c1 = h[1], c2 = h[2];
+                if (row < 0 || row >= lines.length) continue;
+                drawWrappedRangeSpan(g2, wrapPlan, lines[row], row, c1, c2, charWidth, lineHeight, gutterWidth);
+            }
+            return;
+        }
         int visibleRows = computeVisibleRows(lineHeight);
         for (int[] h : searchHighlights) {
             int row = h[0], c1 = h[1], c2 = h[2];

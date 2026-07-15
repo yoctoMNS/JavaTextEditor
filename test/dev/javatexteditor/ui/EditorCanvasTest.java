@@ -537,7 +537,102 @@ public class EditorCanvasTest {
             pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        int total = 36;
+        // Test 37: isWrapEnabled() の初期値は false（:nowrap相当）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            boolean ok = !canvas.isWrapEnabled();
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "isWrapEnabled初期値==false");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 38: setWrapEnabled(true/false) が isWrapEnabled() に反映される
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setWrapEnabled(true);
+            boolean afterTrue = canvas.isWrapEnabled();
+            canvas.setWrapEnabled(false);
+            boolean afterFalse = canvas.isWrapEnabled();
+            boolean ok = afterTrue && !afterFalse;
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "setWrapEnabled反映");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 39: wrap有効時、画面幅を超える長い1行が2画面行目まで折り返して描画される。
+        //          canvas幅400・cellW=10なのでvisibleCols=40。50文字の行は[0,40)と[40,50)に分割される。
+        //          2画面行目(y=20〜39)は文書が尽きた「末尾超過(白塗り)」領域ではなく、
+        //          通常の背景色のまま文字が描画される。
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("A".repeat(50));
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setWrapEnabled(true);
+
+            BufferedImage img = render(canvas, 400, 300);
+            // 2画面行目のうち文字が描かれない余白部分(x=350)は通常背景色のはず
+            int pixel = img.getRGB(350, 25);
+            pass += checkColor("wrap時2画面行目は末尾超過白塗りではなく通常背景色", 0xF5, 0xF0, 0xE6, pixel);
+        }
+
+        // Test 40: 同じ条件で wrap 無効（既定）の場合、文書は実質1行しかないため
+        //          2画面行目は「末尾超過」領域として純白で塗られる（Test 39との対比）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("A".repeat(50));
+            canvas.setTheme(Theme.LIGHT_MODE);
+            // setWrapEnabled を呼ばない = 既定のnowrap
+
+            BufferedImage img = render(canvas, 400, 300);
+            int pixel = img.getRGB(350, 25);
+            pass += checkColor("nowrap時2画面行目は末尾超過領域のため純白", 0xFF, 0xFF, 0xFF, pixel);
+        }
+
+        // Test 41: wrap時、折り返し先(2画面行目)にあるカーソル位置が正しい画面座標に描画される
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setText("A".repeat(50));
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setWrapEnabled(true);
+            canvas.setCursor(0, 45); // 45文字目 = 2画面行目(40〜49文字目)の6文字目、ローカルx=(45-40)*10=50
+
+            BufferedImage img = render(canvas, 400, 300);
+            // カーソルブロックは(50, 20)から(charWidth, lineHeight)を前景色で塗る
+            int pixel = img.getRGB(51, 21);
+            pass += checkColor("wrap時折返し先カーソルの描画位置", 0x33, 0x33, 0x33, pixel);
+        }
+
+        // Test 42: wrap時、ensureCursorColVisible は横スクロールを一切行わない（常に0のまま）
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 300);
+            canvas.setWrapEnabled(true);
+            canvas.setScrollCol(5); // 強制的にセットしても
+            canvas.ensureCursorColVisible(100, "A".repeat(200));
+            boolean ok = canvas.getScrollCol() == 0;
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "wrap時ensureCursorColVisibleは横スクロールしない");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 43: wrap時、ensureCursorVisible は折返し後のスクリーン行数を考慮して scrollRow を進める。
+        //          canvas高さ80・lineHeight=20 => visibleRows=3。50文字(2画面行)の行が3行あり、
+        //          3行目(cursorRow=2)へ移動すると、1・2行目をスクロールアウトしてscrollRow=2になる。
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 80);
+            String line = "A".repeat(50);
+            canvas.setText(line + "\n" + line + "\n" + line);
+            canvas.setWrapEnabled(true);
+            render(canvas, 400, 80); // cachedCharWidth/cachedLineHeight を確定させる
+
+            canvas.ensureCursorVisible(2);
+            boolean ok = canvas.getScrollRow() == 2;
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "wrap時ensureCursorVisibleのscrollRow計算 (expected=2 actual=" + canvas.getScrollRow() + ")");
+            pass += ok ? 1 : 0;
+        }
+
+        int total = 43;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
