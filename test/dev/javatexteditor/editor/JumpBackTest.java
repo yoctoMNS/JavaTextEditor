@@ -25,6 +25,7 @@ public class JumpBackTest {
         testCloseJdkSourceBufferClearsSearchHighlight();
         testShiftKOnLocalVariableReceiverJumpsToDeclaration();
         testShiftKOnLocalVariableReceiverThenJumpBack();
+        testShiftKUnqualifiedSameClassOverloadJump();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -268,5 +269,73 @@ public class JumpBackTest {
 
         assertEquals("Shift+J: 呼び出し元の行へ戻る", useLine, ed.getCursorRow());
         assertEquals("Shift+J: 呼び出し元の列へ戻る", col, ed.getCursorCol());
+    }
+
+    /**
+     * jdk-source 疑似バッファ内で、修飾なし（レシーバなし）の識別子が同一クラスの
+     * 他メンバー（オーバーロードされたメソッドを含む）を指している場合、Shift+K で
+     * そのメンバーの宣言行へジャンプできることの回帰テスト。
+     *
+     * 例: java.lang.Integer.parseInt(String) の本体内から、同じクラスの
+     * オーバーロード parseInt(String, int) を "parseInt(s, 10)" のように無資格で
+     * 呼び出す箇所にカーソルを置いて Shift+K を押すと、従来は
+     * classAndMethodAtCursor()（"." の前にレシーバが無いと不成立）にも
+     * jdkIndex.lookup(word)（"parseInt" というクラス名は存在しない）にも
+     * ヒットせず "Not found in JDK: parseInt" になっていた。
+     *
+     * src.zip が見つからない実行環境ではジャンプ自体が成立しない（graceful degradation）ため、
+     * その場合や対象の呼び出しパターンが見つからない場合はテストをスキップする
+     * （他の jdk-source 系テストと同じ方針）。
+     */
+    static void testShiftKUnqualifiedSameClassOverloadJump() {
+        String content = "int x = Integer.parseInt(\"42\");\n";
+        ModalEditor ed = new ModalEditor(content, new EditorCanvas());
+        ed.setJdkClassIndex(JdkClassIndex.buildSync());
+
+        ed.setCursor(0, content.indexOf("Integer"));
+        pressShiftK(ed);
+
+        String path = ed.getCurrentFilePath();
+        if (path == null || !path.startsWith("*jdk-source:")) {
+            System.out.println("  SKIP testShiftKUnqualifiedSameClassOverloadJump (src.zip未検出のためジャンプ不成立)");
+            pass++;
+            return;
+        }
+
+        // Integer.java 内で、修飾なしの "parseInt(...)" 呼び出し（宣言行ではなく、
+        // 同一クラス内の他オーバーロードを呼び出している箇所）を探す。
+        String[] lines = ed.getText().split("\n", -1);
+        int callLine = -1;
+        int callCol = -1;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.contains("public") || line.contains("protected")
+                    || line.contains("private") || line.contains("native")) {
+                continue; // 宣言行は除外し、呼び出し箇所だけを対象にする
+            }
+            int idx = line.indexOf("parseInt(");
+            if (idx >= 0) {
+                callLine = i;
+                callCol = idx;
+                break;
+            }
+        }
+        if (callLine < 0) {
+            System.out.println("  SKIP testShiftKUnqualifiedSameClassOverloadJump (修飾なし呼び出し箇所が見つからない: JDKバージョン差異の可能性)");
+            pass++;
+            return;
+        }
+
+        ed.setCursor(callLine, callCol);
+        pressShiftK(ed);
+
+        assertTrue("ジャンプ後も同じ jdk-source 疑似バッファ内に留まる",
+            ed.getCurrentFilePath() != null && ed.getCurrentFilePath().startsWith("*jdk-source:"));
+        String[] afterLines = ed.getText().split("\n", -1);
+        String jumpedLine = afterLines[ed.getCursorRow()];
+        assertTrue("修飾なし呼び出しから同一クラス内の宣言行(オーバーロード含む)へジャンプする: " + jumpedLine,
+            jumpedLine.contains("parseInt(")
+                && (jumpedLine.contains("public") || jumpedLine.contains("protected")
+                    || jumpedLine.contains("private") || jumpedLine.contains("native")));
     }
 }
