@@ -482,7 +482,8 @@ public class Main {
         leaf.editor().setSplitHorizontalCallback(() -> {
             Leaf cur     = active[0];
             Leaf newLeaf = createLeaf(cur.editor().getText(),
-                                      cur.editor().getCurrentFilePath());
+                                      cur.editor().getCurrentFilePath(),
+                                      cur.canvas().getCellW(), cur.canvas().getCellH());
             root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
@@ -492,7 +493,8 @@ public class Main {
         leaf.editor().setSplitVerticalCallback(() -> {
             Leaf cur     = active[0];
             Leaf newLeaf = createLeaf(cur.editor().getText(),
-                                      cur.editor().getCurrentFilePath());
+                                      cur.editor().getCurrentFilePath(),
+                                      cur.canvas().getCellW(), cur.canvas().getCellH());
             root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
@@ -501,10 +503,19 @@ public class Main {
         });
     }
 
-    /** 新しいリーフを生成してコールバックを設定する。 */
+    /** 新しいリーフを生成してコールバックを設定する（既定のフォントセルサイズを使用）。 */
     private static Leaf createLeaf(String text, String path) {
+        return createLeaf(text, path, initialCellW, initialCellH);
+    }
+
+    /**
+     * 新しいリーフを生成してコールバックを設定する。分割元ペインのフォントセルサイズを
+     * 引き継ぐために cellW/cellH を明示指定できる（分割後は Ctrl+Shift+矢印で他ペインとは
+     * 独立に変更可能。あくまで「分割直後の初期値」を揃えるだけ）。
+     */
+    private static Leaf createLeaf(String text, String path, int cellW, int cellH) {
         EditorCanvas canvas = new EditorCanvas();
-        canvas.setInitialCellSize(initialCellW, initialCellH);
+        canvas.setInitialCellSize(cellW, cellH);
         canvas.setTheme(Theme.LIGHT_MODE);
         ModalEditor editor = new ModalEditor(text, path, canvas);
         setupCompileAnalysis(editor, canvas);
