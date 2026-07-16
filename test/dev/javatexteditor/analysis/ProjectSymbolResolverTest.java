@@ -24,6 +24,7 @@ public class ProjectSymbolResolverTest {
         test_resolveMemberInType_walksSuperclassChain();
         test_resolveMemberInType_stopsAtUnknownSuperclass();
         test_resolveMemberInType_multiLevelInheritance();
+        test_findMethodInNestedClass();
 
         System.out.println();
         System.out.println("Results: " + passed + " passed, " + failed + " failed");
@@ -80,6 +81,36 @@ public class ProjectSymbolResolverTest {
         assertTrue("field MAX is found", loc.isPresent());
         assertEquals("field kind is FIELD", SymbolKind.FIELD, loc.get().kind());
         assertEquals("field declaration line", 2, loc.get().lineNumber());
+    }
+
+    /**
+     * ネストした（静的ネスト）クラス内で自分自身の兄弟メソッドを無資格呼び出しするケース。
+     * Shift+K がこの宣言を見つけられない不具合の再現テスト（symbol-definition-navigation
+     * スキル「不具合A」参照）。SourceAnalyzer がネストクラスのメンバーも収集するようになった
+     * ことで、resolve() の名前ベース検索がこの宣言も発見できることを確認する。
+     */
+    static void test_findMethodInNestedClass() throws Exception {
+        Path dir = tempDir();
+        writeFile(dir, "Outer.java", """
+            public class Outer {
+                static class Inner {
+                    void caller() {
+                        helper();
+                    }
+                    void helper() {
+                        System.out.println("hi");
+                    }
+                }
+            }
+            """);
+
+        ProjectSymbolResolver resolver = new ProjectSymbolResolver();
+        Optional<ProjectSymbolResolver.SymbolLocation> loc =
+            resolver.resolve(dir, null, null, "helper");
+
+        assertTrue("nested class method helper is found", loc.isPresent());
+        assertEquals("method kind is METHOD", SymbolKind.METHOD, loc.get().kind());
+        assertEquals("method declaration line", 5, loc.get().lineNumber());
     }
 
     static void test_findMethodInSingleFile() throws Exception {

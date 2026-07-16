@@ -78,6 +78,22 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
+        // Test 5b: charCellWidthがCJK記号・句読点（「」等）と半角カタカナを正しく判定するか
+        // （マルチバイト文字の重なり不具合の回帰テスト。0x300C「かぎ括弧」は
+        //  CJK Symbols and Punctuation ブロックに属し、旧実装では判定範囲(0x3040〜)の
+        //  手前で漏れて半角(1)扱いになっていたため、後続文字が重なって描画されていた）
+        {
+            boolean ok = EditorCanvas.charCellWidth(0x300C) == 2   // 「
+                && EditorCanvas.charCellWidth(0x300D) == 2         // 」
+                && EditorCanvas.charCellWidth(0x3001) == 2         // 、
+                && EditorCanvas.charCellWidth(0x3002) == 2         // 。
+                && EditorCanvas.charCellWidth(0x3000) == 2         // 全角スペース
+                && EditorCanvas.charCellWidth(0xFF71) == 1         // 半角カタカナ「ｱ」
+                && EditorCanvas.charCellWidth(0xFF9F) == 1;        // 半角カタカナ濁点
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "charCellWidth判定（CJK記号・半角カタカナ）");
+            pass += ok ? 1 : 0;
+        }
+
         // Test 6: scrollRow の初期値は 0
         {
             EditorCanvas canvas = new EditorCanvas();
@@ -537,7 +553,7 @@ public class EditorCanvasTest {
             pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        // Test 37: isWrapEnabled() の初期値は false（:nowrap相当）
+        // Test 38: isWrapEnabled() の初期値は false（:nowrap相当）
         {
             EditorCanvas canvas = new EditorCanvas();
             boolean ok = !canvas.isWrapEnabled();
@@ -545,7 +561,7 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        // Test 38: setWrapEnabled(true/false) が isWrapEnabled() に反映される
+        // Test 39: setWrapEnabled(true/false) が isWrapEnabled() に反映される
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setWrapEnabled(true);
@@ -557,7 +573,7 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        // Test 39: wrap有効時、画面幅を超える長い1行が2画面行目まで折り返して描画される。
+        // Test 40: wrap有効時、画面幅を超える長い1行が2画面行目まで折り返して描画される。
         //          canvas幅400・cellW=10なのでvisibleCols=40。50文字の行は[0,40)と[40,50)に分割される。
         //          2画面行目(y=20〜39)は文書が尽きた「末尾超過(白塗り)」領域ではなく、
         //          通常の背景色のまま文字が描画される。
@@ -574,8 +590,8 @@ public class EditorCanvasTest {
             pass += checkColor("wrap時2画面行目は末尾超過白塗りではなく通常背景色", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        // Test 40: 同じ条件で wrap 無効（既定）の場合、文書は実質1行しかないため
-        //          2画面行目は「末尾超過」領域として純白で塗られる（Test 39との対比）
+        // Test 41: 同じ条件で wrap 無効（既定）の場合、文書は実質1行しかないため
+        //          2画面行目は「末尾超過」領域として純白で塗られる（Test 40との対比）
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -588,7 +604,7 @@ public class EditorCanvasTest {
             pass += checkColor("nowrap時2画面行目は末尾超過領域のため純白", 0xFF, 0xFF, 0xFF, pixel);
         }
 
-        // Test 41: wrap時、折り返し先(2画面行目)にあるカーソル位置が正しい画面座標に描画される
+        // Test 42: wrap時、折り返し先(2画面行目)にあるカーソル位置が正しい画面座標に描画される
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -603,7 +619,7 @@ public class EditorCanvasTest {
             pass += checkColor("wrap時折返し先カーソルの描画位置", 0x33, 0x33, 0x33, pixel);
         }
 
-        // Test 42: wrap時、ensureCursorColVisible は横スクロールを一切行わない（常に0のまま）
+        // Test 43: wrap時、ensureCursorColVisible は横スクロールを一切行わない（常に0のまま）
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -615,7 +631,7 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        // Test 43: wrap時、ensureCursorVisible は折返し後のスクリーン行数を考慮して scrollRow を進める。
+        // Test 44: wrap時、ensureCursorVisible は折返し後のスクリーン行数を考慮して scrollRow を進める。
         //          canvas高さ80・lineHeight=20 => visibleRows=3。50文字(2画面行)の行が3行あり、
         //          3行目(cursorRow=2)へ移動すると、1・2行目をスクロールアウトしてscrollRow=2になる。
         {
@@ -632,7 +648,7 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        int total = 43;
+        int total = 44;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

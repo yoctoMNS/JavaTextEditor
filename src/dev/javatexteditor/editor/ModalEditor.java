@@ -5432,7 +5432,33 @@ public class ModalEditor {
             // "gc" が native ソース内の無関係な識別子（例: "argc(" の部分文字列）に
             // 誤ってマッチし、全く関係ない箇所へジャンプしてしまうバグがあった。
             if (jdkSourceIsNative && sourceTracer.hasNativeSrcDir()) {
-                Optional<OpenjdkSourceTracer.CSymbolLocation> loc = sourceTracer.findCSymbol(word);
+                // まず現在表示中ファイル自身を優先して探す。findCSymbol() は
+                // lib/openjdk-native/ 全木を無順序に走査し最初に見つかった定義を返すため、
+                // 同名の static ヘルパー関数が他ファイルにもあると無関係な別ファイルへ
+                // 誤ジャンプしてしまう（JNIグルーコード・HotSpotいずれもありがちな命名）。
+                // 現在のファイルパスは "*jdk-source:<相対パス>*" という命名規則
+                // （openCSymbolBuffer() 参照）から復元できる。ただしこの相対パスは
+                // CSymbolLocation.relativePath() が返す「nativeSrcDir の親ディレクトリ
+                // からの相対パス」（例: "openjdk-native/java.base/share/native/..."）であり、
+                // findCSymbolInFile() が期待する「nativeSrcDir 自身からの相対パス」
+                // （例: "java.base/share/native/..."。EntryPointIndex 参照）とは
+                // 先頭セグメント（nativeSrcDir のディレクトリ名）1つ分ずれているため、
+                // それを取り除いてから渡す。
+                String currentRelativePath = currentFilePath
+                    .replaceFirst("^\\*jdk-source:", "")
+                    .replaceAll("\\*$", "");
+                Optional<OpenjdkSourceTracer.CSymbolLocation> loc = Optional.empty();
+                Optional<Path> nativeSrcDir = sourceTracer.getNativeSrcDir();
+                if (nativeSrcDir.isPresent()) {
+                    String nativeSrcDirName = nativeSrcDir.get().getFileName().toString() + "/";
+                    if (currentRelativePath.startsWith(nativeSrcDirName)) {
+                        String withinNativeSrcDir = currentRelativePath.substring(nativeSrcDirName.length());
+                        loc = sourceTracer.findCSymbolInFile(withinNativeSrcDir, word);
+                    }
+                }
+                if (loc.isEmpty()) {
+                    loc = sourceTracer.findCSymbol(word);
+                }
                 if (loc.isPresent()) {
                     openCSymbolBuffer(loc.get());
                     return;
