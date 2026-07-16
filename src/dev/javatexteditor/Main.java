@@ -141,6 +141,37 @@ public class Main {
     }
 
     /**
+     * Vim方式の共有バッファ: absolutePath を現在の currentFilePath として持つ生きたペインが
+     * あれば、そのペインが参照する UndoablePieceTable をそのまま返す（無ければ null）。
+     * ModalEditor.acquireBufferForOpen() から liveBufferLookup 経由で呼ばれる。
+     */
+    private static dev.javatexteditor.buffer.UndoablePieceTable findLiveBuffer(
+            PaneNode root, String absolutePath) {
+        if (absolutePath == null) return null;
+        for (Leaf l : allLeaves(root)) {
+            if (absolutePath.equals(l.editor().getCurrentFilePath())) {
+                return l.editor().getBuffer();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * source と同じバッファ参照（Vim方式の共有バッファ）を表示している他ペインへ、
+     * カーソル位置を現在の値で再クランプしつつ画面を再描画させる。setCursor() が
+     * getLines()（＝共有バッファの最新内容）を基準に行/列をクランプしたうえで
+     * syncCanvas() まで行うため、他ペインでの削除等でカーソルが範囲外になっていても安全。
+     */
+    private static void syncSiblingBuffers(PaneNode root, Leaf source) {
+        dev.javatexteditor.buffer.UndoablePieceTable buf = source.editor().getBuffer();
+        for (Leaf l : allLeaves(root)) {
+            if (l != source && l.editor().getBuffer() == buf) {
+                l.editor().setCursor(l.editor().getCursorRow(), l.editor().getCursorCol());
+            }
+        }
+    }
+
+    /**
      * target リーフを指定の向きで分割し、右/下に新リーフを挿入した新ツリーを返す。
      * root が target 自身の場合は Split を直接返す。
      */
@@ -484,6 +515,7 @@ public class Main {
             Leaf newLeaf = createLeaf(cur.editor().getText(),
                                       cur.editor().getCurrentFilePath(),
                                       cur.canvas().getCellW(), cur.canvas().getCellH());
+            shareBufferWithSplit(cur, newLeaf);
             root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
@@ -495,12 +527,24 @@ public class Main {
             Leaf newLeaf = createLeaf(cur.editor().getText(),
                                       cur.editor().getCurrentFilePath(),
                                       cur.canvas().getCellW(), cur.canvas().getCellH());
+            shareBufferWithSplit(cur, newLeaf);
             root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
             refreshCallbacks(frame, root, active);
             active[0].canvas().requestFocusInWindow();
         });
+    }
+
+    /**
+     * :split/:vsplit: 本家Vimと同じく、分割で作った新ペインは分割元と同じバッファを共有する
+     * （新ペインを作った瞬間から真に同一の UndoablePieceTable インスタンスを指すため、
+     * createLeaf() が内部で一旦構築した独自バッファを捨てて置き換える。カーソル位置も
+     * 分割元に揃える。以後は liveBufferLookup を経由せずとも参照が同一のまま保たれる）。
+     */
+    private static void shareBufferWithSplit(Leaf source, Leaf newLeaf) {
+        newLeaf.editor().setBuffer(source.editor().getBuffer());
+        newLeaf.editor().setCursor(source.editor().getCursorRow(), source.editor().getCursorCol());
     }
 
     /** 新しいリーフを生成してコールバックを設定する（既定のフォントセルサイズを使用）。 */
@@ -565,6 +609,11 @@ public class Main {
             // 固定リストではなく毎回 allLeaves(root[0]) を再評価するSupplierを渡す）。
             leaf.editor().setAllEditorsSupplier(
                     () -> allLeaves(root[0]).stream().map(Leaf::editor).toList());
+            // Vim方式の共有バッファ: ファイルを開く際、同じ絶対パスを他ペインが既に開いていれば
+            // その生きたバッファ参照を再利用させる（:e/telescope/FILER/gr/Ctrl+U/Ctrl+P等すべて経由）。
+            leaf.editor().setLiveBufferLookup(path -> findLiveBuffer(root[0], path));
+            // 共有バッファの内容が変化した直後、同じ参照を持つ他ペインの画面へ即座に反映する。
+            leaf.editor().setOnSharedBufferSync(() -> syncSiblingBuffers(root[0], leaf));
             leaf.editor().setMovePanePrevCallback(() -> {
                 List<Leaf> leaves = allLeaves(root[0]);
                 if (leaves.size() <= 1) return;
