@@ -138,9 +138,13 @@ public class ProjectBuilder {
 
     /** F11: bin/ に .class が1つでもあれば true（未コンパイルなら実行を拒否するためのガード）。 */
     public boolean hasCompiledClasses(Path projectRoot) {
-        Path binDir = binDirFor(projectRoot);
-        if (!Files.isDirectory(binDir)) return false;
-        try (var stream = Files.walk(binDir)) {
+        return containsClassFile(binDirFor(projectRoot));
+    }
+
+    /** dir が実在するディレクトリで、かつ配下に .class ファイルを1つでも含むか。 */
+    private boolean containsClassFile(Path dir) {
+        if (!Files.isDirectory(dir)) return false;
+        try (var stream = Files.walk(dir)) {
             return stream.anyMatch(p -> p.toString().endsWith(".class"));
         } catch (IOException e) {
             return false;
@@ -149,21 +153,39 @@ public class ProjectBuilder {
 
     /**
      * F10/F11/F12 の .class 出力先（{@value #OUTPUT_DIR_NAME}/）を解決する。
-     * projectRoot が src フォルダの兄弟位置（＝projectRoot/src が存在する）ならそのまま
-     * projectRoot/bin を使う。projectRoot が src フォルダ配下の任意の深さのディレクトリ
-     * （例: :cd でプロジェクトルート配下のパッケージディレクトリに移動している場合）である
-     * 場合は、祖先ディレクトリを遡って最初に src 子ディレクトリを持つディレクトリを探し、
-     * そこを基準に bin を置く。どの祖先にも src が見つからない場合は projectRoot 自身に
-     * フォールバックする（従来どおり projectRoot/bin）。
+     * {@link #resolveProjectRoot(Path)} が返すディレクトリ配下の bin/ を使う。
      */
     public Path binDirFor(Path projectRoot) {
-        return resolveProjectBaseDir(projectRoot).resolve(OUTPUT_DIR_NAME);
+        return resolveProjectRoot(projectRoot).resolve(OUTPUT_DIR_NAME);
     }
 
-    private Path resolveProjectBaseDir(Path projectRoot) {
+    /**
+     * F10/F11/F12 が実際にソース走査・コンパイル・実行の基準とするプロジェクトルートを解決する。
+     * 渡された projectRoot（:cd で設定した現在の作業ディレクトリ）が src フォルダの兄弟位置
+     * （＝projectRoot/src が存在する）ならそのまま projectRoot を返す。projectRoot が
+     * src（または既にコンパイル済みなら bin）フォルダ配下の任意の深さのディレクトリ
+     * （例: :cd でプロジェクトルート配下のパッケージディレクトリに潜り込んで作業している場合）
+     * である場合は、祖先ディレクトリを遡って最初に src、または .class ファイルを含む bin
+     * 子ディレクトリを持つディレクトリを探し、それをプロジェクトルートとして扱う。これにより、
+     * パッケージの深い階層で作業していても :cd でルートまで登り直さずに F10/F11/F12 が
+     * プロジェクト全体を対象にできる。どの祖先にも src/bin が見つからない場合は projectRoot
+     * 自身にフォールバックする。
+     *
+     * <p>bin/ の判定は「ディレクトリが存在するだけ」では行わない。ほぼ全てのUnix系OSには
+     * ルート直下やその近辺に無関係な {@code bin/} ディレクトリ（例: {@code /bin}・
+     * {@code /usr/bin}）が実在するため、単純な存在チェックだと祖先を遡り続けた末に
+     * ファイルシステムルート付近まで誤って"プロジェクトルート"と誤認識してしまう
+     * （最悪の場合ディスク全体をコンパイル対象にしようとする）。{@link #containsClassFile}
+     * で「実際にこのエディタがコンパイルした .class ファイルを含むか」まで確認することで、
+     * この種の無関係なシステムディレクトリとの誤判定を避けている。
+     */
+    public Path resolveProjectRoot(Path projectRoot) {
         Path dir = projectRoot.toAbsolutePath().normalize();
         while (dir != null) {
             if (Files.isDirectory(dir.resolve("src"))) {
+                return dir;
+            }
+            if (containsClassFile(dir.resolve(OUTPUT_DIR_NAME))) {
                 return dir;
             }
             dir = dir.getParent();

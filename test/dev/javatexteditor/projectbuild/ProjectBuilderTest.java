@@ -25,6 +25,9 @@ public class ProjectBuilderTest {
         testBinDirForUsesProjectRootWhenSrcIsDirectChild();
         testBinDirForClimbsToSrcAncestorWhenCwdIsInsideSrc();
         testCompileAndRunUseSameBinDirWhenCwdIsInsideSrc();
+        testResolveProjectRootClimbsToBinAncestorWhenNoSrc();
+        testResolveProjectRootIgnoresEmptyBinAncestor();
+        testResolveProjectRootPrefersSelfWhenBothSrcAndBinArePresent();
 
         testFindMainClassWithPackage();
         testFindMainClassWithoutPackage();
@@ -154,6 +157,45 @@ public class ProjectBuilderTest {
             Files.exists(projectDir.resolve("bin").resolve("Hello.class")));
         assertTrue("hasCompiledClasses true when queried from inside src/",
             builder.hasCompiledClasses(pkgDir));
+    }
+
+    static void testResolveProjectRootClimbsToBinAncestorWhenNoSrc() throws IOException {
+        // src/ が既に無く（例: 削除済み）コンパイル済みのbin/（.classファイルを含む）だけが
+        // 残っている場合でも、bin/ を持つ祖先をプロジェクトルートとして認識できることを確認する
+        // （F10/F11/F12でsrcの深い階層に潜り込んでいても自動でプロジェクトルートまで登る、
+        // という要件のbin版）。
+        Path projectDir = Files.createTempDirectory("pb-climb-to-bin");
+        Path binDir = projectDir.resolve("bin");
+        Files.createDirectories(binDir);
+        Files.writeString(binDir.resolve("Hello.class"), "not real bytecode but a stand-in for a .class file");
+        Path deepDir = projectDir.resolve("some").resolve("deep").resolve("dir");
+        Files.createDirectories(deepDir);
+
+        assertEquals("climbs up to the bin/ parent directory",
+            projectDir, new ProjectBuilder().resolveProjectRoot(deepDir));
+    }
+
+    static void testResolveProjectRootIgnoresEmptyBinAncestor() throws IOException {
+        // .classファイルを1つも含まない空のbin/（例: システムの/bin等、無関係なディレクトリ）は
+        // プロジェクトルートの目印として扱わない（誤ってファイルシステムルート付近まで
+        // 遡ってしまう事故を防ぐための安全弁）。
+        Path projectDir = Files.createTempDirectory("pb-ignore-empty-bin");
+        Files.createDirectories(projectDir.resolve("bin"));
+        Path deepDir = projectDir.resolve("some").resolve("deep").resolve("dir");
+        Files.createDirectories(deepDir);
+
+        assertEquals("does not treat an empty bin/ as the project root",
+            deepDir, new ProjectBuilder().resolveProjectRoot(deepDir));
+    }
+
+    static void testResolveProjectRootPrefersSelfWhenBothSrcAndBinArePresent() throws IOException {
+        // 現在のディレクトリ自身がすでに src/ (or bin/) の親であれば、祖先を遡らずそのまま使う
+        Path dir = Files.createTempDirectory("pb-self-is-root");
+        Files.createDirectories(dir.resolve("src"));
+        Files.createDirectories(dir.resolve("bin"));
+
+        assertEquals("uses self when already the project root",
+            dir, new ProjectBuilder().resolveProjectRoot(dir));
     }
 
     static void testFindMainClassWithPackage() throws IOException {
