@@ -95,6 +95,9 @@ public class ModalEditor {
     private final EditorCanvas canvas; // null の場合はGUIなし（テスト用）
     private final KeymapRegistry keymap = new KeymapRegistry();
     private Mode mode = Mode.NORMAL;
+    // :wrap / :nowrap（画面端での折り返し表示）。既定はnowrap相当（横スクロール）。
+    // 詳細は .claude/skills/gui-rendering-pipeline/SKILL.md 参照。
+    private boolean wrapEnabled = false;
     // INSERT → NORMAL 復帰時に呼ばれるコールバック（バックグラウンドコンパイル等）
     private Runnable onReturnToNormal = null;
     // ファイル保存成功時に呼ばれるコールバック（バックグラウンドコンパイル等）
@@ -2322,6 +2325,10 @@ public class ModalEditor {
         } else if (cmd.startsWith("remove-import ")) {
             String fqn = cmd.substring("remove-import ".length()).trim();
             executeRemoveImport(fqn);
+        } else if (cmd.equals("wrap")) {
+            wrapEnabled = true;
+        } else if (cmd.equals("nowrap")) {
+            wrapEnabled = false;
         } else if (cmd.equals("pwd")) {
             statusMessage = getProjectRoot().toString();
         } else if (cmd.startsWith("cd ")) {
@@ -4703,6 +4710,7 @@ public class ModalEditor {
         if (canvas != null) {
             refreshCanvasTextCache();
             canvas.setText(canvasCachedText, canvasCachedLines);
+            canvas.setWrapEnabled(wrapEnabled);
             canvas.setErrorLines(outputErrorLinesOwner == buffer ? outputErrorLines : java.util.Set.of());
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
@@ -4785,6 +4793,7 @@ public class ModalEditor {
     public String getText()            { return buffer.getText(); }
     /** テスト用: syncCanvas() のテキストキャッシュが再構築された回数（軽量化 Phase 2）。 */
     public long getCanvasTextRebuildCount() { return canvasTextRebuildCount; }
+    public boolean isWrapEnabled()     { return wrapEnabled; }
     public int getCursorRow()          { return cursorRow; }
     public int getCursorCol()          { return cursorCol; }
     public boolean isNormalMode()      { return mode == Mode.NORMAL; }
