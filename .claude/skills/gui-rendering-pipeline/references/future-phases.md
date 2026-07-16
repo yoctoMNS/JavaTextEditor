@@ -107,6 +107,27 @@ splitPane.setResizeWeight(0.5);
 詳細な仕様決定・実装は `references/pane-resize.md` に分離した（現在のアクティブペインを
 Ctrl+Alt+矢印で伸縮する機能。祖先の`JSplitPane`を辿って対応方向の分割を1つだけ調整する設計）。
 
+## 分割ペインの初期フォントサイズは分割元ペインを引き継ぐ（✅ 実装済み・2026-07）
+
+- **要望**: 「分割ペインのフォントは他のペインと連動しなくて良いが、分割した際の初期フォントの
+  大きさは、分割元のペインで設定されていたフォントの大きさにしてほしい」。
+- **修正前の挙動**: `Main.createLeaf(text, path)` は常に起動時固定値
+  `initialCellW`/`initialCellH`（画面解像度から算出する static フィールド）で
+  `canvas.setInitialCellSize(...)` していたため、`Ctrl+Shift+矢印` でどのペインのフォントを
+  拡大縮小していても、新しく`:split`/`:vsplit`（`ss`/`sv`）で分割したペインは常に起動時サイズに
+  戻ってしまっていた。
+- **修正**: `createLeaf(text, path, int cellW, int cellH)`オーバーロードを追加し、
+  `setSplitHorizontalCallback`/`setSplitVerticalCallback`（`Main.setupSplitCallbacks`）が
+  分割元の`active[0].canvas().getCellW()`/`getCellH()`を渡すように変更した。従来の
+  `createLeaf(text, path)`（初回ペイン生成、`Main`起動処理から1回だけ呼ばれる）は
+  `initialCellW`/`initialCellH`を使う後方互換オーバーロードとして残した。
+- **分割後は完全に独立**: `setInitialCellSize`はあくまで生成直後の初期値であり、分割後に
+  一方のペインで`Ctrl+Shift+矢印`を押しても他方には一切影響しない（各`EditorCanvas`が
+  自分の`cellW`/`cellH`フィールドを個別に持つ既存設計のまま。今回変更したのは「分割**した
+  瞬間**の初期値をどこから取るか」のみ）。
+- **`:split`/`:vsplit`コマンドも同じコールバック経由**なので、キー操作（`ss`/`sv`）と
+  コロンコマンドのどちらで分割しても同じ挙動になる。
+
 ## v4 候補（未着手）
 
 以下は将来検討する機能。優先度は他 Skill（③④⑧）の進捗に依存する。
