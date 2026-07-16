@@ -109,6 +109,29 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
+        // Test 5c-2: charCellWidthが矢印・罫線・数学記号・Letterlike Symbols等を
+        // 全角(2)と判定するか（Test 5c提出後に「矢印や罫線がまだ重なる」という
+        // 追加報告があった不具合の回帰テスト。0x2190-0x214F・0x2500-0x259Fは
+        // Test 5cのWIDE_RANGESでは丸数字(0x2460台)と幾何学模様(0x25A0台)の間の
+        // 隙間として判定漏れしていた）
+        {
+            boolean ok = EditorCanvas.charCellWidth(0x2192) == 2   // → 矢印
+                && EditorCanvas.charCellWidth(0x2190) == 2         // ← 矢印
+                && EditorCanvas.charCellWidth(0x2191) == 2         // ↑ 矢印
+                && EditorCanvas.charCellWidth(0x2193) == 2         // ↓ 矢印
+                && EditorCanvas.charCellWidth(0x2500) == 2         // ─ 罫線（水平）
+                && EditorCanvas.charCellWidth(0x2502) == 2         // │ 罫線（垂直）
+                && EditorCanvas.charCellWidth(0x250C) == 2         // ┌ 罫線（角）
+                && EditorCanvas.charCellWidth(0x2588) == 2         // █ ブロック要素
+                && EditorCanvas.charCellWidth(0x2200) == 2         // ∀ 数学記号
+                && EditorCanvas.charCellWidth(0x2103) == 2         // ℃ Letterlike Symbols
+                && EditorCanvas.charCellWidth(0x2116) == 2         // № Letterlike Symbols
+                && EditorCanvas.charCellWidth(0x2913) == 2         // ⤓ Supplemental Arrows-B
+                && EditorCanvas.charCellWidth(0x28FF) == 1;        // ⣿ Braille Patterns（意図的に半角のまま）
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "charCellWidth判定（矢印・罫線・数学記号等）");
+            pass += ok ? 1 : 0;
+        }
+
         // Test 5d: 非ASCIIフォールバック描画が割り当てセルの外へはみ出さないこと
         // （drawClippedSwingChar()によるクリップの回帰テスト）。
         // セル幅(cellW)を最小の5px・セル高(cellH)を最大の80pxに設定すると、
@@ -590,7 +613,7 @@ public class EditorCanvasTest {
             pass += checkColor("文書内領域は通常の背景色のまま", 0xF5, 0xF0, 0xE6, pixel);
         }
 
-        int total = 39;
+        int total = 40;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
