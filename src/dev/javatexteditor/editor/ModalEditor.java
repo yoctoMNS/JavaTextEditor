@@ -111,6 +111,17 @@ public class ModalEditor {
     //  バッファ変更操作でも診断の再解析を追従させるため。デバウンスはMain側の責務）。
     private Runnable onBufferChanged = null;
     private long lastNotifiedBufferVersion = -1;
+    // Vim方式の共有バッファ（複数ペインで同一ファイルを開いた場合、真に同じ UndoablePieceTable
+    // インスタンスを参照させることでリアルタイムに編集が反映される）。
+    // liveBufferLookup: ファイルを開く際、同じ絶対パスを他ペインが既に開いていればその生きた
+    // バッファ参照を返す（無ければ null＝ディスクから新規読み込み）。Main.java が全ペインを
+    // 横断して検索できるよう Function として注入する。
+    private java.util.function.Function<String, UndoablePieceTable> liveBufferLookup = null;
+    // processKey() でバッファのversionが変化した直後に呼ばれ、同じバッファを共有する他ペインの
+    // 画面を再描画させるためのフック（onBufferChangedと発火タイミングは同じだが用途が異なるため
+    // 独立したコールバックにした。Main.java 側で全ペインを横断して同一参照のバッファを持つ
+    // 他Leafのsyncを行う）。
+    private Runnable onSharedBufferSync = null;
     private int cursorRow = 0;
     private int cursorCol = 0;
     private int anchorRow = 0;
@@ -231,7 +242,10 @@ public class ModalEditor {
     // telescope 疑似バッファ（\f/\g と同じ表示方式）の退避状態。
     // jdk-source の saved*/*cd候補* の cdSaved* と同じ「一時退避→キャンセル時に復元」パターンを踏襲するが、
     // 各セッションは独立したフィールド群を持つ（3系統の相互作用は未定義のまま。CLAUDE.md「既知の未接続・二重定義」参照）。
-    private String telescopeSavedBufferText = null;
+    // Vim方式の共有バッファ: テキストのスナップショットではなく UndoablePieceTable の参照そのものを
+    // 退避・復元する。文字列経由で復元すると（他ペインと共有していた場合でも）新規インスタンスに
+    // なってしまい共有が切れるため。
+    private UndoablePieceTable telescopeSavedBuffer = null;
     private String telescopeSavedFilePath = null;
     private int telescopeSavedCursorRow = 0;
     private int telescopeSavedCursorCol = 0;
@@ -254,7 +268,7 @@ public class ModalEditor {
     private List<String> cdCandidates = List.of(); // 候補ディレクトリ名（末尾 "/" は含まない）
     private String cdCandidateParentPart = ""; // 補完対象パスのうち末尾ディレクトリ名より前の部分（区切り文字含む）
     private boolean cdSelectionActive = false; // true の間は *cd候補* 疑似バッファを表示中
-    private String cdSavedBufferText = null;   // 選択中に退避した元バッファのテキスト
+    private UndoablePieceTable cdSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
     private String cdSavedFilePath = null;
     private int cdSavedCursorRow = 0;
     private int cdSavedCursorCol = 0;
@@ -263,7 +277,7 @@ public class ModalEditor {
     private List<String> edCandidates = List.of(); // 候補ファイル/ディレクトリ名（末尾 "/" はディレクトリのみ）
     private String edCandidateParentPart = "";
     private boolean edSelectionActive = false;
-    private String edSavedBufferText = null;
+    private UndoablePieceTable edSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
     private String edSavedFilePath = null;
     private int edSavedCursorRow = 0;
     private int edSavedCursorCol = 0;
@@ -274,7 +288,7 @@ public class ModalEditor {
     private int filerSelectedIdx = 0;
     private boolean filerSearchMode = false;
     private final StringBuilder filerQuery = new StringBuilder();
-    private String filerSavedBufferText = null;
+    private UndoablePieceTable filerSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
     private String filerSavedFilePath = null;
     private int filerSavedCursorRow = 0;
     private int filerSavedCursorCol = 0;
@@ -289,7 +303,7 @@ public class ModalEditor {
     private int binaryCursorOffset = 0;
     private boolean binaryNibblePending = false; // true = 直前に高位4bitを入力済み、次の1桁で低位4bitを確定
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
-    private String savedBufferText = null;       // 元バッファのテキスト
+    private UndoablePieceTable savedBuffer = null; // 元バッファの参照（共有バッファを保つため）
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
     private int savedCursorRow = 0;
     private int savedCursorCol = 0;
@@ -434,6 +448,23 @@ public class ModalEditor {
         this.onBufferChanged = callback;
     }
 
+    /**
+     * Vim方式の共有バッファ用: 同じ絶対パスを他ペインが既に開いていればその UndoablePieceTable
+     * 参照を返す関数を登録する（Main.java が全ペインを横断して検索する）。未設定・該当なしの場合は
+     * 従来通りディスクから新規読み込みする。
+     */
+    public void setLiveBufferLookup(java.util.function.Function<String, UndoablePieceTable> lookup) {
+        this.liveBufferLookup = lookup;
+    }
+
+    /**
+     * processKey() でバッファのversionが変化した直後に呼ばれるコールバックを設定する。
+     * Main.java が同じバッファ参照を持つ他ペインの syncCanvas() を呼ぶために使う。
+     */
+    public void setOnSharedBufferSync(Runnable callback) {
+        this.onSharedBufferSync = callback;
+    }
+
     /** テスト・呼び出し側の再解析要否判定用。バッファ内容が変わるたびに増分する。 */
     public long getBufferVersion() { return buffer.getVersion(); }
 
@@ -480,6 +511,7 @@ public class ModalEditor {
         if (currentVersion != lastNotifiedBufferVersion) {
             lastNotifiedBufferVersion = currentVersion;
             if (onBufferChanged != null) onBufferChanged.run();
+            if (onSharedBufferSync != null) onSharedBufferSync.run();
         }
     }
 
@@ -1455,7 +1487,7 @@ public class ModalEditor {
      * 現在編集中のバッファは cdSaved* に退避し、Enter で選択 / q でキャンセルすると復元する。
      */
     private void openCdCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
-        cdSavedBufferText = buffer.getText();
+        cdSavedBuffer = buffer;
         cdSavedFilePath = currentFilePath;
         cdSavedCursorRow = cursorRow;
         cdSavedCursorCol = cursorCol;
@@ -1506,13 +1538,13 @@ public class ModalEditor {
     }
 
     private void restoreCdSavedBuffer() {
-        buffer = new UndoablePieceTable(cdSavedBufferText != null ? cdSavedBufferText : "");
+        buffer = cdSavedBuffer != null ? cdSavedBuffer : new UndoablePieceTable("");
         currentFilePath = cdSavedFilePath;
         cursorRow = cdSavedCursorRow;
         cursorCol = cdSavedCursorCol;
         resetSearchAndResultState();
         cdSelectionActive = false;
-        cdSavedBufferText = null;
+        cdSavedBuffer = null;
         cdSavedFilePath = null;
         cdSavedCommandText = "";
     }
@@ -1584,7 +1616,7 @@ public class ModalEditor {
     }
 
     private void openEditCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
-        edSavedBufferText = buffer.getText();
+        edSavedBuffer = buffer;
         edSavedFilePath = currentFilePath;
         edSavedCursorRow = cursorRow;
         edSavedCursorCol = cursorCol;
@@ -1644,13 +1676,13 @@ public class ModalEditor {
     }
 
     private void restoreEditSavedBuffer() {
-        buffer = new UndoablePieceTable(edSavedBufferText != null ? edSavedBufferText : "");
+        buffer = edSavedBuffer != null ? edSavedBuffer : new UndoablePieceTable("");
         currentFilePath = edSavedFilePath;
         cursorRow = edSavedCursorRow;
         cursorCol = edSavedCursorCol;
         resetSearchAndResultState();
         edSelectionActive = false;
-        edSavedBufferText = null;
+        edSavedBuffer = null;
         edSavedFilePath = null;
         edSavedCommandText = "";
     }
@@ -1825,7 +1857,7 @@ public class ModalEditor {
      * *picker* 疑似バッファに差し替える。キャンセル時（Esc）は退避した状態にそのまま戻す。
      */
     private void beginTelescopeSession() {
-        telescopeSavedBufferText = buffer.getText();
+        telescopeSavedBuffer = buffer;
         telescopeSavedFilePath = currentFilePath;
         telescopeSavedCursorRow = cursorRow;
         telescopeSavedCursorCol = cursorCol;
@@ -1966,7 +1998,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + target.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = new UndoablePieceTable(result.text());
+                buffer = acquireBufferForOpen(target.toString(), result.text());
                 currentFilePath = target.toString();
                 cursorRow = Math.max(0, item.lineNumber());
                 cursorCol = 0;
@@ -2025,7 +2057,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), p.getFileName().toString(), p.toString());
                 statusMessage = "\"" + p.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = new UndoablePieceTable(result.text());
+                buffer = acquireBufferForOpen(p.toString(), result.text());
                 currentFilePath = p.toString();
                 cursorRow = 0;
                 cursorCol = 0;
@@ -2048,14 +2080,14 @@ public class ModalEditor {
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
-        buffer = new UndoablePieceTable(telescopeSavedBufferText != null ? telescopeSavedBufferText : "");
+        buffer = telescopeSavedBuffer != null ? telescopeSavedBuffer : new UndoablePieceTable("");
         currentFilePath = telescopeSavedFilePath;
         cursorRow = telescopeSavedCursorRow;
         cursorCol = telescopeSavedCursorCol;
         grepResults = telescopeSavedGrepResults;
         grepBaseDir = telescopeSavedGrepBaseDir;
         fileNameResults = telescopeSavedFileNameResults;
-        telescopeSavedBufferText = null;
+        telescopeSavedBuffer = null;
         telescopeSavedFilePath = null;
         telescopeSavedGrepResults = null;
         telescopeSavedGrepBaseDir = null;
@@ -2136,7 +2168,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + relPath + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = new UndoablePieceTable(result.text());
+                buffer = acquireBufferForOpen(target.toString(), result.text());
                 currentFilePath = target.toString();
                 cursorRow = 0;
                 cursorCol = 0;
@@ -2812,6 +2844,22 @@ public class ModalEditor {
     }
 
     /**
+     * Vim方式の共有バッファ: 同じ絶対パスを他ペインが既に開いていれば（liveBufferLookup経由で）
+     * その生きた UndoablePieceTable 参照をそのまま再利用し、無ければ読み込んだテキストから
+     * 新規インスタンスを作る。前者の場合はディスクから読んだ text は使われず捨てられる
+     * （他ペインの未保存の編集内容を破棄しないため）。ファイルを開く6箇所すべてがこのメソッドを
+     * 経由することで、真の共有バッファ（1文字編集するたびに他ペインの画面にも即座に反映される）
+     * を実現する。
+     */
+    private UndoablePieceTable acquireBufferForOpen(String absolutePath, String text) {
+        if (liveBufferLookup != null) {
+            UndoablePieceTable existing = liveBufferLookup.apply(absolutePath);
+            if (existing != null) return existing;
+        }
+        return new UndoablePieceTable(text);
+    }
+
+    /**
      * readFileContentForBuffer() が .class ファイルを検出した場合、:nimo コマンド用に
      * 生バイト列とファイル名を記録する。classFileBufferOwner に buffer 参照そのものを控えておくことで、
      * 別のバッファへ切り替わった時点で参照不一致により自動的に :nimo が無効化される
@@ -2989,7 +3037,7 @@ public class ModalEditor {
         Path p = Path.of(path);
         if (!Files.exists(p)) {
             pushBuffer();
-            buffer = new UndoablePieceTable("");
+            buffer = acquireBufferForOpen(path, "");
             currentFilePath = path;
             cursorRow = 0;
             cursorCol = 0;
@@ -3019,7 +3067,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), name, path);
                 statusMessage = "\"" + path + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = new UndoablePieceTable(result.text());
+                buffer = acquireBufferForOpen(path, result.text());
                 currentFilePath = path;
                 cursorRow = 0;
                 cursorCol = 0;
@@ -3196,7 +3244,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + r.filePath() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = new UndoablePieceTable(result.text());
+                buffer = acquireBufferForOpen(target.toString(), result.text());
                 currentFilePath = target.toString();
                 cursorRow = Math.max(0, r.lineNumber() - 1);
                 cursorCol = 0;
@@ -4576,7 +4624,7 @@ public class ModalEditor {
                 statusMessage = "E: " + err;
                 return;
             }
-            filerSavedBufferText = buffer.getText();
+            filerSavedBuffer = buffer;
             filerSavedFilePath = currentFilePath;
             filerSavedCursorRow = cursorRow;
             filerSavedCursorCol = cursorCol;
@@ -4589,11 +4637,11 @@ public class ModalEditor {
     /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */
     private void exitFiler() {
         mode = Mode.NORMAL;
-        buffer = new UndoablePieceTable(filerSavedBufferText != null ? filerSavedBufferText : "");
+        buffer = filerSavedBuffer != null ? filerSavedBuffer : new UndoablePieceTable("");
         currentFilePath = filerSavedFilePath;
         cursorRow = filerSavedCursorRow;
         cursorCol = filerSavedCursorCol;
-        filerSavedBufferText = null;
+        filerSavedBuffer = null;
         filerSavedFilePath = null;
     }
 
@@ -4816,6 +4864,8 @@ public class ModalEditor {
     public boolean isEditSelectionActive() { return edSelectionActive; }
     public List<String> getEditCandidates() { return edCandidates; }
     public void setBuffer(UndoablePieceTable newBuffer) { this.buffer = newBuffer; }
+    /** Vim方式の共有バッファ用: 現在のバッファ参照を返す（他ペインとの参照一致判定に使う）。 */
+    public UndoablePieceTable getBuffer() { return buffer; }
     public int getFilerSelectedIdx()      { return filerSelectedIdx; }
     public List<DirEntry> getFilerFiltered() { return filerFiltered; }
     public boolean isFilerSearchMode()    { return filerSearchMode; }
@@ -5748,7 +5798,7 @@ public class ModalEditor {
      */
     private void openJdkSourceBuffer(String title, String content, boolean isNative) {
         if (!inJdkSourceBuffer) {
-            savedBufferText = buffer.getText();
+            savedBuffer = buffer;
             savedFilePath = currentFilePath;
             savedCursorRow = cursorRow;
             savedCursorCol = cursorCol;
@@ -5768,13 +5818,13 @@ public class ModalEditor {
     /** JDK ソース疑似バッファを閉じて元バッファに戻る。 */
     private void closeJdkSourceBuffer() {
         if (!inJdkSourceBuffer) return;
-        buffer = new UndoablePieceTable(savedBufferText != null ? savedBufferText : "");
+        buffer = savedBuffer != null ? savedBuffer : new UndoablePieceTable("");
         currentFilePath = savedFilePath;
         cursorRow = savedCursorRow;
         cursorCol = savedCursorCol;
         inJdkSourceBuffer = false;
         jdkSourceIsNative = false;
-        savedBufferText = null;
+        savedBuffer = null;
         clearSearchHighlights();
         setStatusMessage("Returned from JDK source");
     }
