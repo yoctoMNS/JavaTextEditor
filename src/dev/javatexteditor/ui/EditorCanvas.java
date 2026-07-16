@@ -1341,14 +1341,34 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         return x;
     }
 
-    private void drawSelectionHighlight(Graphics2D g2, String[] lines,
-            int charWidth, int lineHeight, int scrollOffsetX, int gutterWidth, List<WrapRow> wrapPlan) {
-        int r1 = selAnchorRow, c1 = selAnchorCol;
-        int r2 = selCursorRow, c2 = selCursorCol;
+    /**
+     * 選択範囲のanchor/cursorを描画用のr1/c1(左上)〜r2/c2(右下)へ正規化する。
+     * 矩形選択(blockMode)は行と列を独立にmin/maxする（左右上下どの方向へドラッグしても
+     * 矩形の左上/右下が一意に決まる）。文字単位選択は「1本の連続テキスト」としての
+     * 前後関係で行と列をまとめてswapする（列だけ独立にmin/maxすると、行が入れ替わる
+     * ケースで文字順序と矛盾する）。
+     */
+    static int[] normalizeSelectionBounds(boolean blockMode,
+            int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
+        if (blockMode) {
+            return new int[] {
+                Math.min(anchorRow, cursorRow), Math.min(anchorCol, cursorCol),
+                Math.max(anchorRow, cursorRow), Math.max(anchorCol, cursorCol)
+            };
+        }
+        int r1 = anchorRow, c1 = anchorCol, r2 = cursorRow, c2 = cursorCol;
         if (r1 > r2 || (r1 == r2 && c1 > c2)) {
             int tr = r1; r1 = r2; r2 = tr;
             int tc = c1; c1 = c2; c2 = tc;
         }
+        return new int[] {r1, c1, r2, c2};
+    }
+
+    private void drawSelectionHighlight(Graphics2D g2, String[] lines,
+            int charWidth, int lineHeight, int scrollOffsetX, int gutterWidth, List<WrapRow> wrapPlan) {
+        int[] bounds = normalizeSelectionBounds(visualBlockMode,
+                selAnchorRow, selAnchorCol, selCursorRow, selCursorCol);
+        int r1 = bounds[0], c1 = bounds[1], r2 = bounds[2], c2 = bounds[3];
 
         g2.setColor(theme.accent);
 

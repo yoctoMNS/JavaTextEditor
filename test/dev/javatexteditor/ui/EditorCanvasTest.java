@@ -648,7 +648,59 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        int total = 44;
+        // =====================================================================
+        // VISUAL BLOCK 矩形選択: 右から左/下から上へのドラッグ時の描画バグ修正
+        // =====================================================================
+
+        // Test 45: normalizeSelectionBounds - 矩形選択は行・列を独立にmin/maxする
+        // （anchorが右下・cursorが左上でも、常にc1<=c2/r1<=r2になること）
+        {
+            int[] b1 = EditorCanvas.normalizeSelectionBounds(true, 2, 8, 2, 2);   // 右→左（同一行）
+            int[] b2 = EditorCanvas.normalizeSelectionBounds(true, 2, 2, 2, 8);   // 左→右（同一行）
+            int[] b3 = EditorCanvas.normalizeSelectionBounds(true, 5, 2, 2, 8);   // 上へ・右へ（行減/列増）
+            int[] b4 = EditorCanvas.normalizeSelectionBounds(true, 2, 8, 5, 2);   // 下へ・左へ（行増/列減）
+            boolean ok = java.util.Arrays.equals(b1, new int[]{2, 2, 2, 8})
+                && java.util.Arrays.equals(b2, new int[]{2, 2, 2, 8})
+                && java.util.Arrays.equals(b3, new int[]{2, 2, 5, 8})
+                && java.util.Arrays.equals(b4, new int[]{2, 2, 5, 8});
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "EditorCanvas.normalizeSelectionBounds(block=true) は行/列を独立にmin/maxする");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 46: normalizeSelectionBounds - 文字単位選択は従来通り行優先でswapする
+        {
+            int[] b = EditorCanvas.normalizeSelectionBounds(false, 5, 2, 2, 8); // anchor(5,2) cursor(2,8)
+            boolean ok = java.util.Arrays.equals(b, new int[]{2, 8, 5, 2});
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "EditorCanvas.normalizeSelectionBounds(block=false) は行優先でswapする（列は独立にmin/maxしない）");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 47: VISUAL BLOCK - 右から左へドラッグした矩形選択が正しい列範囲で
+        // ハイライトされる（ピクセル検証）。修正前は anchorCol=8 → cursorCol=2 という
+        // 右から左への選択で c1/c2 が正しく正規化されず、1文字分しかハイライトされなかった。
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setSize(400, 100);
+            canvas.setText("abcdefghij\nabcdefghij");
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setVisualMode(true);
+            canvas.setVisualBlockMode(true);
+            // anchor=(0,8) cursor=(1,2): 右上から左下へのドラッグ（右から左・下方向）
+            canvas.setSelection(0, 8, 1, 2);
+            BufferedImage img = render(canvas, 400, 100);
+            // charWidth相当のx位置で、列2〜8の範囲(中間のx=60付近)がアクセント色で
+            // 塗られているはず。修正前は列8〜9のみのハイライトだったため、
+            // 列2〜7に相当する左寄りのx位置(x=60)は背景色のままだった。
+            int pixel = img.getRGB(60, 5);
+            boolean isAccent = !colorMatch(pixel, 0xF5, 0xF0, 0xE6);
+            System.out.println((isAccent ? "[OK] " : "[FAIL] ")
+                + "VISUAL BLOCK 右から左へのドラッグでも列2〜8が正しくハイライトされる");
+            pass += isAccent ? 1 : 0;
+        }
+
+        int total = 47;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
