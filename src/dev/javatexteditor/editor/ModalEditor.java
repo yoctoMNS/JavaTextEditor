@@ -4,6 +4,7 @@ import dev.javatexteditor.analysis.AutoImportHandler;
 import dev.javatexteditor.analysis.BindingDefinitionResolver;
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.EntryPointIndex;
+import dev.javatexteditor.analysis.JavaFileStubGenerator;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.JdkJavadocReader;
 import dev.javatexteditor.analysis.JdkTypeInfo;
@@ -3049,10 +3050,11 @@ public class ModalEditor {
         Path p = Path.of(path);
         if (!Files.exists(p)) {
             pushBuffer();
-            buffer = acquireBufferForOpen(path, "");
+            JavaFileStubGenerator.Stub stub = JavaFileStubGenerator.generate(p);
+            buffer = acquireBufferForOpen(path, stub != null ? stub.text() : "");
             currentFilePath = path;
-            cursorRow = 0;
-            cursorCol = 0;
+            cursorRow = stub != null ? stub.cursorRow() : 0;
+            cursorCol = stub != null ? stub.cursorCol() : 0;
             resetSearchAndResultState();
             statusMessage = "\"" + path + "\" [新規ファイル]";
             // 既存ファイルを開く場合と同様に登録する。登録しないと switchToRelativeBuffer()
