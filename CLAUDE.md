@@ -763,6 +763,18 @@ project-root/
 
 （各Phase完了時、実行者がこの表の状態・関連SKILL.md・上記2ドキュメントを更新する。ベースライン: 全70テストクラス中69クラスPASS・`ScrollTest`のみ既知2件FAIL＝仕様判断未決のため修正禁止）
 
+## Shift+K 定義ジャンプの Eclipse JDT 流バインディング解決化（完全非同期・2026-07）
+
+「Eclipse JDT のアルゴリズムを参考に Shift+K の定義ジャンプを強化したい。JVM/HotSpot 部分のアルゴリズムには一切触れない」という依頼に基づく、㉓ `symbol-definition-navigation` の拡張。実装前に `AskUserQuestion` で「①既存 Shift+K の内部強化・失敗時は既存ヒューリスティックへフォールバック ②JDT のバインディング解決（resolveBindings→NodeFinder→IBinding→宣言要素）を `javax.tools.JavaCompiler`＋Compiler Tree API（`Trees.getElement()`）で再現 ③完全非同期化 ④JDK シンボルも JDT 流で解決（FQCN から src.zip ジャンプへ接続）」の4点を確認・確定した。詳細は `.claude/skills/symbol-definition-navigation/SKILL.md` の「Eclipse JDT 流バインディング解決」節を参照。
+
+- **`dev.javatexteditor.analysis.BindingDefinitionResolver`（新設）**が JDT 相当の解決を担う。現在バッファ＋projectRoot 配下の全 `.java` を compilation unit として `JavacTask.parse()`+`analyze()`（属性付け）し、`TreePathScanner` でカーソル位置の最内ノードを特定（NodeFinder 相当）、`Trees.getElement()`→`Trees.getPath()` で宣言位置へ辿る。オーバーロード区別・ブロックスコープ・implements/extends 経由の継承メンバーが正確に解決できるようになった（従来の正規表現ヒューリスティックでは原理的に不可能だった領域）。結果は `ProjectLocation`／`JdkElementLocation`／`NotFound` の sealed 3種。
+- **「非同期化は見送り」という過去の判断（本ファイル「追加調査（3回目）」節）を、ユーザーの明示選択によりこの新設経路に限って転換した**。ただしテストの同期契約（`processKey` 直後の同期 assert）は壊していない: `ModalEditor.enableBindingDefinitionLookup(backgroundExecutor, uiDispatcher)` による**実行機構の注入方式**とし、既定は無効（＝従来動作のまま。既存テスト群は無修正で全 PASS）、本番（`Main.createLeaf()`）だけが仮想スレッド＋`SwingUtilities.invokeLater` を配線する。テストは `Runnable::run`（同期）または `Deque<Runnable>`（擬似非同期）を注入して決定的に検証する。**フォールバックの既存ヒューリスティック自体は従来どおり EDT 上の同期実行＋`withTimeout()` 1500ms のまま変更していない**。
+- **stale 結果ガード**: 世代カウンタ＋バッファ参照一致＋`buffer.getVersion()`＋カーソル位置＋モードを解析要求時に捕捉し、結果適用時に1つでも変わっていたら黙って破棄する（`outputErrorLinesOwner`/`binaryModeOwner` と同系の参照一致パターンの応用）。解析スレッド自体の明示キャンセルはしない（javac の属性付けに協調キャンセル点が無いため。適用は常に最後の要求1件のみ）。
+- **JVM/HotSpot・native トレース経路（`OpenjdkSourceTracer` の C/C++ 検索・`findCSymbol`・jdk-source 疑似バッファ内の K）は依頼どおり一切変更していない**。jdk-source 疑似バッファ内の Shift+K はバインディング解決の対象外（従来の同期フローのまま）。JDK 要素へのジャンプは `readJavaSourceByFqcn()`（`:main` 用に実装済み）＋既存の `openJdkSourceBuffer()`/`jumpToMember()` の再利用のみで、`jdkIndex` の準備状態にも依存しない。
+- **安全弁**: プロジェクト走査は `FileNameSearcher.SKIP_DIRS` と同じ集合をスキップし、`.java` が `MAX_SOURCE_FILES`（2000）を超えたら解析を断念してフォールバックに委ねる（作業ディレクトリの既定値がホームディレクトリになりうるため）。構文エラー等の javac 内部例外は catch して NotFound に変換する（graceful degradation）。
+- **javac 利用上のハマりどころ2件をスキルに記録済み**: DiagnosticListener 未登録だと終了位置テーブルが作られずノード探索が全滅する／javac は `JavaFileObject` を `ClientCodeWrapper` でラップするため照合は参照一致ではなく URI で行う。
+- **テスト**: `BindingDefinitionResolverTest`（10テスト/25アサーション）・`BindingDefinitionJumpTest`（8テスト/16アサーション、無効時の従来動作維持・フォールバック・擬似非同期・stale ガード3種を含む）。全体は 75/76 クラス PASS（唯一の FAIL は既知ベースラインの `ScrollTest` 2件＝仕様判断未決のため修正禁止、変更なし）。
+
 ## `:split`/`:vsplit`で同一ファイルを複数ペインに開いた際のリアルタイム同期（Vim方式の共有バッファ）
 
 - **不具合報告**: 複数ペインで同一ファイルを開いて片方を編集・保存しても、もう片方の画面に反映されない。調査したところ、`:split`/`:vsplit`（`Main.setupSplitCallbacks()`）は分割時点の`getText()`（Stringスナップショット）を新しい`Leaf`に渡すだけで、各`Leaf`（＝`ModalEditor`インスタンス）が完全に独立した`UndoablePieceTable`を持つ設計だった。ファイルを開く経路（`:e`/telescope/FILER/`gr`/`\g`/Ctrl+U/Ctrl+P）も同様に、開くたびに`buffer = new UndoablePieceTable(result.text())`でディスクから新規インスタンスを作っており、ペイン間・バッファ間の同期機構が一切存在しなかった。

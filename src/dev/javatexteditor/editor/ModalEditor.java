@@ -1,6 +1,7 @@
 package dev.javatexteditor.editor;
 
 import dev.javatexteditor.analysis.AutoImportHandler;
+import dev.javatexteditor.analysis.BindingDefinitionResolver;
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.EntryPointIndex;
 import dev.javatexteditor.analysis.JdkClassIndex;
@@ -207,6 +208,17 @@ public class ModalEditor {
     private final ProjectSymbolResolver projectSymbolResolver = new ProjectSymbolResolver();
     // symbol-definition-navigation: "instanceVar.member" のレシーバ型推定（軽量ヒューリスティック）
     private final ReceiverTypeResolver receiverTypeResolver = new ReceiverTypeResolver();
+    // Shift+K の最優先段: Eclipse JDT 流のバインディング解決（javac 属性付け + Trees.getElement）。
+    // enableBindingDefinitionLookup() が呼ばれるまで無効（＝既存ヒューリスティックのみの従来動作）。
+    // Main.java が本番配線で有効化し、実行機構（仮想スレッド + SwingUtilities.invokeLater）を注入する。
+    // テストは同期実行機構（Runnable::run）で有効化することで processKey 直後の同期 assert を維持できる。
+    private final BindingDefinitionResolver bindingDefinitionResolver = new BindingDefinitionResolver();
+    private boolean bindingLookupEnabled = false;
+    private Consumer<Runnable> bindingLookupExecutor = Runnable::run;
+    private Consumer<Runnable> bindingLookupUiDispatcher = Runnable::run;
+    // stale 結果破棄用の世代カウンタ。非同期解析の完了前に再度 Shift+K が押された場合、
+    // 古い方の結果は適用せず黙って捨てる（Eclipse がジャンプ要求をキャンセルするのと同じ発想）。
+    private long bindingLookupGeneration = 0;
     // Shift+K (jdk.doc) のプロジェクト全体検索がEDTをフリーズさせないための上限時間。
     // 作業ディレクトリが巨大（既定値がホームディレクトリになりうるため）だと
     // ProjectSymbolResolver.resolve() の全文grepに時間がかかることがあるため、
@@ -5365,12 +5377,137 @@ public class ModalEditor {
      */
     private void lookupJdkDoc() {
         BufferSnapshot before = new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
+
+        // 最優先段: Eclipse JDT 流のバインディング解決（有効化されている場合のみ）。
+        // jdk-source 疑似バッファ内は対象外（表示専用のJDKソース/ネイティブスニペットであり、
+        // プロジェクトの compilation unit として意味解析する対象ではない。ネイティブトレース等の
+        // 既存フローにそのまま任せる）。
+        if (bindingLookupEnabled && !inJdkSourceBuffer) {
+            String word = wordAtCursor();
+            if (word.isEmpty()) {
+                setStatusMessage("No identifier at cursor");
+                return;
+            }
+            final long generation = ++bindingLookupGeneration;
+            final UndoablePieceTable bufferAtRequest = buffer;
+            final long versionAtRequest = buffer.getVersion();
+            final int offset = offsetOfCursor();
+            final Path root = getProjectRoot();
+            final String filePathAtRequest = currentFilePath;
+            setStatusMessage("Resolving definition of " + word + "...");
+            bindingLookupExecutor.accept(() -> {
+                BindingDefinitionResolver.Resolution resolution;
+                try {
+                    resolution = bindingDefinitionResolver.resolve(
+                        before.text(), filePathAtRequest, offset, root);
+                } catch (Exception e) {
+                    resolution = new BindingDefinitionResolver.NotFound("analysis failed: " + e);
+                }
+                final BindingDefinitionResolver.Resolution result = resolution;
+                bindingLookupUiDispatcher.accept(() ->
+                    applyBindingResolution(result, before, generation,
+                        bufferAtRequest, versionAtRequest));
+            });
+            return;
+        }
+
         lookupJdkDocAndJump(before.text());
+        recordJumpOriginIfMoved(before);
+    }
+
+    /**
+     * Shift+K の JDT 流バインディング解決を有効化し、実行機構を注入する。
+     *
+     * @param backgroundExecutor 解析タスクを実行する機構。本番（Main.java）は仮想スレッド起動、
+     *                           テストは Runnable::run（同期実行）を渡す。
+     * @param uiDispatcher       解析結果をエディタ状態へ反映する機構。本番は
+     *                           SwingUtilities::invokeLater、テストは Runnable::run を渡す。
+     */
+    public void enableBindingDefinitionLookup(Consumer<Runnable> backgroundExecutor,
+                                              Consumer<Runnable> uiDispatcher) {
+        this.bindingLookupEnabled = true;
+        this.bindingLookupExecutor = backgroundExecutor;
+        this.bindingLookupUiDispatcher = uiDispatcher;
+    }
+
+    /** Shift+K ジャンプ後、実際にカーソル・バッファが動いた場合のみ Shift+J 用の復帰元を記録する。 */
+    private void recordJumpOriginIfMoved(BufferSnapshot before) {
         boolean moved = cursorRow != before.row() || cursorCol != before.col()
             || !java.util.Objects.equals(currentFilePath, before.filePath());
         if (moved) {
             lastJumpOrigin = before;
         }
+    }
+
+    /**
+     * バインディング解決の結果をエディタ状態へ反映する（本番では EDT 上で実行される）。
+     * 非同期解析の完了までにエディタ側の状況が変わっていた場合（編集・バッファ切替・
+     * モード遷移・カーソル移動・新しい Shift+K）は、古い結果を適用せず黙って破棄する。
+     * 解決失敗（NotFound）や src.zip 不在などで反映できない場合は、従来の
+     * ヒューリスティック解決（{@link #lookupJdkDocAndJump(String)}）へフォールバックする。
+     */
+    private void applyBindingResolution(BindingDefinitionResolver.Resolution result,
+                                        BufferSnapshot before, long generation,
+                                        UndoablePieceTable bufferAtRequest, long versionAtRequest) {
+        if (generation != bindingLookupGeneration) return;
+        if (buffer != bufferAtRequest || buffer.getVersion() != versionAtRequest) return;
+        if (mode != Mode.NORMAL) return;
+        if (cursorRow != before.row() || cursorCol != before.col()) return;
+
+        switch (result) {
+            case BindingDefinitionResolver.ProjectLocation loc -> {
+                jumpToBindingLocation(loc);
+                recordJumpOriginIfMoved(before);
+            }
+            case BindingDefinitionResolver.JdkElementLocation jdk -> {
+                if (jumpToJdkElement(jdk)) {
+                    recordJumpOriginIfMoved(before);
+                } else {
+                    fallbackToHeuristicLookup(before);
+                }
+            }
+            case BindingDefinitionResolver.NotFound nf -> fallbackToHeuristicLookup(before);
+        }
+        syncCanvas();
+    }
+
+    /** バインディング解決が不発だった場合の従来経路（正規表現ヒューリスティック＋JDK索引）。 */
+    private void fallbackToHeuristicLookup(BufferSnapshot before) {
+        lookupJdkDocAndJump(before.text());
+        recordJumpOriginIfMoved(before);
+    }
+
+    /** バインディング解決で得たプロジェクト内宣言位置へジャンプする。 */
+    private void jumpToBindingLocation(BindingDefinitionResolver.ProjectLocation loc) {
+        // filePath == null は「現在の無名バッファ内の宣言」。currentFilePath と一致する場合も
+        // 同一ファイル内ジャンプ（既存の jumpToSymbolLocation() と同じ分岐構造・列0の慣例に揃える）。
+        if (loc.filePath() == null || loc.filePath().equals(currentFilePath)) {
+            cursorRow = loc.lineNumber();
+            cursorCol = 0;
+        } else {
+            loadFromFile(loc.filePath());
+            cursorRow = loc.lineNumber();
+            cursorCol = 0;
+        }
+        String fileLabel = (loc.filePath() != null) ? loc.filePath() : "[current buffer]";
+        setStatusMessage("→ " + loc.kindLabel() + "  " + fileLabel + ":" + (loc.lineNumber() + 1));
+    }
+
+    /**
+     * バインディング解決の結果が JDK（プラットフォームクラスパス）側の要素だった場合、
+     * src.zip から該当クラスのソースを疑似バッファで開き、メンバー宣言行へジャンプする。
+     * src.zip が無い・エントリが見つからない場合は false（呼び出し側がフォールバックする）。
+     * ネイティブ（JNI/HotSpot）トレースはこの経路では行わない（既存の tryJdkMember 経路のまま）。
+     */
+    private boolean jumpToJdkElement(BindingDefinitionResolver.JdkElementLocation jdk) {
+        if (!sourceTracer.hasSrcZip()) return false;
+        Optional<String> src = sourceTracer.readJavaSourceByFqcn(jdk.moduleName(), jdk.fqcn());
+        if (src.isEmpty()) return false;
+        openJdkSourceBuffer("*jdk-source:" + jdk.fqcn() + "*", src.get());
+        if (jdk.memberName() != null) {
+            jumpToMember(jdk.memberName());
+        }
+        return true;
     }
 
     /**
