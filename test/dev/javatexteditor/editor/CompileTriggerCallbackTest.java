@@ -8,8 +8,10 @@ import java.nio.file.Path;
 /**
  * ModalEditor のコールバック発火規約を固定する特性テスト。
  * Main.setupCompileAnalysis はこの契約（INSERT→NORMAL 遷移で onReturnToNormal、
- * :w 成功で onSave、Ctrl+Shift+O で onOrganizeImports が発火すること）に依存しているが、
+ * :w 成功で onSave、SPC+i+o で onOrganizeImports が発火すること）に依存しているが、
  * Main 自体は GUI・static 依存でテスト不能なため、依存される側の契約をここで固定する。
+ * Ctrl+Shift+O は2026-07に organize imports から @Override 挿入（insert.override）へ
+ * 割り当てを差し替えたため、onOrganizeImports のトリガーではなくなった（下記テスト参照）。
  * mainメソッド形式のテストハーネス（JUnit不使用）。EditorCanvas は生成しない。
  */
 public class CompileTriggerCallbackTest {
@@ -21,7 +23,8 @@ public class CompileTriggerCallbackTest {
         testOnReturnToNormalFiresOnInsertToNormal();
         testOnSaveFiresOnSuccessfulWrite();
         testOnSaveNotFiredWithoutFileName();
-        testOnOrganizeImportsFiresOnCtrlShiftO();
+        testOnOrganizeImportsFiresOnLeaderIO();
+        testCtrlShiftOInsertsOverrideStub();
         testOnBufferChangedFiresOnNormalModeDeleteLine();
         testOnBufferChangedNotFiredOnPureCursorMovement();
         testOnBufferChangedNotFiredDuringInsertTyping();
@@ -92,17 +95,38 @@ public class CompileTriggerCallbackTest {
               "E: no file name".equals(ed.getStatusMessage()));
     }
 
-    /** NORMAL モードの Ctrl+Shift+O で onOrganizeImports が1回発火する。 */
-    static void testOnOrganizeImportsFiresOnCtrlShiftO() {
-        System.out.println("[onOrganizeImports: Ctrl+Shift+O で発火]");
+    /** NORMAL モードの SPC+i+o で onOrganizeImports が1回発火する（Ctrl+Shift+O から移設）。 */
+    static void testOnOrganizeImportsFiresOnLeaderIO() {
+        System.out.println("[onOrganizeImports: SPC+i+o で発火]");
         ModalEditor ed = new ModalEditor("import java.util.List;\nclass A {}\n");
         int[] counter = {0};
         ed.setOnOrganizeImports(() -> counter[0]++);
 
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(0, 'i', 0);
+        ed.processKey(0, 'o', 0);
+
+        check("SPC+i+o で onOrganizeImports が1回発火する", counter[0] == 1);
+    }
+
+    /** NORMAL モードの Ctrl+Shift+O は @Override + 改行を挿入し INSERT モードへ入る。
+     *  organize imports からこの機能へ割り当てを差し替えた際の回帰テスト。 */
+    static void testCtrlShiftOInsertsOverrideStub() {
+        System.out.println("[Ctrl+Shift+O: @Override 挿入]");
+        // 2行目はインデントだけの空行（"    "）。カーソルをその行末（col=4、インデント直後）に
+        // 置くのが実際の使い方（列0のまま挿入するとインデントが二重になるため意図的にこの位置にした）。
+        ModalEditor ed = new ModalEditor("class A {\n    \n    int x;\n}\n");
+        ed.setCursor(1, 4);
+
         ed.processKey(KeyEvent.VK_O, KeyEvent.CHAR_UNDEFINED,
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
 
-        check("Ctrl+Shift+O で onOrganizeImports が1回発火する", counter[0] == 1);
+        check("@Override がカーソル行に挿入される", ed.getText().contains("@Override"));
+        check("挿入後は INSERT モードへ入る", ed.isInsertMode());
+        String[] lines = ed.getText().split("\n", -1);
+        check("2行目が \"    @Override\" になる", "    @Override".equals(lines[1]));
+        check("3行目はインデントのみの空行が残る", "    ".equals(lines[2]));
+        check("4行目に元のフィールド行がそのまま残る", "    int x;".equals(lines[3]));
     }
 
     /** NORMALモードの dd（onReturnToNormal/onSaveの対象外）でも onBufferChanged が発火する。 */

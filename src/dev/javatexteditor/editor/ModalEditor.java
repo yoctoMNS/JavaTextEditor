@@ -692,10 +692,21 @@ public class ModalEditor {
                 pendingReplaceCount = 1;
                 return;
             }
-            // \f: ファイル名検索, \g: ファイル内容grep
+            // \a+?: \a の3打鍵目（getter/setter生成）。\g（grep検索）とは別プレフィックスにするため、
+            // \gg/\gs/\gd ではなく \ag/\as/\ad にした（SPC g g/s/d と同じ generateGetter 等を再利用）。
+            // seq.equals("\\a") の判定は下の prev == '\\' 判定より先に置く必要がある
+            // （gu/gU/g~ と同じ理由: prev は seq.charAt(0) のため \a の3打鍵目でも '\\' に一致してしまう）。
+            if (seq.equals("\\a")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
+                // マッチしない場合は通常処理へ
+            }
+            // \f: ファイル名検索, \g: ファイル内容grep, \a: getter/setter生成プレフィックス（2打鍵目）
             if (prev == '\\') {
                 if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return; }
                 if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { enterFileSearch(FileSearchType.GREP); return; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_A, 'a')) { pendingSequence = "\\a"; statusMessage = "\\a-"; return; }
                 // マッチしない場合は通常処理へ
             }
             // [g / [d: 診断ジャンプシーケンス
@@ -842,7 +853,7 @@ public class ModalEditor {
             case "file.end"            -> moveFileEnd();
             case "jdk.doc" -> lookupJdkDoc();
             case "jump.back" -> jumpBack();
-            case "organize.imports" -> organizeImports();
+            case "insert.override" -> insertOverrideStub();
             case "search.enter" -> {
                 searchBuffer.setLength(0);
                 mode = Mode.SEARCH;
@@ -982,7 +993,7 @@ public class ModalEditor {
                     case "line.end"      -> { dismissCompletion(); moveLineEnd(); }
                     case "file.start"    -> { dismissCompletion(); moveFileStart(); }
                     case "file.end"      -> { dismissCompletion(); moveFileEnd(); }
-                    case "organize.imports" -> organizeImports();
+                    case "insert.override" -> { dismissCompletion(); insertOverrideStub(); }
                     case "clipboard.paste" -> pasteFromSystemClipboard(false);
                 }
             }
@@ -1325,6 +1336,29 @@ public class ModalEditor {
         buffer.insert(offsetOfCursor(), "\n" + indent);
         cursorRow++;
         cursorCol = indent.length();
+    }
+
+    /**
+     * Ctrl+Shift+O: "@Override" + 改行を現在行のインデントに揃えて挿入し、
+     * オーバーライドするメソッドのシグネチャだけをその場で書けるように準備する。
+     * NORMAL/INSERT いずれから呼ばれても INSERT モードへ入る（続けてシグネチャを打鍵させるため）。
+     * このキーには元々 organizeImports() が割り当てられていたが、ユーザー確認の上で差し替えた。
+     * organizeImports() 自体は SPC+i+o / :oi / :organize-imports から引き続き呼べるため変更していない。
+     */
+    private void insertOverrideStub() {
+        String[] lines = getLines();
+        String currentLine = cursorRow < lines.length ? lines[cursorRow] : "";
+        int indentLen = 0;
+        while (indentLen < currentLine.length()
+                && (currentLine.charAt(indentLen) == ' ' || currentLine.charAt(indentLen) == '\t')) {
+            indentLen++;
+        }
+        String indent = currentLine.substring(0, indentLen);
+        buffer.insert(offsetOfCursor(), "@Override\n" + indent);
+        cursorRow++;
+        cursorCol = indent.length();
+        mode = Mode.INSERT;
+        statusMessage = "";
     }
 
     private void handleBackspace() {
