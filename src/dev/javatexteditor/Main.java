@@ -532,6 +532,12 @@ public class Main {
             }
         });
         editor.setJdkClassIndex(JDK_INDEX);
+        // Shift+K の最優先段（Eclipse JDT 流バインディング解決）を有効化する。
+        // javac の属性付けはプロジェクト規模に比例して重いため EDT では実行せず、
+        // 仮想スレッドで解析して invokeLater で結果を反映する（完全非同期）。
+        editor.enableBindingDefinitionLookup(
+            task -> Thread.ofVirtual().name("binding-definition-lookup").start(task),
+            SwingUtilities::invokeLater);
         editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
         editor.setBufferListSupplier(Main::getBufferRegistry);
         editor.setOnFileOpened(Main::registerBuffer);
