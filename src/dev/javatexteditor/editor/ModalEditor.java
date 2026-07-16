@@ -5491,6 +5491,17 @@ public class ModalEditor {
                     }
                 }
             }
+
+            // (C) 非native Javaクラスソース内で、修飾なしの識別子（同一クラスの他メンバーへの
+            // 無資格呼び出し。例: ImageIO.read(File) の本体内から同じクラスの
+            // read(ImageInputStream) をオーバーロード呼び出しする "read(stream)" のような箇所）に
+            // カーソルがある場合、現在表示中の疑似バッファ自身がそのクラスのソースなので、
+            // そのままバッファ内を検索するだけで宣言（オーバーロード含む）へジャンプできる。
+            // 上の (A)/(B) はどちらも native 実装の有無を判定するだけで、通常の非native
+            // メソッド/フィールドの同一クラス内ジャンプには未対応だった。
+            if (!jdkSourceIsNative && classAndMethodAtCursor() == null && jumpToMember(word)) {
+                return;
+            }
         }
 
         // カーソルが "ClassName.methodName" の methodName 上にある場合: native トレースを試みる
@@ -5805,11 +5816,18 @@ public class ModalEditor {
         return false;
     }
 
-    /** メソッド宣言 → フィールド（定数）宣言の順で疑似バッファ内の宣言行へジャンプする。 */
-    private void jumpToMember(String name) {
-        if (jumpToMethod(name)) return;
-        if (jumpToField(name)) return;
+    /**
+     * メソッド宣言 → フィールド（定数）宣言の順で疑似バッファ内の宣言行へジャンプする。
+     * 見つかってジャンプできた場合 true、見つからなかった場合 false を返す
+     * （呼び出し側が他の解決手段へフォールバックできるようにするため。従来からの
+     * 呼び出し元は戻り値を無視しており、その場合は失敗時に "not found" メッセージを
+     * 表示する従来通りの挙動になる）。
+     */
+    private boolean jumpToMember(String name) {
+        if (jumpToMethod(name)) return true;
+        if (jumpToField(name)) return true;
         setStatusMessage("Declaration of " + name + " not found in source  q: close");
+        return false;
     }
 
     /**
