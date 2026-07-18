@@ -377,3 +377,11 @@ int b = pixel & 0xFF;
 - **修正**: `EditorCanvas.charCellWidth(int codePoint)`に`0x25A0-0x25FF`（Geometric Shapes ブロック全体）を全角(2)判定として追加した。かぎ括弧不具合の修正時と同様、この1箇所の修正だけで`drawLineWithFullWidthSupport()`/`xForCol()`/`drawCursor()`等の描画パイプライン全体に反映される。
 - **意図的にスコープ外とした点**: 上記かぎ括弧不具合の節で明示的にスコープ外とした囲み文字（丸数字①②③等、U+2460-24FF、Enclosed Alphanumerics ブロック）は、今回の不具合報告（◯●）の再現範囲に含まれないため引き続き対象外とした。絵文字（サロゲートペアの補助面）も同様に対象外。
 - **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java`のTest 5cを新設（計48テスト）。`charCellWidth(0x25EF)`（◯）・`charCellWidth(0x25CF)`（●）・`charCellWidth(0x25CB)`（○）・`charCellWidth(0x25A0)`（■、ブロック先頭）・`charCellWidth(0x25FF)`（ブロック末尾）がいずれも2であることを検証。
+
+## LinuxOSでマルチバイトIME入力がリアルタイム描画されない不具合の調査・対処（scripts/run.sh）
+
+- **報告**: LinuxOS環境でマルチバイト（日本語等）入力の変換中文字列がリアルタイムに描画されず、これまでWindows実機で行ってきたIME関連修正（`switchToHalfWidth()`のsetCompositionEnabled/selectInputMethod併用、`getInputMethodRequests().getTextLocation()`の実カーソル座標返却、`composedText`のリアルタイムオーバーレイ描画等）が反映されていないように見える、という報告があった。
+- **調査結果**: `EditorCanvas`側のIME実装（`InputMethodListener`/`InputMethodRequests`/`composedText`オーバーレイ・`switchToHalfWidth()`）はいずれもOS分岐を持たない共通コードであり、Windows実機検証を経て確定した修正はすべてLinux上でも同一コードパスとして既に有効になっている（`git log`で該当コミットが本ブランチのベースに全てマージ済みであることを確認済み）。そのため「コードとして未反映」という状態ではなかった。
+- **真因**: Linux（特にIBus）環境では、IBusがキーイベントを非同期モードで処理するとJavaのXIM連携（`sun.awt.X11.XInputMethod`）へ変換中文字列の`InputMethodEvent`が確定（コミット）まで配送されない、というJava/IBus間の既知の相互運用問題がある。この場合、アプリ側コードの実装に関わらず`inputMethodTextChanged()`が未確定部分を伴って呼ばれないため、`composedText`のリアルタイムオーバーレイは原理的に発火しない。
+- **対処**: `scripts/run.sh`でJava起動前に`IBUS_ENABLE_SYNC_MODE=1`を（未設定の場合のみ）exportするようにした。IBusを同期モードに切り替えることで、Java側へ変換中文字列の`InputMethodEvent`が逐次配送されるようになる（IBus/Java相互運用における広く知られた対処）。この変更はシェルスクリプトのみで完結し、CLAUDE.mdの「依存ライブラリ・ビルドツール不使用」方針に抵触しない。
+- **意図的にスコープ外とした点**: Fcitx等IBus以外の入力メソッドフレームワークの類似問題や、デスクトップ環境側の`GTK_IM_MODULE`/`QT_IM_MODULE`/`XMODIFIERS`設定は、ユーザーのOS設定に依存するためスクリプトから強制していない（`IBUS_ENABLE_SYNC_MODE`のみ、既存の値を尊重する形でデフォルト値としてのみ設定）。実機での改善確認はヘッドレス環境のため未検証（他のIME関連修正と同じ既知のテストギャップ）。
