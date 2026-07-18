@@ -122,6 +122,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private static final Font  SPLASH_FONT   = new Font(Font.MONOSPACED, Font.PLAIN, 16);
     private static final Color ERROR_COLOR   = new Color(0xCC, 0x33, 0x33);
     private static final Color WARNING_COLOR = new Color(0xCC, 0x99, 0x00);
+    private static final boolean IS_LINUX =
+        System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("nux");
 
     // -------------------------------------------------------------------------
     // ステータスラインのウォーキングパーソンアニメーション
@@ -243,16 +245,39 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * こちらを主手段としつつ、Linux(fcitx/ibus等)向けにselectInputMethod()も
      * 併用する（どちらか一方しか対応していないプラットフォームでも他方の例外を
      * 握りつぶすだけで済むようにする）。
+     *
+     * LinuxのIBusは、JavaのInputContext API（setCompositionEnabled/selectInputMethod）
+     * から見た「1つのInputMethod」としてしか扱われず、IBus内部でどのエンジン
+     * （日本語エンジン/xkb:us等）がアクティブかはJavaのAPIからは制御できないことが多い
+     * （実機で確認: 上記2メソッドはいずれも例外を投げず正常終了するが、IBusのエンジンは
+     * 切り替わらない）。そのため、Linux環境ではIBusのCLI（`ibus engine`コマンド、
+     * IBusパッケージに標準同梱）を直接呼び出すフォールバックを追加した。
+     * SystemStatsMonitorのnvidia-smi呼び出しと同じ「OS標準コマンドをProcessBuilderで
+     * 呼ぶ」パターンであり、外部ライブラリの追加ではない。IBus未導入（Fcitx使用時等）
+     * ではコマンド起動自体が失敗するだけで、既存のtry/catchでgraceful degradationする。
+     * EDTをブロックしないよう仮想スレッドで起動し、結果を待たない（完了確認は不要な
+     * fire-and-forget操作のため）。
      */
     public void switchToHalfWidth() {
         InputContext ic = getInputContext();
-        if (ic == null) return;
-        try {
-            ic.setCompositionEnabled(false);
-        } catch (Exception ignored) {}
-        try {
-            ic.selectInputMethod(Locale.ENGLISH);
-        } catch (Exception ignored) {}
+        if (ic != null) {
+            try {
+                ic.setCompositionEnabled(false);
+            } catch (Exception ignored) {}
+            try {
+                ic.selectInputMethod(Locale.ENGLISH);
+            } catch (Exception ignored) {}
+        }
+        if (IS_LINUX) {
+            Thread.ofVirtual().start(() -> {
+                try {
+                    Process p = new ProcessBuilder("ibus", "engine", "xkb:us::eng")
+                        .redirectErrorStream(true)
+                        .start();
+                    p.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (Exception ignored) {}
+            });
+        }
     }
 
     /** IMEが確定した文字列を受け取るコールバックを設定する（Main.javaから配線）。 */
