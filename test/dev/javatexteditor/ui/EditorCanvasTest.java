@@ -94,6 +94,20 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
+        // Test 5c: charCellWidthが幾何学記号（◯●等）を全角判定するか
+        // （◯●の描画がマルチバイト対応していない不具合の回帰テスト。0x25EF/0x25CFは
+        //  Geometric Shapesブロック(U+25A0-25FF)に属し、旧実装では判定範囲に無く
+        //  半角(1)扱いになっていたため、後続文字がグリフの右半分に重なって描画されていた）
+        {
+            boolean ok = EditorCanvas.charCellWidth(0x25EF) == 2   // ◯ LARGE CIRCLE
+                && EditorCanvas.charCellWidth(0x25CF) == 2         // ● BLACK CIRCLE
+                && EditorCanvas.charCellWidth(0x25CB) == 2         // ○ WHITE CIRCLE
+                && EditorCanvas.charCellWidth(0x25A0) == 2         // ■ BLACK SQUARE
+                && EditorCanvas.charCellWidth(0x25FF) == 2;        // ブロック末尾
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "charCellWidth判定（幾何学記号◯●）");
+            pass += ok ? 1 : 0;
+        }
+
         // Test 6: scrollRow の初期値は 0
         {
             EditorCanvas canvas = new EditorCanvas();
@@ -700,7 +714,7 @@ public class EditorCanvasTest {
             pass += isAccent ? 1 : 0;
         }
 
-        int total = 47;
+        int total = 48;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
