@@ -369,3 +369,11 @@ int b = pixel & 0xFF;
 - **修正箇所**: `EditorCanvas.charCellWidth(int codePoint)`に`0x3000-0x303F`（CJK記号・句読点）のレンジを追加し、`0xFF00-0xFFEF`の全角判定を`0xFF01-0xFF60`・`0xFFE0-0xFFE6`に絞り込んだ。`charCellWidth()`は`drawLineWithFullWidthSupport()`（本文描画）・`xForCol()`（カーソル/選択範囲/検索ハイライトのX座標計算）・`drawCursor()`（カーソルブロック幅）・`uiTextWidth()`系（telescope等UI要素の幅計算）など描画パイプライン全体で共有される唯一の判定関数のため、この1箇所の修正だけで全ての描画経路に反映される。
 - **意図的にスコープ外とした点**: 真のUnicode East Asian Width判定（`Character.UnicodeScript`や外部データを使った完全な判定）は行わず、既存方針（SKILL.md冒頭「厳密なUnicode East Asian Width判定は複雑だが実用上十分」）を踏襲し、Java開発・日本語文章で頻出する範囲の追加漏れの補完に留めた。絵文字（サロゲートペアの補助面）・囲み文字（丸数字①②③等、U+2460-24FF）・CJK互換用字（U+F900-FAFF）等の追加は、今回の不具合報告（かぎ括弧の重なり）の再現範囲を超えるため追加していない。
 - **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java`のTest 5bを新設（計37テスト）。`charCellWidth(0x300C)`（「）・`charCellWidth(0x300D)`（」）・`charCellWidth(0x3001)`（、）・`charCellWidth(0x3002)`（。）・`charCellWidth(0x3000)`（全角スペース）が2、`charCellWidth(0xFF71)`（半角カタカナ「ｱ」）・`charCellWidth(0xFF9F)`（半角濁点）が1であることを検証。
+
+## `charCellWidth()`に幾何学記号（◯●等）の判定漏れがあった不具合の修正
+
+- **症状**: 「◯●の描画がマルチバイト対応していない」という報告。上記のかぎ括弧不具合と同種で、◯（U+25EF LARGE CIRCLE）・●（U+25CF BLACK CIRCLE）等を含む行で後続文字がグリフの右半分に重なって描画される。
+- **原因**: これらはUnicodeの Geometric Shapes ブロック（U+25A0-U+25FF。■□▲△▼▽◆◇○◎●等、日本語の文章で正誤記号・箇条書き記号として頻出）に属するが、`charCellWidth()`の判定範囲に含まれておらず、デフォルトの半角(1)扱いになっていた。この記号群はUnicode East Asian Width上は「Ambiguous」だが、日本語フォント・日本語の文章中では全角幅のグリフとして描画されるため、既存の全角記号（0xFF01-0xFF60等）と同じ理由で全角(2)判定が必要だった。
+- **修正**: `EditorCanvas.charCellWidth(int codePoint)`に`0x25A0-0x25FF`（Geometric Shapes ブロック全体）を全角(2)判定として追加した。かぎ括弧不具合の修正時と同様、この1箇所の修正だけで`drawLineWithFullWidthSupport()`/`xForCol()`/`drawCursor()`等の描画パイプライン全体に反映される。
+- **意図的にスコープ外とした点**: 上記かぎ括弧不具合の節で明示的にスコープ外とした囲み文字（丸数字①②③等、U+2460-24FF、Enclosed Alphanumerics ブロック）は、今回の不具合報告（◯●）の再現範囲に含まれないため引き続き対象外とした。絵文字（サロゲートペアの補助面）も同様に対象外。
+- **テスト**: `test/dev/javatexteditor/ui/EditorCanvasTest.java`のTest 5cを新設（計48テスト）。`charCellWidth(0x25EF)`（◯）・`charCellWidth(0x25CF)`（●）・`charCellWidth(0x25CB)`（○）・`charCellWidth(0x25A0)`（■、ブロック先頭）・`charCellWidth(0x25FF)`（ブロック末尾）がいずれも2であることを検証。
