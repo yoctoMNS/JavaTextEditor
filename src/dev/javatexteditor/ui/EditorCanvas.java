@@ -9,6 +9,7 @@ import javax.swing.Timer;
 import java.awt.*;
 import java.awt.event.InputMethodEvent;
 import java.awt.event.InputMethodListener;
+import java.awt.event.KeyEvent;
 import java.awt.font.TextHitInfo;
 import java.awt.im.InputContext;
 import java.awt.im.InputMethodRequests;
@@ -246,17 +247,26 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * 併用する（どちらか一方しか対応していないプラットフォームでも他方の例外を
      * 握りつぶすだけで済むようにする）。
      *
-     * LinuxのIBusは、JavaのInputContext API（setCompositionEnabled/selectInputMethod）
-     * から見た「1つのInputMethod」としてしか扱われず、IBus内部でどのエンジン
-     * （日本語エンジン/xkb:us等）がアクティブかはJavaのAPIからは制御できないことが多い
-     * （実機で確認: 上記2メソッドはいずれも例外を投げず正常終了するが、IBusのエンジンは
-     * 切り替わらない）。そのため、Linux環境ではIBusのCLI（`ibus engine`コマンド、
-     * IBusパッケージに標準同梱）を直接呼び出すフォールバックを追加した。
-     * SystemStatsMonitorのnvidia-smi呼び出しと同じ「OS標準コマンドをProcessBuilderで
-     * 呼ぶ」パターンであり、外部ライブラリの追加ではない。IBus未導入（Fcitx使用時等）
-     * ではコマンド起動自体が失敗するだけで、既存のtry/catchでgraceful degradationする。
-     * EDTをブロックしないよう仮想スレッドで起動し、結果を待たない（完了確認は不要な
-     * fire-and-forget操作のため）。
+     * 【2026-07 訂正】以前はLinux向けに`ibus engine xkb:us::eng`をProcessBuilderで
+     * 呼び出すフォールバックを追加していたが、これはIBusの「アクティブなエンジンそのもの」
+     * を日本語エンジン（Mozc等）から`xkb:us`（IMEなしの素のキーボードレイアウト）へ
+     * 完全に切り替えてしまう操作であり、「IME内の半角/全角モードを切り替える」という
+     * 意図とは全くの別物だった。Mozc実機で確認したところ、この呼び出しによりMozc
+     * エンジン自体が非活性化され、以後INSERTモードへ戻ってもMozcの変換・予測候補
+     * （入力補完）が一切機能しなくなる重大な副作用があったため撤去した。
+     *
+     * 代わりにLinux向けには`java.awt.Robot`で「英数」キー（`KeyEvent.VK_ALPHANUMERIC`、
+     * JIS配列の物理的な英数キーに対応するAWT仮想キー）のキー押下を合成する方式にした。
+     * これはIME側から見て「英数キーが物理的に押された」のと区別が付かないシステム全体への
+     * キーイベントで、Mozcの既定キーマップでは前候補選択状態(precomposition)から
+     * "IMEOff"（＝半角直接入力への切替）にバインドされている。エンジンそのものを
+     * 切り替えないため、IME自体（変換候補・予測入力等）は活性化されたまま維持される。
+     * X11のRobot実装は、現在のキーボードレイアウトに対象キーシムのキーコードが
+     * 存在しない場合でも一時的なキーコード割り当て（XChangeKeyboardMapping）で
+     * 送出できるようJDK内部で処理されるため、日本語109/106キーボードでない環境
+     * （例: US配列+IME）でも動作することが期待できる。ヘッドレス環境・Robot生成失敗
+     * （AWTException）はいずれもtry/catchで握りつぶし、既存のsetCompositionEnabled/
+     * selectInputMethodの結果に影響しない独立した追加処理として扱う。
      */
     public void switchToHalfWidth() {
         InputContext ic = getInputContext();
@@ -268,15 +278,12 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                 ic.selectInputMethod(Locale.ENGLISH);
             } catch (Exception ignored) {}
         }
-        if (IS_LINUX) {
-            Thread.ofVirtual().start(() -> {
-                try {
-                    Process p = new ProcessBuilder("ibus", "engine", "xkb:us::eng")
-                        .redirectErrorStream(true)
-                        .start();
-                    p.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS);
-                } catch (Exception ignored) {}
-            });
+        if (IS_LINUX && !GraphicsEnvironment.isHeadless()) {
+            try {
+                Robot robot = new Robot();
+                robot.keyPress(KeyEvent.VK_ALPHANUMERIC);
+                robot.keyRelease(KeyEvent.VK_ALPHANUMERIC);
+            } catch (Exception ignored) {}
         }
     }
 
