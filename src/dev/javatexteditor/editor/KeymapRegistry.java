@@ -150,13 +150,16 @@ public class KeymapRegistry {
         // 行の入れ替え（Alt+J / Alt+K）
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_J, KeyEvent.ALT_DOWN_MASK, "line.swap.down"), "line.swap.down");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_K, KeyEvent.ALT_DOWN_MASK, "line.swap.up"),   "line.swap.up");
-        // import の整理（Eclipse: Ctrl+Shift+O）
+        // @Override + 改行の挿入（Ctrl+Shift+O）。
+        // 元々このキーには import の整理（organize imports）が割り当てられていたが、
+        // \g（grep検索）と同様のキー衝突確認をユーザーと行った上でこの機能に差し替えた。
+        // organize imports 自体は SPC+i+o / :oi / :organize-imports から引き続き呼び出せる。
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_O,
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
-                "organize.imports"), "organize.imports");
+                "insert.override"), "insert.override");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_O,
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
-                "organize.imports"), "organize.imports");
+                "insert.override"), "insert.override");
         // システムクリップボードから貼り付け（Ctrl+Shift+V）
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_V,
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
