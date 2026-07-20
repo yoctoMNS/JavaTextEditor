@@ -863,3 +863,15 @@ project-root/
 - **意図的にスコープ外とした点**: `cd -`（直前のディレクトリへ戻る）・`~user`形式・環境変数展開（`cd $HOME`等）は非対応（シンプルな正規表現一致のみ）。エディタ側の`:cd`失敗時にシェルへの転送を試みることはない（`changeWdCallback`が失敗を返した時点で早期returnするため、シェル側は元のディレクトリのまま。両者の状態は一致し続ける）。
 - **確認方法**: Xvfb+RobotでCtrl+Shift+T→Ctrl+Shift+T（ターミナルから一旦離脱、セッションは生存継続）→`:cd /tmp`→再度Ctrl+Shift+Tでターミナルに戻り`pwd`を実行、実際のシェルのカレントディレクトリが`/tmp`に追従していることをスクリーンショットで確認した。
 - **テスト**: `TerminalModeTest`に5テスト追加（`testTypedCdSyncsEditorProjectRoot`・`testTypedCdWithNoArgumentGoesHome`・`testTypedNonCdCommandDoesNotChangeProjectRoot`・`testEditorCdSyncsToLiveTerminal`・`testEditorCdDoesNotSyncToDeadTerminal`）。`FilerTest`と同じモック`changeWdCallback`パターンを踏襲。
+
+### バグ修正: シェル起動失敗時に画面が完全に無反応になる不具合（`IOException`以外の例外が握りつぶされる）（2026-07-20）
+
+- **不具合報告**: 「Ctrl+Shift+Tでターミナルモードに移行しても何もコマンドを実行してくれません」。Xvfb+Robotで通常の`bash`が起動する環境では再現しなかったため、`TerminalSession.start()`が`IOException`以外の例外（`SecurityException`等、サンドボックス制約のある環境で`ProcessBuilder.start()`が投げうる）を投げるケースを意図的に再現して調査した。
+- **原因**: `Main.startTerminalSession()`は`session.start(...)`を`catch (IOException e)`でしか捕捉していなかった。`ProcessBuilder.start()`のJavadocは`IOException`（checked）に加え`SecurityException`（unchecked）等も送出しうると明記しており、`IOException`以外の例外は`catch`をすり抜けて`toggleTerminalMode()`→`Main.java`の`KeyboardFocusManager`グローバルディスパッチャの匿名クロージャまで伝播し、そこでAWTのデフォルト未捕捉例外ハンドラに渡って（スタックトレースが標準エラーに出るのみで）握りつぶされる。この結果、`ModalEditor.enterTerminal()`内で`mode = Mode.TERMINAL`・`terminalAlive = true`が設定された**直後**に例外が発生するため、`markTerminalStartFailed()`（`terminalAlive`を`false`に戻しエラーメッセージを表示する処理）が一切呼ばれないまま、モードだけがTERMINALに切り替わり `terminalAlive` が `true` に固定されてしまう。実際のシェルプロセスは起動していない（`TerminalSession.process`は`null`のまま）ため：
+  - キー入力のローカルエコー自体は動く（`!terminalAlive`のガードを通過するため文字は見える）
+  - Enterを押しても`TerminalSession.write()`が`stdin == null`で無言でno-opするため何も起きない
+  - シェル起動時の警告バナー・プロンプトも一切表示されない（実プロセスが存在しないため）
+  - という「操作は受け付けるが何も実行されない」という、原因不明に見える無反応状態になっていた。
+- **修正**: `Main.startTerminalSession()`の`catch`節を`catch (IOException e)`から`catch (Exception e)`に広げ、`IOException`以外の起動失敗も必ず`markTerminalStartFailed()`経由でエラー表示されるようにした（`e.getMessage()`が`null`の場合は`e.toString()`にフォールバックし、メッセージが空でエラー表示自体が空白にならないようにした）。Xvfb+Robotで`TerminalSession.start()`に`SecurityException`を強制的に投げさせる実験を行い、修正前は上記の「画面完全無反応」状態を実際に再現し、修正後は`[failed to start terminal: ...]`というエラーメッセージが即座に表示されることを確認した。
+- **意図的にスコープ外とした点**: `SecurityException`等が発生する根本原因（サンドボックス設定・OS権限等）そのものへの対処は行っていない。あくまで「原因不明の無反応」を「エラーメッセージが見える状態」に変えることが目的で、これによりユーザー・開発者が実際のエラー内容から次の切り分けができるようになる。
+- **副次的に発見・修正したバグ（テストの無限ハング）**: 本調査中、`./scripts/test.sh`実行時に`TerminalModeTest`が終了せずスイート全体がハングする問題を発見した。原因は本ファイル前節の`testToggleTerminalModeClearsSplashScreen`（PR #166で追加）が`new EditorCanvas()`（Swingコンポーネント）を生成しており、一度もトップレベルウィンドウを表示/破棄しないままだとAWTイベントディスパッチスレッド（非daemon）がJVM終了を妨げ続けるため。`RobotKeyInputTest`が同じ理由で末尾に`System.exit(...)`を明示的に呼んでいる既存パターンと同じ対策を`TerminalModeTest.main()`にも適用し（`if (fail > 0) System.exit(1)`だった条件分岐を`System.exit(fail > 0 ? 1 : 0)`という無条件exitに変更）、解消した。

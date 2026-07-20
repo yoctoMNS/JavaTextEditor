@@ -52,7 +52,11 @@ public class TerminalModeTest {
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
-        if (fail > 0) System.exit(1);
+        // testToggleTerminalModeClearsSplashScreen() が new EditorCanvas() を生成しており、
+        // Swingのトップレベルウィンドウを一度も表示/破棄しないままだとAWTイベントディスパッチ
+        // スレッド（非daemon）がJVM終了を妨げてプロセスが終了しない。RobotKeyInputTestと
+        // 同じ理由・同じ対策（明示的なSystem.exit）で解消する。
+        System.exit(fail > 0 ? 1 : 0);
     }
 
     static void assertTrue(String name, boolean condition) {
