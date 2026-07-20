@@ -622,6 +622,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     public boolean isShowSplash() { return showSplash; }
+    public boolean isTerminalMode() { return terminalMode; }
 
     /**
      * *compile* / *run* 疑似バッファの行のうち、赤字（標準エラー出力・ERROR診断）で描画する

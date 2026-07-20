@@ -3167,6 +3167,13 @@ public class ModalEditor {
             terminalAlive = true; // 起動失敗時は markTerminalStartFailed() が false に戻す
             if (terminalStartCallback != null) terminalStartCallback.run();
         }
+        // Ctrl+Shift+TはprocessKey()を経由しないため、processKey()末尾の自動syncCanvas()が効かない。
+        // ここで明示的に呼ばないと、非同期の出力（bashの起動バナー等）が届くまで画面が
+        // 前の内容・前のステータスラベル（"-- TERMINAL --"に変わらない等）のまま更新されない
+        // 不具合があった（コードレビューで指摘）。:term/telescope経由の呼び出しではprocessKey()の
+        // 末尾でも呼ばれ二重になるが、syncCanvas()はバッファのversion一致でキャッシュされるため
+        // 実質無害。
+        syncCanvas();
     }
 
     /** TERMINAL セッションを終了し、enterTerminal() で退避した元バッファに戻す（プロセス自体は生存し続ける）。 */
@@ -3178,6 +3185,13 @@ public class ModalEditor {
         cursorCol = terminalSavedCursorCol;
         terminalSavedBuffer = null;
         terminalSavedFilePath = null;
+        // Enter直後（シェルの自己エコーがまだ届いていない状態）にEscで抜けた場合、
+        // terminalPendingEchoSuppressが残ったままセッションが生存し続け、後で再アタッチした際に
+        // 無関係な後続出力と偶然前方一致して誤って消費されうる（コードレビューで指摘）。
+        // TERMINALモードを離れる時点で必ずクリアし、次回入場時に改めて素の状態から始める。
+        terminalPendingEchoSuppress = null;
+        // enterTerminal()と同じ理由でCtrl+Shift+T/Esc経由の離脱でも画面を即座に反映する。
+        syncCanvas();
     }
 
     /** Ctrl+Shift+T: TERMINAL モードをトグルする（Main.java のグローバルキーディスパッチャから呼ばれる）。 */
@@ -3252,8 +3266,10 @@ public class ModalEditor {
         if (terminalBuffer == null) return;
         String normalized = chunk.replace("\r\n", "\n").replace('\r', '\n');
         if (normalized.isEmpty()) return;
-        normalized = suppressEchoedInput(normalized);
-        if (normalized.isEmpty()) return;
+        if (isError) {
+            normalized = suppressEchoedInput(normalized);
+            if (normalized.isEmpty()) return;
+        }
         int newlineCount = 0;
         for (int i = 0; i < normalized.length(); i++) {
             if (normalized.charAt(i) == '\n') newlineCount++;
@@ -3273,11 +3289,25 @@ public class ModalEditor {
 
     /**
      * tty無しのシェルが自らエコーバックした入力行（ローカルエコーで既に表示済み）を取り除く。
-     * 実測（bash -i にパイプでコマンドを流し込む）で、シェルは読み取った行をプロンプト直後に
-     * そのまま出力へ書き戻すことを確認済み（詳細はCLAUDE.md参照）。前方一致すれば消費して
-     * 除去し、チャンクが複数回のread()に分割される場合にも対応するため部分一致も追跡する。
-     * シェルによってはエコーバックしない場合もあるため、不一致なら諦めて素通しする
-     * （実害はローカルエコーとの二重表示が1回抑制されないだけで、出力の欠落は起きない）。
+     * 実測（bash -i にパイプでコマンドを流し込む・標準出力/標準エラーを分離して確認）で、
+     * シェルのプロンプト・自己エコーバックはいずれも**標準エラー経由でのみ**書き戻され、
+     * 標準出力には実際のコマンド出力だけが乗ることを確認済み（詳細はCLAUDE.md参照）。
+     * このため呼び出し元の {@link #appendTerminalOutput} は isError==true（標準エラー）の
+     * チャンクにのみこのメソッドを適用する。標準出力チャンクは一切対象にしない。
+     *
+     * この制限は単なる最適化ではなく正しさのための制約: 標準出力/標準エラーはそれぞれ独立した
+     * 仮想スレッドが個別に {@code SwingUtilities.invokeLater} でEDTへディスパッチするため、
+     * 2ストリーム間の到着順序は保証されない（コードレビューで指摘）。もし標準出力チャンクも
+     * このメソッドの対象にしていた場合、実際のコマンド出力（標準出力）がシェルの自己エコー
+     * （標準エラー）より先にEDTへ届くと、標準出力チャンクが誤って前方一致判定を消費し
+     * {@code terminalPendingEchoSuppress} をクリアしてしまい、後から届く自己エコーが未抑制の
+     * まま表示される――この抑制機構自体が解消しようとしている二重表示バグが、スレッド
+     * スケジューリング次第で再発してしまう。標準エラー1ストリームに限定すれば、そのストリームの
+     * チャンクは単一の読み取りスレッドから順序どおりにディスパッチされるため、この競合は起きない。
+     *
+     * 前方一致すれば消費して除去し、チャンクが複数回のread()に分割される場合にも対応するため
+     * 部分一致も追跡する。シェルによってはエコーバックしない場合もあるため、不一致なら諦めて
+     * 素通しする（実害はローカルエコーとの二重表示が1回抑制されないだけで、出力の欠落は起きない）。
      */
     private static String suppressEchoedInput(String normalized) {
         if (terminalPendingEchoSuppress == null || terminalPendingEchoSuppress.isEmpty()) {
