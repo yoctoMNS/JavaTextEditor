@@ -1,5 +1,6 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,6 +38,7 @@ public class TerminalModeTest {
         testCtrlCTriggersKillCallback();
         testSpcBSelectionReattachesWithoutRestart();
         testExitTerminalRestoresSavedBuffer();
+        testSyncCanvasReflectsTerminalModeAndClearsStaleStatusMessage();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -230,5 +232,31 @@ public class TerminalModeTest {
         assertEquals("行が復元される", 0, ed.getCursorRow());
         assertEquals("列が復元される", 3, ed.getCursorCol());
         assertEquals("テキストが復元される", "keep me", ed.getText());
+    }
+
+    /**
+     * 回帰テスト: canvas.setTerminalMode() が syncCanvas() から呼ばれていなかったため、
+     * ステータス行が常に「-- NORMAL --」のまま表示される不具合があった（ユーザー報告
+     * 「Ctrl+Shift+T / :term で対話型ターミナルモードが起動されません」の原因の一つ）。
+     * また enterTerminal() が statusMessage をクリアしていなかったため、直前の操作で
+     * 残った statusMessage が「-- TERMINAL --」ラベルより優先されて表示され続ける
+     * 不具合もあわせて確認する。
+     */
+    static void testSyncCanvasReflectsTerminalModeAndClearsStaleStatusMessage() {
+        resetSharedTerminalState();
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("x", canvas);
+        new FakeTerminal().wire(ed);
+        // :w （ファイル名未設定）でstatusMessageを汚しておく
+        typeCommand(ed, "w");
+        assertTrue("事前条件: statusMessageが非空になっている", !ed.getStatusMessage().isEmpty());
+
+        typeCommand(ed, "term");
+        assertTrue("canvas.isTerminalMode()がtrueになる", canvas.isTerminalMode());
+        assertTrue("statusMessageがクリアされる（古いメッセージが残らない）",
+            ed.getStatusMessage().isEmpty());
+
+        ed.toggleTerminalMode();
+        assertTrue("トグルで抜けるとcanvas.isTerminalMode()がfalseに戻る", !canvas.isTerminalMode());
     }
 }

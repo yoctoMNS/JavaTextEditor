@@ -877,6 +877,9 @@ public class Main {
                                 // （INSERT編集中等に横取りしないため）。
                                 dev.javatexteditor.editor.ModalEditor edTerm = active[0].editor();
                                 if (edTerm.isNormalMode() || edTerm.isTerminalMode()) {
+                                    // toggleTerminalMode() 自身が末尾で syncCanvas() を呼ぶため
+                                    // （processKey() を経由しない呼び出しのため必須。詳細はCLAUDE.md参照）、
+                                    // ここで別途呼ぶ必要はない。
                                     edTerm.toggleTerminalMode();
                                     updateBorders(allLeaves(root[0]), active[0]);
                                 }

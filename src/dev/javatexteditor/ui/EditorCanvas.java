@@ -43,6 +43,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private boolean visualMode = false;
     private boolean visualLineMode = false;
     private boolean visualBlockMode = false;
+    private boolean terminalMode = false;
     private Theme theme = Theme.LIGHT_MODE;
     private int scrollRow = 0;
     private int scrollCol = 0;              // 横スクロール（セル単位）
@@ -457,6 +458,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
     public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
     public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; repaint(); }
+    public void setTerminalMode(boolean terminalMode) { this.terminalMode = terminalMode; repaint(); }
+    public boolean isTerminalMode() { return terminalMode; }
     public void setSelection(int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
         this.selAnchorRow = anchorRow;
         this.selAnchorCol = anchorCol;
@@ -1617,6 +1620,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                      : visualLineMode ? "-- VISUAL LINE --"
                      : visualMode     ? "-- VISUAL --"
                      : insertMode     ? "-- INSERT --"
+                     : terminalMode   ? "-- TERMINAL --"
                      :                  "-- NORMAL --";
         drawUiText(g2, label, 4, y, cellW, lineHeight, theme.background);
 

@@ -3148,6 +3148,10 @@ public class ModalEditor {
         grepResults = null;
         fileNameResults = null;
         mode = Mode.TERMINAL;
+        // 直前の操作で statusMessage が非空のまま残っていると、syncCanvas() の
+        // commandLineText 優先順位（statusMessage > モードラベル）により、せっかくの
+        // "-- TERMINAL --" 表示がステータス行に出ず古いメッセージが表示され続けてしまう。
+        statusMessage = "";
         moveCursorToTerminalEnd();
         if (needsNewSession) {
             terminalAlive = true; // 起動失敗時は markTerminalStartFailed() が false に戻す
@@ -3173,6 +3177,11 @@ public class ModalEditor {
         } else {
             enterTerminal(false);
         }
+        // Main.javaのグローバルキーディスパッチャからprocessKey()を経由せず直接呼ばれるため、
+        // processKey()末尾の自動syncCanvas()が効かない。showCompileResult()等と同じ理由で
+        // ここで明示的に呼ぶ（呼ばないとシェルが起動直後に何も出力しない環境で次にキーを
+        // 押すまで画面が更新されない不具合があった）。
+        syncCanvas();
     }
 
     /** :term / :terminal コマンド。既存セッションが死んでいれば新しいシェルプロセスで作り直す。 */
@@ -5018,6 +5027,7 @@ public class ModalEditor {
             canvas.setErrorLines(errorLines);
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
+            canvas.setTerminalMode(mode == Mode.TERMINAL);
 
             boolean isVisual      = (mode == Mode.VISUAL);
             boolean isVisualLine  = (mode == Mode.VISUAL_LINE);
