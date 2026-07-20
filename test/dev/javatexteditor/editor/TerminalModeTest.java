@@ -49,10 +49,18 @@ public class TerminalModeTest {
         testTypedNonCdCommandDoesNotChangeProjectRoot();
         testEditorCdSyncsToLiveTerminal();
         testEditorCdDoesNotSyncToDeadTerminal();
+        testEchoSuppressionSurvivesStdoutArrivingBeforeStderrEcho();
+        testToggleTerminalModeSyncsCanvasImmediately();
+        testExitTerminalSyncsCanvasImmediately();
+        testExitTerminalResetsEchoSuppressState();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
-        if (fail > 0) System.exit(1);
+        // testToggleTerminalModeClearsSplashScreen() が new EditorCanvas() を生成しており、
+        // Swingのトップレベルウィンドウを一度も表示/破棄しないままだとAWTイベントディスパッチ
+        // スレッド（非daemon）がJVM終了を妨げてプロセスが終了しない。RobotKeyInputTestと
+        // 同じ理由・同じ対策（明示的なSystem.exit）で解消する。
+        System.exit(fail > 0 ? 1 : 0);
     }
 
     static void assertTrue(String name, boolean condition) {
@@ -433,5 +441,85 @@ public class TerminalModeTest {
         assertEquals(":cd 自体は成功しprojectRootが変わる",
             target.toAbsolutePath().normalize(), ed.getProjectRoot());
         assertEquals("生存中のターミナルが無いのでwrite callbackは呼ばれない", 0, fake.written.size());
+    }
+
+    /**
+     * コードレビューで指摘された競合状態の回帰テスト: 標準出力/標準エラーは独立した
+     * 読み取りスレッドがそれぞれ個別にディスパッチするため到着順の保証がない。実際の
+     * コマンド出力（標準出力）がシェルの自己エコー（標準エラー）より先に届いても、
+     * 抑制状態が誤ってクリアされず、後から届く自己エコーが正しく抑制される必要がある
+     * （標準出力チャンクはsuppressEchoedInputの対象外にする修正で解消）。
+     */
+    static void testEchoSuppressionSurvivesStdoutArrivingBeforeStderrEcho() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("x");
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "echo HI");
+        // 到着順が入れ替わるケース: 実出力（stdout）が自己エコー（stderr）より先に届く
+        ed.appendTerminalOutput("HI\n", false);
+        ed.appendTerminalOutput("echo HI\n", true);
+        String text = ed.getText();
+        assertEquals("標準出力が先着してもechoは1回だけ表示される", 1, countOccurrences(text, "echo HI"));
+        assertTrue("実際のコマンド出力は表示される", text.contains("HI"));
+    }
+
+    /**
+     * コードレビューで指摘されたバグの回帰テスト: Ctrl+Shift+TはprocessKey()を経由せず
+     * toggleTerminalMode()を直接呼ぶため、syncCanvas()が呼ばれず画面（ステータスラベル・
+     * バッファ内容）が次のキー入力まで更新されない不具合があった。
+     */
+    static void testToggleTerminalModeSyncsCanvasImmediately() {
+        resetSharedTerminalState();
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("hello", canvas);
+        new FakeTerminal().wire(ed);
+
+        assertTrue("前提: TERMINALモードに入る前はfalse", !canvas.isTerminalMode());
+        ed.toggleTerminalMode(); // processKey()を経由しない直接呼び出し
+        assertTrue("TERMINALモードに入る", ed.isTerminalMode());
+        assertTrue("キー入力なしでcanvasのterminalModeが即座に反映される", canvas.isTerminalMode());
+    }
+
+    /** 上記と対になる離脱側の回帰テスト: exitTerminal()も同様にsyncCanvas()を呼ぶ必要がある。 */
+    static void testExitTerminalSyncsCanvasImmediately() {
+        resetSharedTerminalState();
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("hello", canvas);
+        new FakeTerminal().wire(ed);
+
+        ed.toggleTerminalMode();
+        assertTrue("前提: TERMINALモードに入っている", canvas.isTerminalMode());
+        ed.toggleTerminalMode(); // 離脱（processKey()を経由しない）
+        assertTrue("NORMALに戻る", ed.isNormalMode());
+        assertTrue("キー入力なしでcanvasのterminalModeが即座にfalseへ戻る", !canvas.isTerminalMode());
+    }
+
+    /**
+     * コードレビューで指摘されたバグの回帰テスト: exitTerminal()（Escによる離脱を含む）が
+     * terminalPendingEchoSuppressをリセットしないと、コマンド送信直後にEscで抜けて
+     * セッションが生存したまま後で再アタッチした場合、無関係な後続出力が古い抑制状態と
+     * 偶然前方一致して誤って消費されうる。
+     */
+    static void testExitTerminalResetsEchoSuppressState() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("x");
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        // コマンドを送信した直後（自己エコーがまだ届いていない状態）にEscで抜ける
+        for (char c : "lsx".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        assertTrue("Escで抜けてNORMALに戻る", ed.isNormalMode());
+
+        // 同じ生きたセッションに再アタッチしてから、たまたま古い抑制文字列("lsx\n")と
+        // 前方一致する無関係な出力（標準エラー、抑制ロジックの対象ストリーム）が届く。
+        // リセットされていなければ先頭の"lsx\n"だけ誤って消費され、countが1のままになる。
+        ed.toggleTerminalMode();
+        assertTrue("再度TERMINALモードに入る", ed.isTerminalMode());
+        ed.appendTerminalOutput("lsx\nmarker_HERE\n", true);
+        String text = ed.getText();
+        assertEquals("リセットされていれば古い抑制の影響を受けず'lsx'が計2回残る（ローカルエコー分+新規出力分）",
+            2, countOccurrences(text, "lsx"));
     }
 }

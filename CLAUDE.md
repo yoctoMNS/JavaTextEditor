@@ -863,3 +863,39 @@ project-root/
 - **意図的にスコープ外とした点**: `cd -`（直前のディレクトリへ戻る）・`~user`形式・環境変数展開（`cd $HOME`等）は非対応（シンプルな正規表現一致のみ）。エディタ側の`:cd`失敗時にシェルへの転送を試みることはない（`changeWdCallback`が失敗を返した時点で早期returnするため、シェル側は元のディレクトリのまま。両者の状態は一致し続ける）。
 - **確認方法**: Xvfb+RobotでCtrl+Shift+T→Ctrl+Shift+T（ターミナルから一旦離脱、セッションは生存継続）→`:cd /tmp`→再度Ctrl+Shift+Tでターミナルに戻り`pwd`を実行、実際のシェルのカレントディレクトリが`/tmp`に追従していることをスクリーンショットで確認した。
 - **テスト**: `TerminalModeTest`に5テスト追加（`testTypedCdSyncsEditorProjectRoot`・`testTypedCdWithNoArgumentGoesHome`・`testTypedNonCdCommandDoesNotChangeProjectRoot`・`testEditorCdSyncsToLiveTerminal`・`testEditorCdDoesNotSyncToDeadTerminal`）。`FilerTest`と同じモック`changeWdCallback`パターンを踏襲。
+
+### バグ修正: シェル起動失敗時に画面が完全に無反応になる不具合（`IOException`以外の例外が握りつぶされる）（2026-07-20）
+
+- **不具合報告**: 「Ctrl+Shift+Tでターミナルモードに移行しても何もコマンドを実行してくれません」。Xvfb+Robotで通常の`bash`が起動する環境では再現しなかったため、`TerminalSession.start()`が`IOException`以外の例外（`SecurityException`等、サンドボックス制約のある環境で`ProcessBuilder.start()`が投げうる）を投げるケースを意図的に再現して調査した。
+- **原因**: `Main.startTerminalSession()`は`session.start(...)`を`catch (IOException e)`でしか捕捉していなかった。`ProcessBuilder.start()`のJavadocは`IOException`（checked）に加え`SecurityException`（unchecked）等も送出しうると明記しており、`IOException`以外の例外は`catch`をすり抜けて`toggleTerminalMode()`→`Main.java`の`KeyboardFocusManager`グローバルディスパッチャの匿名クロージャまで伝播し、そこでAWTのデフォルト未捕捉例外ハンドラに渡って（スタックトレースが標準エラーに出るのみで）握りつぶされる。この結果、`ModalEditor.enterTerminal()`内で`mode = Mode.TERMINAL`・`terminalAlive = true`が設定された**直後**に例外が発生するため、`markTerminalStartFailed()`（`terminalAlive`を`false`に戻しエラーメッセージを表示する処理）が一切呼ばれないまま、モードだけがTERMINALに切り替わり `terminalAlive` が `true` に固定されてしまう。実際のシェルプロセスは起動していない（`TerminalSession.process`は`null`のまま）ため：
+  - キー入力のローカルエコー自体は動く（`!terminalAlive`のガードを通過するため文字は見える）
+  - Enterを押しても`TerminalSession.write()`が`stdin == null`で無言でno-opするため何も起きない
+  - シェル起動時の警告バナー・プロンプトも一切表示されない（実プロセスが存在しないため）
+  - という「操作は受け付けるが何も実行されない」という、原因不明に見える無反応状態になっていた。
+- **修正**: `Main.startTerminalSession()`の`catch`節を`catch (IOException e)`から`catch (Exception e)`に広げ、`IOException`以外の起動失敗も必ず`markTerminalStartFailed()`経由でエラー表示されるようにした（`e.getMessage()`が`null`の場合は`e.toString()`にフォールバックし、メッセージが空でエラー表示自体が空白にならないようにした）。Xvfb+Robotで`TerminalSession.start()`に`SecurityException`を強制的に投げさせる実験を行い、修正前は上記の「画面完全無反応」状態を実際に再現し、修正後は`[failed to start terminal: ...]`というエラーメッセージが即座に表示されることを確認した。
+- **意図的にスコープ外とした点**: `SecurityException`等が発生する根本原因（サンドボックス設定・OS権限等）そのものへの対処は行っていない。あくまで「原因不明の無反応」を「エラーメッセージが見える状態」に変えることが目的で、これによりユーザー・開発者が実際のエラー内容から次の切り分けができるようになる。
+- **副次的に発見・修正したバグ（テストの無限ハング）**: 本調査中、`./scripts/test.sh`実行時に`TerminalModeTest`が終了せずスイート全体がハングする問題を発見した。原因は本ファイル前節の`testToggleTerminalModeClearsSplashScreen`（PR #166で追加）が`new EditorCanvas()`（Swingコンポーネント）を生成しており、一度もトップレベルウィンドウを表示/破棄しないままだとAWTイベントディスパッチスレッド（非daemon）がJVM終了を妨げ続けるため。`RobotKeyInputTest`が同じ理由で末尾に`System.exit(...)`を明示的に呼んでいる既存パターンと同じ対策を`TerminalModeTest.main()`にも適用し（`if (fail > 0) System.exit(1)`だった条件分岐を`System.exit(fail > 0 ? 1 : 0)`という無条件exitに変更）、解消した。
+
+### 既知の制約: `$SHELL`が`fish`の場合、TERMINALモードで出力が一切表示されない（2026-07-20 調査）
+
+- **不具合報告**: 「bashではなくfishを使用しているとうまく動作しませんか？」という質問を受けて実機調査した（fishをこのコンテナに導入し、実際にアプリを起動してCtrl+Shift+Tで検証）。
+- **原因**: fish（3.x、Rust実装）は標準出力が実端末（tty）に接続されていない場合、内部でフルバッファリングを行い、**プロセスが終了するまで出力を一切flushしない**。これを`mkfifo`を使った最小再現（`TERM=dumb fish -i < fifo > logfile`、プロセスを生かしたまま`echo`コマンドを送り込む）で実測確認した：5秒待っても`logfile`は空のままで、プロセスをkillした瞬間に初めて内容が書き出される。bash/dash（Cで書かれておりglibcのstdioを使う）は対話モード時に明示的にflushしているため同じ状況でも問題なく動作する（本ファイルの他の箇所で確認済み）。
+- **`stdbuf`（多くのCプログラムのバッファリングを外部から強制変更できる標準コマンド）は効かない**ことも確認済み。`stdbuf`はglibcの`setvbuf`呼び出しを`LD_PRELOAD`で差し替える仕組みのため、独自のI/Oスタックを持つRust製プログラム（fish）には効果がない。
+- **唯一確認できた回避策（`script`コマンドによる疑似端末の割り当て）は採用しなかった**。`TERM=dumb script -qc "fish -i" -f logfile`で試したところ実際に解決したが、以下の理由で見送った:
+  - 疑似端末（PTY）を経由させると、fish自身の対話的プロンプト（gitブランチ表示等の複雑なプロンプト）・readlineによる行編集・bracketed paste mode（`\e[?2004h`/`\e[?2004l`）等、本アプリが前提としていない大量のエスケープシーケンス・端末機能が有効になってしまう。これは本ファイル冒頭で確認済みの「真のPTYは実装できない（外部ライブラリ一切不使用の方針上、PTY操作にはJNI/ネイティブコードが必要）」という制約とは別の話（`script`はJNI不要の標準UNIXコマンド）だが、**「PTYを使わない」という既存の設計方針そのものと正面から矛盾する**ため、ユーザー確認なしに採用しなかった。採用する場合は`AnsiEscapeFilter`の大幅な拡張（カーソル移動・画面クリア等の一般的なANSI制御シーケンス全般への対応）が別途必要になり、スコープが大きく広がる。
+- **現状の扱い**: `bash`/`zsh`/`dash`/`sh`等、Cベースで対話時に明示的flushを行うシェルは問題なく動作する。`fish`（および同様にRust/Go等の独自I/Oスタックを持ち非tty時にflushしないシェル全般）は、TERMINALモードに入れてコマンドを入力できてもコマンドの実行結果が画面に表示されない既知の制約として残す。回避したい場合はユーザー側で`$SHELL`環境変数を`/bin/bash`等に変更してからエディタを起動することを推奨する。
+
+### コードレビューで発覚した3件のバグ修正（2026-07-20）
+
+ユーザーからの依頼で、TERMINALモード関連の直近の実装（Esc離脱・スプラッシュ/ラベル修正・エコー重複排除+`:cd`双方向同期・例外catch拡大）を8観点並列レビュー→個別検証したところ、確度の高い3件のバグが判明し、いずれも修正した。
+
+- **①`suppressEchoedInput()`の競合状態**: 標準出力/標準エラーはそれぞれ独立した仮想スレッドが個別に`SwingUtilities.invokeLater()`でEDTへディスパッチするため、2ストリーム間の到着順序は保証されない。シェルの自己エコー（標準エラー）より先に実際のコマンド出力（標準出力）がEDTに届くと、`suppressEchoedInput()`の最終else節が`terminalPendingEchoSuppress`を誤ってクリアしてしまい、後から届く自己エコーが未抑制のまま表示される——この抑制機構自体が解消しようとした二重表示バグが、スレッドスケジューリング次第で再発する不具合だった。
+  - **修正**: `appendTerminalOutput()`で`suppressEchoedInput()`を`isError==true`（標準エラー）のチャンクにのみ適用するよう変更した。実測（bash -iのstdout/stderr分離）で、シェルのプロンプト・自己エコーバックはいずれも標準エラー経由でのみ書き戻され、標準出力には実際のコマンド出力だけが乗ることを確認済みのため、標準出力チャンクは一切対象外にしてよい。これにより「ある1ストリームのチャンクは単一の読み取りスレッドから順序どおりにディスパッチされる」という保証だけに依存する設計になり、2ストリーム間の到着順序不定という根本原因そのものを構造的に排除した（単なる確率低減ではなく、レビューで指摘された「より原理的な修正」に該当する）。
+  - **テスト**: `testEchoSuppressionSurvivesStdoutArrivingBeforeStderrEcho`（新設）。修正前のコードに戻すと実際にFAILすることを確認済み（`countOccurrences(text, "echo HI")`が1ではなく2になる）。
+- **②`enterTerminal()`/`exitTerminal()`が`syncCanvas()`を呼ばない**: Ctrl+Shift+Tは`Main.java`のグローバルディスパッチャから`processKey()`を経由せず`toggleTerminalMode()`を直接呼ぶため、`processKey()`末尾の自動`syncCanvas()`が効かない。`EditorCanvas`は`ModalEditor`への参照を持たず`syncCanvas()`経由のsetter呼び出しでのみ状態（`terminalMode`フラグ含む）を受け取るため、Ctrl+Shift+T直後は画面が前の内容・前のステータスラベルのまま残り、次に`processKey()`を経由する入力（最初の1文字入力等）まで反映されなかった。上記fish調査で見た「Ctrl+Shift+T直後は何も表示されない」という現象の一因もこれだった可能性が高い（bashは起動バナーがほぼ即座に届き`afterTerminalUpdate()`経由で間接的に`syncCanvas()`が呼ばれるため症状が隠れていた）。
+  - **修正**: `enterTerminal()`・`exitTerminal()`の末尾にそれぞれ明示的な`syncCanvas()`呼び出しを追加した。`:term`コマンドやtelescope経由の呼び出し（元々`processKey()`を経由し末尾で`syncCanvas()`が呼ばれる）では二重呼び出しになるが、`syncCanvas()`はバッファのversion一致によるキャッシュ機構（軽量性リファクタリングPhase 2）を持つため実質無害。
+  - **テスト**: `testToggleTerminalModeSyncsCanvasImmediately`・`testExitTerminalSyncsCanvasImmediately`（新設）。`EditorCanvas.isTerminalMode()`（テスト用に新設したgetter）で、`processKey()`を一切経由せず`toggleTerminalMode()`を直接呼んだ直後に`canvas`側の状態が反映されていることを検証。修正前のコードに戻すと実際にFAILすることを確認済み。
+- **③`exitTerminal()`が`terminalPendingEchoSuppress`をリセットしない**: コマンド入力してEnterを押した直後（シェルの自己エコーがまだ届いていない状態）にEsc（新設の離脱キー）で抜けると、`terminalPendingEchoSuppress`が残ったままセッションは生存し続ける。再びCtrl+Shift+T/SPC+bで同じセッションに再アタッチしてもリセットは`needsNewSession`分岐内のみで行われるため実行されず、古い抑制文字列が無関係な後続出力と偶然前方一致した場合に誤って消費されうる。
+  - **修正**: `exitTerminal()`の末尾で`terminalPendingEchoSuppress = null`を明示的に行うようにした。TERMINALモードを離れる時点で必ずクリアし、次回再入場時は素の状態から始まる。
+  - **テスト**: `testExitTerminalResetsEchoSuppressState`（新設）。コマンド送信直後にEscで抜け、再アタッチ後に偶然前方一致する出力を送り込んでも欠落しないことを、出現回数のカウント（`contains()`単体では買っている/いないの区別がつかないことが判明したため、対象文字列の出現数で判定）で検証。修正前のコードに戻すと実際にFAILすることを確認済み。
+- **意図的に対応しなかった候補**: レビューでは他に「`quotePathForShellCd()`のWindows引用符エスケープ漏れ」も候補に挙がったが、検証の結果、具体的な失敗シナリオ（NTFSでの二重引用符・cmd.exeのバックスラッシュエスケープ）がいずれも実際には成立しないと判明したため対応不要と判断した。「`catch(Exception)`拡大によるバグ握りつぶし」「システムメッセージが稀に抑制ロジックと衝突しうる」「セッション強制終了時の競合」「Esc追加の事前ユーザー確認記録の欠如」「OS判定・パス解決ロジックの重複」も候補に挙がったが、いずれも実害が低い・既存の設計慣習と一致する・具体的な発火条件が非現実的、のいずれかに該当するため今回は見送った（詳細はレビュー時の会話記録を参照）。

@@ -537,9 +537,16 @@ public class Main {
                     afterTerminalUpdate(root, editor, ed -> ed.appendTerminalOutput(chunk, true))),
                 exitCode -> SwingUtilities.invokeLater(() ->
                     afterTerminalUpdate(root, editor, ed -> ed.markTerminalExited(exitCode))));
-        } catch (IOException e) {
+        } catch (Exception e) {
+            // ProcessBuilder.start() は IOException 以外にも SecurityException 等の実行時例外を
+            // 送出しうる（環境のサンドボックス制約等）。IOException だけを捕捉していると、
+            // それ以外の例外が KeyEventDispatcher のコールバックチェーンをすり抜けて
+            // AWTのデフォルト未捕捉例外ハンドラに渡り、markTerminalStartFailed() が一切呼ばれず
+            // terminalAlive が true のまま固まる（画面には何も出ずキー入力も無反応に見える）
+            // 不具合があったため、Exception全体を捕捉して必ずエラー表示するようにした。
+            String message = e.getMessage() != null ? e.getMessage() : e.toString();
             SwingUtilities.invokeLater(() ->
-                afterTerminalUpdate(root, editor, ed -> ed.markTerminalStartFailed(e.getMessage())));
+                afterTerminalUpdate(root, editor, ed -> ed.markTerminalStartFailed(message)));
         }
     }
 
