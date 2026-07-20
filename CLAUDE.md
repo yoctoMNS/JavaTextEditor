@@ -361,6 +361,12 @@ project-root/
 - **意図的にスコープ外とした点**: このアルゴリズムは `applyImport`/`applyImports`（新規 import 挿入時）にのみ適用した。`removeImport`/`removeUnusedImports`（既存 import の削除のみ）は並び替えを伴わないため変更していない。また、ユーザーが手で書いた import の並びを能動的に「整理」する `:organize-imports` 相当のコマンドは現状存在しない（`Ctrl+Shift+O` の `onOrganizeImports` は未使用 import の削除のみを行うコマンドで、並び替えは行わない。混同しないこと）。
 - **テスト**: `test/dev/javatexteditor/analysis/AutoImportHandlerTest.java` に3テスト追加（計51テスト）。同一グループ内でのアルファベット順（`testApplyImportAfterExistingImport`、既存のアサーションを新仕様に合わせて更新）、`java`/`javax`/`com`混在時のグループ順＋グループ間空行（`testApplyImportEclipseGroupOrder`）、複数 import 一括追加時の同一グループ内ソート（`testApplyImportsSortsWithinSameGroup`）、static import が非 static より前に来ること＋境界の空行（`testApplyImportStaticBeforeNormal`）を検証。
 
+## `Main.isJavaBuffer()` の判定基準変更（ファイルパス未設定時はデフォルトでJavaバッファ扱いしない）
+
+- **不具合報告**: `.java`以外のファイルを開いていない状態（`currentFilePath == null`。`:enew`等の疑似バッファ）でも、auto-import・コンパイル解析（`setupCompileAnalysis()`のINSERT→NORMAL遷移・保存・Ctrl+Shift+O・バッファ変更デバウンス）が実行されてしまっていた。
+- **原因**: `isJavaBuffer()`は`path == null || path.endsWith(".java")`という判定で、ファイルパス未設定を「従来どおり解析対象に含める」設計だった（2026-07-14導入時点の意図的な判断。本ファイル内の直前の修正コミットのJavadocに経緯あり）。
+- **修正**: ユーザーの明示的な指示により、`path != null && path.endsWith(".java")`に変更した。**`.java`という拡張子が明示的に確定して初めてJavaバッファとして扱い、ファイルパス未設定時はデフォルトでJavaバッファとして扱わない**。`:enew`等の疑似バッファでauto-importやコンパイル解析が走らなくなるのは意図した挙動（`:w foo.java`等で`.java`拡張子付きのパスを設定して初めて解析対象になる）。
+
 ## 自動 import 挿入がプロジェクト内の別パッケージのクラスに対して働かない不具合の修正
 
 - **不具合**: JDK標準APIクラス（例: `List`）は未定義シンボルとして自動でimport文が挿入されるが、
