@@ -70,6 +70,13 @@ public class Main {
     private static List<Path> pendingRunExtraClasspath = List.of();
 
     // -------------------------------------------------------------------------
+    // Ctrl+Shift+T / :term: エディタプロセス全体で1つだけ生存する対話型ターミナルセッション
+    // （ModalEditor.terminalBuffer と同じく static。詳細は modal-editing-engine 相当の設計判断は
+    // ModalEditor.java の Mode.TERMINAL セクションのコメントを参照）。
+    // -------------------------------------------------------------------------
+    private static dev.javatexteditor.terminal.TerminalSession terminalSession = null;
+
+    // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
     // -------------------------------------------------------------------------
     private static final List<dev.javatexteditor.telescope.BufferPicker.BufferEntry> BUFFER_REGISTRY =
@@ -507,6 +514,47 @@ public class Main {
         return t;
     }
 
+    /**
+     * Ctrl+Shift+T / :term: 新しい対話型シェルセッションを起動する。既存セッションが生きていれば
+     * 片付けてから起動し直す（runJavaClass の多重実行防止と同じ発想）。標準出力/標準エラーの
+     * 各チャンクは editor.appendTerminalOutput() で唯一のミューテーションを行い、その後
+     * terminalBuffer を表示中の全ペイン（自ペイン含む）へ syncCanvas() を配って反映する
+     * （syncSiblingBuffers と同種だが、対象が「同一バッファ参照を今まさに表示しているペイン」
+     * という判定のみで足りるため専用の軽量な実装にした）。
+     */
+    private static void startTerminalSession(PaneNode root, ModalEditor editor) {
+        if (terminalSession != null) {
+            terminalSession.destroyForcibly();
+        }
+        dev.javatexteditor.terminal.TerminalSession session = new dev.javatexteditor.terminal.TerminalSession();
+        terminalSession = session;
+        Path workingDir = editor.getProjectRoot();
+        try {
+            session.start(workingDir,
+                chunk -> SwingUtilities.invokeLater(() ->
+                    afterTerminalUpdate(root, editor, ed -> ed.appendTerminalOutput(chunk, false))),
+                chunk -> SwingUtilities.invokeLater(() ->
+                    afterTerminalUpdate(root, editor, ed -> ed.appendTerminalOutput(chunk, true))),
+                exitCode -> SwingUtilities.invokeLater(() ->
+                    afterTerminalUpdate(root, editor, ed -> ed.markTerminalExited(exitCode))));
+        } catch (IOException e) {
+            SwingUtilities.invokeLater(() ->
+                afterTerminalUpdate(root, editor, ed -> ed.markTerminalStartFailed(e.getMessage())));
+        }
+    }
+
+    /** terminalBuffer への1回だけの変更(mutate)を適用し、その内容を表示中の全ペインへ反映する。 */
+    private static void afterTerminalUpdate(
+            PaneNode root, ModalEditor sourceEditor, java.util.function.Consumer<ModalEditor> mutate) {
+        mutate.accept(sourceEditor);
+        dev.javatexteditor.buffer.UndoablePieceTable buf = ModalEditor.getSharedTerminalBuffer();
+        if (buf == null) return;
+        for (Leaf l : allLeaves(root)) {
+            if (l.editor() != sourceEditor) l.editor().followTerminalCursorIfShowing();
+            if (l.editor().getBuffer() == buf) l.editor().syncCanvas();
+        }
+    }
+
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
     private static void setupSplitCallbacks(
             JFrame frame, PaneNode[] root, Leaf[] active, Leaf leaf) {
@@ -620,6 +668,16 @@ public class Main {
             leaf.editor().setLiveBufferLookup(path -> findLiveBuffer(root[0], path));
             // 共有バッファの内容が変化した直後、同じ参照を持つ他ペインの画面へ即座に反映する。
             leaf.editor().setOnSharedBufferSync(() -> syncSiblingBuffers(root[0], leaf));
+            // Ctrl+Shift+T / :term: 対話型ターミナルセッションの起動・書き込み・強制終了。
+            // セッション自体は static（Main.terminalSession）で全ペイン共有のため、
+            // どのペインの登録クロージャが呼ばれても同じ terminalSession を操作する。
+            leaf.editor().setTerminalStartCallback(() -> startTerminalSession(root[0], leaf.editor()));
+            leaf.editor().setTerminalWriteCallback(text -> {
+                if (terminalSession != null) terminalSession.write(text);
+            });
+            leaf.editor().setTerminalKillCallback(() -> {
+                if (terminalSession != null) terminalSession.destroyForcibly();
+            });
             leaf.editor().setMovePanePrevCallback(() -> {
                 List<Leaf> leaves = allLeaves(root[0]);
                 if (leaves.size() <= 1) return;
@@ -813,6 +871,16 @@ public class Main {
                             } else if (kc == KeyEvent.VK_UP) {
                                 active[0].canvas().adjustCellHeight(-1);
                                 pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_T) {
+                                // Ctrl+Shift+T: TERMINALモードのトグル（NORMALから入る/TERMINALから出る）。
+                                // F10/F11/F12と同様、NORMALモードでのみ「入る」を許可する
+                                // （INSERT編集中等に横取りしないため）。
+                                dev.javatexteditor.editor.ModalEditor edTerm = active[0].editor();
+                                if (edTerm.isNormalMode() || edTerm.isTerminalMode()) {
+                                    edTerm.toggleTerminalMode();
+                                    updateBorders(allLeaves(root[0]), active[0]);
+                                }
+                                pressedHandled[0] = true; return true;
                             }
                         }
 
@@ -893,7 +961,7 @@ public class Main {
                         boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
                         dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
                         if (noCtrlAlt && isPrintable &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
+                                (ed.isInsertMode() || ed.isCommandMode() || ed.isTerminalMode())) {
                             return false; // IMEに委譲（pressedHandled は false のまま）
                         }
 
@@ -914,7 +982,7 @@ public class Main {
                         char ch = e.getKeyChar();
                         dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
                         if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
+                                (ed.isInsertMode() || ed.isCommandMode() || ed.isTerminalMode())) {
                             ed.processKey(0, ch, 0);
                             updateBorders(allLeaves(root[0]), active[0]);
                             return true;
