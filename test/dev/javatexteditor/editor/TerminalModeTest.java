@@ -26,7 +26,7 @@ public class TerminalModeTest {
     private static int pass = 0;
     private static int fail = 0;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         testSpcBShowsTerminalEntryOnlyAfterStarted(); // 必ず最初（コメント参照）
 
         testTermCommandEntersTerminalMode();
@@ -41,6 +41,14 @@ public class TerminalModeTest {
         testEscapeExitsTerminalMode();
         testEscapeExitsDeadTerminalSession();
         testToggleTerminalModeClearsSplashScreen();
+        testEchoedInputIsSuppressedFromOutput();
+        testEchoSuppressionAcrossSplitChunks();
+        testEchoSuppressionGracefullyIgnoresNonEchoingShell();
+        testTypedCdSyncsEditorProjectRoot();
+        testTypedCdWithNoArgumentGoesHome();
+        testTypedNonCdCommandDoesNotChangeProjectRoot();
+        testEditorCdSyncsToLiveTerminal();
+        testEditorCdDoesNotSyncToDeadTerminal();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -86,6 +94,30 @@ public class TerminalModeTest {
         ed.processKey(KeyEvent.VK_UNDEFINED, ':', 0);
         for (char c : cmd.toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
         ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+    }
+
+    /** TERMINALモード中に1行分の文字列をタイプしてEnterを押す（ローカルエコー経由）。 */
+    private static void typeInTerminal(ModalEditor ed, String line) {
+        for (char c : line.toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+    }
+
+    private static int countOccurrences(String text, String needle) {
+        int count = 0, idx = 0;
+        while ((idx = text.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
+        return count;
+    }
+
+    /** :cd をサポートする（FilerTestと同じパターンの）モック changeWdCallback 付きエディタを作る。 */
+    private static ModalEditor makeEditorWithCdSupport(java.nio.file.Path root) {
+        ModalEditor ed = new ModalEditor("hello");
+        ed.setProjectRoot(root);
+        ed.setChangeWorkingDirectoryCallback(p -> {
+            if (!java.nio.file.Files.isDirectory(p)) return "no such directory: " + p;
+            ed.setProjectRoot(p);
+            return null;
+        });
+        return ed;
     }
 
     private static void openSpcB(ModalEditor ed) {
@@ -284,5 +316,122 @@ public class TerminalModeTest {
         ed.toggleTerminalMode(); // processKey()を経由しない直接呼び出し
         assertTrue("TERMINALモードに入る", ed.isTerminalMode());
         assertTrue("スプラッシュが消える", !canvas.isShowSplash());
+    }
+
+    /**
+     * バグ修正の回帰テスト: tty無しの対話型シェル（bash -i を実測して確認済み。CLAUDE.md参照）は
+     * 読み取った入力行をそのまま出力へエコーバックするフォールバック動作を行う。ローカルエコーで
+     * 既に表示済みの内容と二重表示されないよう、送信直後に届く一致するチャンクは抑制する必要がある。
+     */
+    static void testEchoedInputIsSuppressedFromOutput() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("x");
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "echo HI");
+        // シェル自身のエコーバック（実測どおりstderr経由）+ 実際のコマンド出力（stdout）を模擬
+        ed.appendTerminalOutput("echo HI\n", true);
+        ed.appendTerminalOutput("HI\n", false);
+        String text = ed.getText();
+        assertEquals("ローカルエコー分の1回だけ表示される（シェルの二重エコーは抑制）",
+            1, countOccurrences(text, "echo HI"));
+        assertTrue("実際のコマンド出力は表示される", text.contains("HI"));
+    }
+
+    /** エコーバックが複数回のread()に分割されて届く場合でも正しく抑制できる必要がある。 */
+    static void testEchoSuppressionAcrossSplitChunks() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("x");
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "pwd");
+        ed.appendTerminalOutput("pw", true);
+        ed.appendTerminalOutput("d\n", true);
+        ed.appendTerminalOutput("/tmp\n", false);
+        String text = ed.getText();
+        assertEquals("分割チャンクでもエコーは1回だけ表示される", 1, countOccurrences(text, "pwd"));
+        assertTrue("実際のコマンド出力は表示される", text.contains("/tmp"));
+    }
+
+    /** エコーバックしないシェル（bash -i以外）でも出力が失われず表示される必要がある。 */
+    static void testEchoSuppressionGracefullyIgnoresNonEchoingShell() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("x");
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "ls");
+        // 一致しない出力がそのまま素通しされることを確認
+        ed.appendTerminalOutput("file1.txt\nfile2.txt\n", false);
+        String text = ed.getText();
+        assertTrue("エコーしないシェルでも出力は失われない",
+            text.contains("file1.txt") && text.contains("file2.txt"));
+    }
+
+    /** ターミナルで typed した "cd <path>" がエディタのprojectRootへ同期される。 */
+    static void testTypedCdSyncsEditorProjectRoot() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path target = java.nio.file.Files.createTempDirectory("term_cd_target_");
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_cd_root_");
+        ModalEditor ed = makeEditorWithCdSupport(root);
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "cd " + target);
+        assertEquals("ターミナルで入力したcdがエディタのprojectRootに反映される",
+            target.toAbsolutePath().normalize(), ed.getProjectRoot());
+    }
+
+    /** 引数なしの "cd" はホームディレクトリへ移動する（shellの既定動作と同じ）。 */
+    static void testTypedCdWithNoArgumentGoesHome() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_cd_root2_");
+        ModalEditor ed = makeEditorWithCdSupport(root);
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "cd");
+        java.nio.file.Path home = java.nio.file.Path.of(System.getProperty("user.home"))
+            .toAbsolutePath().normalize();
+        assertEquals("引数なしcdはホームディレクトリへ", home, ed.getProjectRoot());
+    }
+
+    /** "cd" ではない通常のコマンドはprojectRootへ影響しない。 */
+    static void testTypedNonCdCommandDoesNotChangeProjectRoot() {
+        resetSharedTerminalState();
+        java.nio.file.Path root = java.nio.file.Path.of(System.getProperty("user.dir"));
+        ModalEditor ed = makeEditorWithCdSupport(root);
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        typeInTerminal(ed, "echo cd_lookalike");
+        assertEquals("cd以外のコマンドはprojectRootを変更しない", root, ed.getProjectRoot());
+    }
+
+    /** エディタの :cd 成功時、生存中のTERMINALセッションへも "cd <path>" が転送される。 */
+    static void testEditorCdSyncsToLiveTerminal() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path target = java.nio.file.Files.createTempDirectory("term_cd_target2_");
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_cd_root3_");
+        ModalEditor ed = makeEditorWithCdSupport(root);
+        FakeTerminal fake = new FakeTerminal();
+        fake.wire(ed);
+        typeCommand(ed, "term");
+        ed.toggleTerminalMode(); // NORMALに戻る。セッション自体は生存したまま。
+        typeCommand(ed, "cd " + target);
+        boolean forwarded = fake.written.stream().anyMatch(w ->
+            w.startsWith("cd ") && w.contains(target.toString()) && w.endsWith("\n"));
+        assertTrue(":cd が生存中のターミナルへcdコマンドとして転送される", forwarded);
+    }
+
+    /** ターミナルセッションが生存していない場合は転送を試みない（NPE等でクラッシュしない）。 */
+    static void testEditorCdDoesNotSyncToDeadTerminal() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path target = java.nio.file.Files.createTempDirectory("term_cd_target3_");
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_cd_root4_");
+        ModalEditor ed = makeEditorWithCdSupport(root);
+        FakeTerminal fake = new FakeTerminal();
+        fake.wire(ed);
+        // ターミナルセッションを一度も開始していない状態で :cd する
+        typeCommand(ed, "cd " + target);
+        assertEquals(":cd 自体は成功しprojectRootが変わる",
+            target.toAbsolutePath().normalize(), ed.getProjectRoot());
+        assertEquals("生存中のターミナルが無いのでwrite callbackは呼ばれない", 0, fake.written.size());
     }
 }
