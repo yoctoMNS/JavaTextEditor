@@ -327,6 +327,11 @@ public class ModalEditor {
     private static final StringBuilder terminalPendingInput = new StringBuilder();
     private static java.util.Set<Integer> terminalErrorLines = new java.util.HashSet<>();
     private static int terminalNextRow = 0;
+    // シェルはtty無しでも-iにより対話動作を続けようとし、readlineの代わりに「読み取った行を
+    // そのまま出力へエコーバックする」フォールバック処理を行う（bash -i を実測して確認済み。
+    // CLAUDE.md参照）。ローカルエコーで既に表示済みの内容と二重に表示されるのを防ぐため、
+    // Enter押下時に送信した行を一時的に保持し、直後に届く出力チャンクと突き合わせて除去する。
+    private static String terminalPendingEchoSuppress = null;
     private static final String PSEUDO_TERMINAL_PATH = "*terminal*";
     // ペインごとの退避状態（FILER/telescopeと同じ「一時退避→復元」パターン、インスタンスフィールド）
     private UndoablePieceTable terminalSavedBuffer = null;
@@ -3149,6 +3154,7 @@ public class ModalEditor {
             terminalErrorLines = new java.util.HashSet<>();
             terminalNextRow = 0;
             terminalPendingInput.setLength(0);
+            terminalPendingEchoSuppress = null;
         }
         buffer = terminalBuffer;
         currentFilePath = null;
@@ -3215,7 +3221,9 @@ public class ModalEditor {
             terminalPendingInput.setLength(0);
             buffer.insert(buffer.length(), "\n");
             moveCursorToTerminalEnd();
+            terminalPendingEchoSuppress = line + "\n";
             if (terminalWriteCallback != null) terminalWriteCallback.accept(line + "\n");
+            syncEditorWorkingDirectoryFromTypedCommand(line);
             return;
         }
         if (keyCode == KeyEvent.VK_BACK_SPACE) {
@@ -3244,6 +3252,8 @@ public class ModalEditor {
         if (terminalBuffer == null) return;
         String normalized = chunk.replace("\r\n", "\n").replace('\r', '\n');
         if (normalized.isEmpty()) return;
+        normalized = suppressEchoedInput(normalized);
+        if (normalized.isEmpty()) return;
         int newlineCount = 0;
         for (int i = 0; i < normalized.length(); i++) {
             if (normalized.charAt(i) == '\n') newlineCount++;
@@ -3259,6 +3269,31 @@ public class ModalEditor {
         }
         terminalNextRow += newlineCount;
         followTerminalCursorIfShowing();
+    }
+
+    /**
+     * tty無しのシェルが自らエコーバックした入力行（ローカルエコーで既に表示済み）を取り除く。
+     * 実測（bash -i にパイプでコマンドを流し込む）で、シェルは読み取った行をプロンプト直後に
+     * そのまま出力へ書き戻すことを確認済み（詳細はCLAUDE.md参照）。前方一致すれば消費して
+     * 除去し、チャンクが複数回のread()に分割される場合にも対応するため部分一致も追跡する。
+     * シェルによってはエコーバックしない場合もあるため、不一致なら諦めて素通しする
+     * （実害はローカルエコーとの二重表示が1回抑制されないだけで、出力の欠落は起きない）。
+     */
+    private static String suppressEchoedInput(String normalized) {
+        if (terminalPendingEchoSuppress == null || terminalPendingEchoSuppress.isEmpty()) {
+            return normalized;
+        }
+        if (normalized.startsWith(terminalPendingEchoSuppress)) {
+            String remainder = normalized.substring(terminalPendingEchoSuppress.length());
+            terminalPendingEchoSuppress = null;
+            return remainder;
+        }
+        if (terminalPendingEchoSuppress.startsWith(normalized)) {
+            terminalPendingEchoSuppress = terminalPendingEchoSuppress.substring(normalized.length());
+            return "";
+        }
+        terminalPendingEchoSuppress = null;
+        return normalized;
     }
 
     /** terminalBuffer を表示中のペインであれば、カーソルを末尾へ追従させる（他ペインからの出力更新時にも使う）。 */
@@ -4892,6 +4927,14 @@ public class ModalEditor {
                 statusMessage = "E: " + err;
                 return;
             }
+            // :cd の作業ディレクトリ変更を、生存中のTERMINALセッション（実shellプロセス）にも
+            // "cd <path>" として転送し、実shell自身のカレントディレクトリを追従させる。
+            // shellプロセスのcwdは外部プロセスから直接変更できない（PTraceのようなnative操作が
+            // 必要でCLAUDE.mdの「外部ライブラリ一切不使用」方針に反する）ため、組み込みコマンドの
+            // cdをそのまま入力として送るのが唯一のpure Javaでの実現手段。
+            if (terminalAlive && terminalWriteCallback != null) {
+                terminalWriteCallback.accept("cd " + quotePathForShellCd(target.toString()) + "\n");
+            }
             filerSavedBuffer = buffer;
             filerSavedFilePath = currentFilePath;
             filerSavedCursorRow = cursorRow;
@@ -4900,6 +4943,58 @@ public class ModalEditor {
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
         }
+    }
+
+    /**
+     * TERMINALモード中に入力された1行が {@code cd}/{@code cd <path>} コマンドであれば、
+     * :cd と同じ解決ルール（projectRoot基準・{@code ~}展開）でエディタ側のprojectRootも
+     * 追従させる（逆方向の同期。上記changeDirectory()内のshellへの転送と対になる）。
+     * 実shellへは常に生の入力をそのまま送っており、ここでの解決に失敗しても実shell側の
+     * cdの成否には影響しない（実shellのエラー表示はターミナル出力にそのまま現れる）。
+     * cd以外のコマンドや解決に失敗した場合は何もしない。
+     */
+    private void syncEditorWorkingDirectoryFromTypedCommand(String line) {
+        if (changeWdCallback == null) return;
+        String trimmed = line.trim();
+        String cmpKey = isWindowsOs() ? trimmed.toLowerCase(java.util.Locale.ROOT) : trimmed;
+        String arg;
+        if (cmpKey.equals("cd")) {
+            arg = "~";
+        } else if (cmpKey.startsWith("cd ")) {
+            arg = stripMatchingQuotes(trimmed.substring(3).trim());
+            if (arg.isEmpty()) arg = "~";
+        } else {
+            return;
+        }
+        try {
+            Path target = getProjectRoot().resolve(expandHome(arg)).toAbsolutePath().normalize();
+            changeWdCallback.apply(target); // 失敗時は無視。実shell自身のエラー出力に委ねる。
+        } catch (Exception ignored) {
+            // パス解決に失敗した場合も同様に無視する。
+        }
+    }
+
+    private static boolean isWindowsOs() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+    }
+
+    /** 先頭・末尾が同じ引用符（"または'）で囲まれていればそれを取り除く。 */
+    private static String stripMatchingQuotes(String s) {
+        if (s.length() >= 2) {
+            char first = s.charAt(0), last = s.charAt(s.length() - 1);
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                return s.substring(1, s.length() - 1);
+            }
+        }
+        return s;
+    }
+
+    /** shellの標準入力へ書き込む "cd" コマンドの引数として安全な形にパスを引用符で囲む。 */
+    private static String quotePathForShellCd(String pathStr) {
+        if (isWindowsOs()) {
+            return "\"" + pathStr + "\"";
+        }
+        return "'" + pathStr.replace("'", "'\\''") + "'";
     }
 
     /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */

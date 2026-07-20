@@ -843,3 +843,23 @@ project-root/
 - **副次的に修正した点（赤字化の1行分先読みマーキング）**: 調査の過程で`appendTerminalOutput()`の`for (i=0; i<=newlineCount; i++) terminalErrorLines.add(terminalNextRow + i)`が、チャンク末尾が`\n`で終わる場合でもその直後の（まだ何も書かれていない）行を先読みでエラー行としてマークしてしまうことに気づいた。この行に後続のstdout出力やローカルエコーが書き込まれると、本来エラーではないのに赤字表示されてしまう。チャンクが`\n`で終わっているかどうかで判定を分岐し（`\n`で終わる場合は末尾の空行をマークしない、終わらない場合＝書きかけの最終行自体がエラー内容なのでその行もマークする）、over-markingを解消した。
 - **確認方法**: Xvfb（`Xvfb :99`）+ 別プロセスから`java.awt.Robot`で実際に`dev.javatexteditor.Main.main()`を起動し、無ファイル状態（スプラッシュ表示）から最初のキーとしてCtrl+Shift+Tを送信、スクリーンショットで修正前後の描画差分を目視確認した（既存のRobotKeyInputTest等と同種のGUI依存の手動確認。自動テストには組み込んでいない）。
 - **テスト**: `test/dev/javatexteditor/editor/TerminalModeTest.java`に`testToggleTerminalModeClearsSplashScreen`を追加。`EditorCanvas`に`setShowSplash(true)`をセットした状態で`processKey()`を経由せず`toggleTerminalMode()`を直接呼び、`isShowSplash()`が`false`になることを検証する（Ctrl+Shift+Tの実際の呼び出し経路をそのまま再現）。
+
+### バグ修正: シェルの自己エコーバックによる出力の二重表示（コマンドが正しく実行されないように見える不具合）（2026-07-20）
+
+- **不具合報告**: 「terminalモードでコマンドが正しく実行されません」。実機（Xvfb+Robot、`echo`/`pwd`を実際に送信）で調査したところ、コマンド自体は正しく実行されているが、画面上は同じコマンド文字列が2回表示され（1回目はローカルエコー、2回目はシェル自身の出力）、あたかも壊れているように見えることが判明した。
+- **原因**: `bash -i`（tty無しでも対話動作を強制する）を素の`sh -i < パイプ`で実測したところ、**シェル自身が読み取った入力行をそのまま出力へエコーバックする**フォールバック動作を行うことを確認した（readlineがtty無しでは使えないための代替動作。GNU bashの既知の挙動）。標準出力/標準エラーを分離して実測すると、この自己エコーバックとPS1プロンプトの両方が**標準エラー**経由で書き戻されることも確認した（`root@vm:/tmp# echo HELLO_TEST`のような「プロンプト+エコーされた入力」がstderrに、`HELLO_TEST`のような実際のコマンド出力はstdoutに、それぞれ独立して現れる）。本実装は`ModalEditor`側で既にローカルエコー（ユーザーが打った文字をその場で表示）を行っていたため、Enter押下後にシェル自身の自己エコーバックが届くと、同じ内容が2回（ローカルエコュー分＋シェルの自己エコー分）画面に現れていた。
+- **修正**: `ModalEditor.appendTerminalOutput()`に抑制ロジック（`suppressEchoedInput()`）を追加した。Enter押下時に送信した行（`terminalPendingEchoSuppress`、静的フィールド）を記録しておき、直後に届く出力チャンクの先頭がこれと一致すれば消費して除去する。チャンクが複数回の`read()`に分割されて届く場合（部分一致）にも対応し、まったく一致しない場合（自己エコーバックしないシェルを使っている場合等）は諦めて素通しする（出力を欠落させない安全側のフォールバック）。ストリーム（stdout/stderr）を問わず先頭一致だけで判定するため、自己エコーバックがstderr以外から来る別シェルにも汎用的に対応できる。
+- **意図的にスコープ外とした点**: シェル自身の自己エコーバックという挙動自体はbashの仕様であり、抑制する（表示させない）以外の代替策（例: `stty`によるecho制御）は真のPTYが無いと効かないため採用しなかった。抑制がマッチしない場合に稀に発生しうる1回だけの二重表示（例えば非常に短時間に複数行を連続送信した場合、`terminalPendingEchoSuppress`は最後に送った1行分しか保持しないため、それより前の行の抑制チャンスを取りこぼす可能性がある）は許容した。
+- **確認方法**: 上記のCtrl+Shift+T不具合と同じくXvfb+Robotで実際に`echo`/`pwd`コマンドを送信し、修正前後のスクリーンショット差分・`ModalEditor`単体への合成チャンク注入（実測したbash -iのstdout/stderr分離パターンを再現）の両方で、修正後は二重表示なくクリーンな transcript になることを確認した。
+- **テスト**: `TerminalModeTest`に3テスト追加（`testEchoedInputIsSuppressedFromOutput`・`testEchoSuppressionAcrossSplitChunks`・`testEchoSuppressionGracefullyIgnoresNonEchoingShell`）。
+
+### `:cd`コマンドとTERMINALモードの作業ディレクトリの双方向同期
+
+- **要望**: 「移動しているディレクトリは、実際の:cdコマンドと連動させるようにしてください」。
+- **制約**: 生存中の子プロセスのカレントディレクトリを外部プロセスから直接変更するAPIはJava標準には無く、実現するにはptrace相当のnative操作が必要（CLAUDE.mdの「外部ライブラリ一切不使用」という根本方針に反するため不採用。本ファイル内の他のnative実装見送り判断と同じ理由）。そのため、シェルの組み込みコマンド`cd`をテキストとして送信する（あたかもユーザーが打ったかのように）以外の手段が無い。
+- **方向1（エディタの`:cd` → 生存中シェルへ転送）**: `changeDirectory()`（`:cd`コマンドのハンドラ）が`changeWdCallback`の成功後、`terminalAlive && terminalWriteCallback != null`であれば`"cd " + quotePathForShellCd(target) + "\n"`をシェルへ送信する。パスのクォートはOS別に分岐する`quotePathForShellCd()`（POSIXシェル: シングルクォート囲み+埋め込みシングルクォートのエスケープ、Windows cmd.exe: ダブルクォート囲み）。送信した"cd"コマンド自体は上記の自己エコーバック抑制の対象外（`terminalPendingEchoSuppress`はユーザーが実際にキー入力してEnterを押した行のみを追跡するため）だが、これはむしろ意図した挙動である：シェル自身の自己エコーバック経由でこの"cd"実行がターミナル画面上に可視化され、ユーザーに「ディレクトリが変わった」ことが伝わる（実機確認済み。詳細は上記バグ修正節参照）。
+- **方向2（ターミナルで入力した`cd` → エディタのprojectRootへ同期）**: `processTerminalKey()`のEnterハンドラから`syncEditorWorkingDirectoryFromTypedCommand(line)`を呼ぶ。入力行が`cd`/`cd <path>`（大文字小文字の区別はWindowsのみ無視、`isWindowsOs()`で判定）にマッチすれば、`:cd`と同じ解決規則（`getProjectRoot()`基準・`~`展開・引数無しはホームディレクトリ）で`changeWdCallback`を呼ぶ。実シェルへは常に生の入力をそのまま送信しており、ここでの解決に成功してもFILERモードには遷移しない（`:cd`コマンド自体とは異なりターミナル入力の裏側での静かな同期に徹する）。解決に失敗（存在しないディレクトリ等）しても無視し、実シェル自身のエラー出力（`bash: cd: ...`）がターミナル上にそのまま表示されることに委ねる。
+- **ping-pong（無限ループ）が起きない理由**: 方向2は`changeWdCallback`（＝`WD_MANAGER.setWorkingDirectory()`経由で`projectRoot`を更新するのみ）を直接呼ぶだけで、方向1のシェルへの転送ロジックを持つ`changeDirectory()`（`:cd`コマンドハンドラ自体）を経由しない。そのため「ターミナルでcd→エディタに同期→シェルへ再送」という循環が構造的に発生しない。
+- **意図的にスコープ外とした点**: `cd -`（直前のディレクトリへ戻る）・`~user`形式・環境変数展開（`cd $HOME`等）は非対応（シンプルな正規表現一致のみ）。エディタ側の`:cd`失敗時にシェルへの転送を試みることはない（`changeWdCallback`が失敗を返した時点で早期returnするため、シェル側は元のディレクトリのまま。両者の状態は一致し続ける）。
+- **確認方法**: Xvfb+RobotでCtrl+Shift+T→Ctrl+Shift+T（ターミナルから一旦離脱、セッションは生存継続）→`:cd /tmp`→再度Ctrl+Shift+Tでターミナルに戻り`pwd`を実行、実際のシェルのカレントディレクトリが`/tmp`に追従していることをスクリーンショットで確認した。
+- **テスト**: `TerminalModeTest`に5テスト追加（`testTypedCdSyncsEditorProjectRoot`・`testTypedCdWithNoArgumentGoesHome`・`testTypedNonCdCommandDoesNotChangeProjectRoot`・`testEditorCdSyncsToLiveTerminal`・`testEditorCdDoesNotSyncToDeadTerminal`）。`FilerTest`と同じモック`changeWdCallback`パターンを踏襲。
