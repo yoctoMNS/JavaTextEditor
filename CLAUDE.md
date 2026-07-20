@@ -875,3 +875,12 @@ project-root/
 - **修正**: `Main.startTerminalSession()`の`catch`節を`catch (IOException e)`から`catch (Exception e)`に広げ、`IOException`以外の起動失敗も必ず`markTerminalStartFailed()`経由でエラー表示されるようにした（`e.getMessage()`が`null`の場合は`e.toString()`にフォールバックし、メッセージが空でエラー表示自体が空白にならないようにした）。Xvfb+Robotで`TerminalSession.start()`に`SecurityException`を強制的に投げさせる実験を行い、修正前は上記の「画面完全無反応」状態を実際に再現し、修正後は`[failed to start terminal: ...]`というエラーメッセージが即座に表示されることを確認した。
 - **意図的にスコープ外とした点**: `SecurityException`等が発生する根本原因（サンドボックス設定・OS権限等）そのものへの対処は行っていない。あくまで「原因不明の無反応」を「エラーメッセージが見える状態」に変えることが目的で、これによりユーザー・開発者が実際のエラー内容から次の切り分けができるようになる。
 - **副次的に発見・修正したバグ（テストの無限ハング）**: 本調査中、`./scripts/test.sh`実行時に`TerminalModeTest`が終了せずスイート全体がハングする問題を発見した。原因は本ファイル前節の`testToggleTerminalModeClearsSplashScreen`（PR #166で追加）が`new EditorCanvas()`（Swingコンポーネント）を生成しており、一度もトップレベルウィンドウを表示/破棄しないままだとAWTイベントディスパッチスレッド（非daemon）がJVM終了を妨げ続けるため。`RobotKeyInputTest`が同じ理由で末尾に`System.exit(...)`を明示的に呼んでいる既存パターンと同じ対策を`TerminalModeTest.main()`にも適用し（`if (fail > 0) System.exit(1)`だった条件分岐を`System.exit(fail > 0 ? 1 : 0)`という無条件exitに変更）、解消した。
+
+### 既知の制約: `$SHELL`が`fish`の場合、TERMINALモードで出力が一切表示されない（2026-07-20 調査）
+
+- **不具合報告**: 「bashではなくfishを使用しているとうまく動作しませんか？」という質問を受けて実機調査した（fishをこのコンテナに導入し、実際にアプリを起動してCtrl+Shift+Tで検証）。
+- **原因**: fish（3.x、Rust実装）は標準出力が実端末（tty）に接続されていない場合、内部でフルバッファリングを行い、**プロセスが終了するまで出力を一切flushしない**。これを`mkfifo`を使った最小再現（`TERM=dumb fish -i < fifo > logfile`、プロセスを生かしたまま`echo`コマンドを送り込む）で実測確認した：5秒待っても`logfile`は空のままで、プロセスをkillした瞬間に初めて内容が書き出される。bash/dash（Cで書かれておりglibcのstdioを使う）は対話モード時に明示的にflushしているため同じ状況でも問題なく動作する（本ファイルの他の箇所で確認済み）。
+- **`stdbuf`（多くのCプログラムのバッファリングを外部から強制変更できる標準コマンド）は効かない**ことも確認済み。`stdbuf`はglibcの`setvbuf`呼び出しを`LD_PRELOAD`で差し替える仕組みのため、独自のI/Oスタックを持つRust製プログラム（fish）には効果がない。
+- **唯一確認できた回避策（`script`コマンドによる疑似端末の割り当て）は採用しなかった**。`TERM=dumb script -qc "fish -i" -f logfile`で試したところ実際に解決したが、以下の理由で見送った:
+  - 疑似端末（PTY）を経由させると、fish自身の対話的プロンプト（gitブランチ表示等の複雑なプロンプト）・readlineによる行編集・bracketed paste mode（`\e[?2004h`/`\e[?2004l`）等、本アプリが前提としていない大量のエスケープシーケンス・端末機能が有効になってしまう。これは本ファイル冒頭で確認済みの「真のPTYは実装できない（外部ライブラリ一切不使用の方針上、PTY操作にはJNI/ネイティブコードが必要）」という制約とは別の話（`script`はJNI不要の標準UNIXコマンド）だが、**「PTYを使わない」という既存の設計方針そのものと正面から矛盾する**ため、ユーザー確認なしに採用しなかった。採用する場合は`AnsiEscapeFilter`の大幅な拡張（カーソル移動・画面クリア等の一般的なANSI制御シーケンス全般への対応）が別途必要になり、スコープが大きく広がる。
+- **現状の扱い**: `bash`/`zsh`/`dash`/`sh`等、Cベースで対話時に明示的flushを行うシェルは問題なく動作する。`fish`（および同様にRust/Go等の独自I/Oスタックを持ち非tty時にflushしないシェル全般）は、TERMINALモードに入れてコマンドを入力できてもコマンドの実行結果が画面に表示されない既知の制約として残す。回避したい場合はユーザー側で`$SHELL`環境変数を`/bin/bash`等に変更してからエディタを起動することを推奨する。
