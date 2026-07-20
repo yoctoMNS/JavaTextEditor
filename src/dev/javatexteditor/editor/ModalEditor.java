@@ -3131,6 +3131,14 @@ public class ModalEditor {
      * 新しいシェルプロセスを作り直す。
      */
     private void enterTerminal(boolean restartIfDead) {
+        // Ctrl+Shift+TはMain.javaのグローバルディスパッチャからprocessKey()を経由せず直接
+        // toggleTerminalMode()を呼ぶため、processKey()冒頭のスプラッシュ消去（本メソッド先頭参照）が
+        // 効かない。ファイル未指定でエディタを開き最初のキーとしてCtrl+Shift+Tを押した場合、
+        // スプラッシュ画面が消えずTERMINALモードの内容が一切画面に反映されない不具合があったため、
+        // ここでも明示的にスプラッシュを消す。
+        if (canvas != null && canvas.isShowSplash()) {
+            canvas.setShowSplash(false);
+        }
         boolean needsNewSession = (terminalBuffer == null) || (restartIfDead && !terminalAlive);
         terminalSavedBuffer = buffer;
         terminalSavedFilePath = currentFilePath;
@@ -3242,7 +3250,12 @@ public class ModalEditor {
         }
         terminalBuffer.insert(terminalBuffer.length(), normalized);
         if (isError) {
-            for (int i = 0; i <= newlineCount; i++) terminalErrorLines.add(terminalNextRow + i);
+            // 末尾に\nがある場合、その直後の行はまだ何も書かれていない（次のチャンクがそこに
+            // 書かれるまで空）ため先読みでエラー扱いにしない。末尾が\nでない場合のみ、書きかけの
+            // 最終行自体もエラー行として含める（そうしないと後続のstdout/ローカルエコーが同じ行に
+            // 乗った時に誤って赤字化されてしまう）。
+            int markCount = normalized.endsWith("\n") ? newlineCount : newlineCount + 1;
+            for (int i = 0; i < markCount; i++) terminalErrorLines.add(terminalNextRow + i);
         }
         terminalNextRow += newlineCount;
         followTerminalCursorIfShowing();
@@ -5025,6 +5038,7 @@ public class ModalEditor {
             canvas.setErrorLines(errorLines);
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
+            canvas.setTerminalMode(mode == Mode.TERMINAL);
 
             boolean isVisual      = (mode == Mode.VISUAL);
             boolean isVisualLine  = (mode == Mode.VISUAL_LINE);
