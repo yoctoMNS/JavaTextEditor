@@ -37,6 +37,8 @@ public class TerminalModeTest {
         testCtrlCTriggersKillCallback();
         testSpcBSelectionReattachesWithoutRestart();
         testExitTerminalRestoresSavedBuffer();
+        testEscapeExitsTerminalMode();
+        testEscapeExitsDeadTerminalSession();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -230,5 +232,35 @@ public class TerminalModeTest {
         assertEquals("行が復元される", 0, ed.getCursorRow());
         assertEquals("列が復元される", 3, ed.getCursorCol());
         assertEquals("テキストが復元される", "keep me", ed.getText());
+    }
+
+    /**
+     * バグ修正の回帰テスト: Ctrl+Shift+Tを覚えていない・押せない状況でTERMINALモードに
+     * 取り残されないよう、Escでも元のバッファへ抜けられる必要がある。
+     */
+    static void testEscapeExitsTerminalMode() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("original content");
+        ed.setCursor(0, 3);
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        assertTrue("TERMINALモードに入る", ed.isTerminalMode());
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        assertTrue("EscでNORMALに戻る", ed.isNormalMode());
+        assertEquals("元のバッファ内容が復元される", "original content", ed.getText());
+        assertEquals("行が復元される", 0, ed.getCursorRow());
+        assertEquals("列が復元される", 3, ed.getCursorCol());
+    }
+
+    /** プロセス終了後（ログ閲覧のみの状態）でもEscで抜けられる必要がある。 */
+    static void testEscapeExitsDeadTerminalSession() {
+        resetSharedTerminalState();
+        ModalEditor ed = new ModalEditor("original content");
+        new FakeTerminal().wire(ed);
+        typeCommand(ed, "term");
+        ed.markTerminalExited(0);
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        assertTrue("死んだセッション表示中でもEscでNORMALに戻る", ed.isNormalMode());
+        assertEquals("元のバッファ内容が復元される", "original content", ed.getText());
     }
 }

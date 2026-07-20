@@ -3188,6 +3188,13 @@ public class ModalEditor {
     }
 
     private void processTerminalKey(int keyCode, char keyChar, int modifiers) {
+        // Escでも抜けられるようにする（Ctrl+Shift+Tを覚えていない・押せない状況での安全弁。
+        // プロセス終了後（!terminalAlive）でログを見ているだけの状態でも同様に抜けられる必要があるため、
+        // 下のterminalAliveガードより前に判定する）。
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            exitTerminal();
+            return;
+        }
         if (!terminalAlive) return; // プロセス終了後はキー入力を無視し、ログの閲覧のみ許可する
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
         if (ctrlDown && keyCode == KeyEvent.VK_C) {
