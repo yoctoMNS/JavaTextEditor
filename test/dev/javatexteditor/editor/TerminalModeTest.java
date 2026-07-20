@@ -1,5 +1,6 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,6 +40,7 @@ public class TerminalModeTest {
         testExitTerminalRestoresSavedBuffer();
         testEscapeExitsTerminalMode();
         testEscapeExitsDeadTerminalSession();
+        testToggleTerminalModeClearsSplashScreen();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -262,5 +264,25 @@ public class TerminalModeTest {
         ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
         assertTrue("死んだセッション表示中でもEscでNORMALに戻る", ed.isNormalMode());
         assertEquals("元のバッファ内容が復元される", "original content", ed.getText());
+    }
+
+    /**
+     * バグ修正の回帰テスト: Ctrl+Shift+TはMain.javaのグローバルディスパッチャから
+     * processKey()を経由せずtoggleTerminalMode()を直接呼ぶため、processKey()冒頭でのみ
+     * 行われていたスプラッシュ画面消去が効かなかった。ファイル未指定でエディタを開き、
+     * 最初のキー操作としてCtrl+Shift+Tを押した場合を再現する（他のキーでスプラッシュが
+     * 消えた後にトグルするケースはスプラッシュが既に消えているため区別がつかない）。
+     */
+    static void testToggleTerminalModeClearsSplashScreen() {
+        resetSharedTerminalState();
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setShowSplash(true);
+        ModalEditor ed = new ModalEditor("", canvas);
+        new FakeTerminal().wire(ed);
+
+        assertTrue("前提: スプラッシュ表示中", canvas.isShowSplash());
+        ed.toggleTerminalMode(); // processKey()を経由しない直接呼び出し
+        assertTrue("TERMINALモードに入る", ed.isTerminalMode());
+        assertTrue("スプラッシュが消える", !canvas.isShowSplash());
     }
 }
