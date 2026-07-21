@@ -76,7 +76,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, TERMINAL }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -315,33 +315,6 @@ public class ModalEditor {
     private int binaryCursorOffset = 0;
     private boolean binaryNibblePending = false; // true = 直前に高位4bitを入力済み、次の1桁で低位4bitを確定
 
-    // -------------------------------------------------------------------------
-    // Mode.TERMINAL（Ctrl+Shift+T / :term コマンド）
-    // エディタプロセス全体で1つだけ生存する対話型シェルセッションのため、yankRegister と同じ理由で
-    // static にする（どのペインから :term/Ctrl+Shift+T しても同じセッション・同じバッファを共有する）。
-    // 実際のプロセス起動・標準入出力の読み書き（TerminalSession）はSwingに依存しないよう
-    // Main.java 側に置き、ここではコールバック経由でのみやり取りする
-    // （BindingDefinitionResolver の「実行機構の注入方式」と同じ設計。詳細はCLAUDE.md参照）。
-    private static UndoablePieceTable terminalBuffer = null;
-    private static boolean terminalAlive = false;
-    private static final StringBuilder terminalPendingInput = new StringBuilder();
-    private static java.util.Set<Integer> terminalErrorLines = new java.util.HashSet<>();
-    private static int terminalNextRow = 0;
-    // シェルはtty無しでも-iにより対話動作を続けようとし、readlineの代わりに「読み取った行を
-    // そのまま出力へエコーバックする」フォールバック処理を行う（bash -i を実測して確認済み。
-    // CLAUDE.md参照）。ローカルエコーで既に表示済みの内容と二重に表示されるのを防ぐため、
-    // Enter押下時に送信した行を一時的に保持し、直後に届く出力チャンクと突き合わせて除去する。
-    private static String terminalPendingEchoSuppress = null;
-    private static final String PSEUDO_TERMINAL_PATH = "*terminal*";
-    // ペインごとの退避状態（FILER/telescopeと同じ「一時退避→復元」パターン、インスタンスフィールド）
-    private UndoablePieceTable terminalSavedBuffer = null;
-    private String terminalSavedFilePath = null;
-    private int terminalSavedCursorRow = 0;
-    private int terminalSavedCursorCol = 0;
-    private Runnable terminalStartCallback = null;
-    private java.util.function.Consumer<String> terminalWriteCallback = null;
-    private Runnable terminalKillCallback = null;
-
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
     private UndoablePieceTable savedBuffer = null; // 元バッファの参照（共有バッファを保つため）
     private String savedFilePath = null;         // 元バッファのファイルパス（null可）
@@ -545,7 +518,6 @@ public class ModalEditor {
             case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
             case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
             case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
-            case TERMINAL       -> processTerminalKey(keyCode, keyChar, modifiers);
         }
         syncCanvas();
         long currentVersion = buffer.getVersion();
@@ -1907,13 +1879,6 @@ public class ModalEditor {
                 if (lastRunBufferText != null) {
                     entries.add(new BufferPicker.BufferEntry("*run*", PSEUDO_RUN_PATH));
                 }
-                // *terminal* も同様に currentFilePath == null のため BUFFER_REGISTRY 管理外。
-                // 一度でも :term/Ctrl+Shift+T したことがあれば（terminalBuffer != null）候補に含める。
-                // *compile*/*run* と異なり静的スナップショットではなく生きた共有バッファのため、
-                // 選択時（openTelescopeSelection）は enterTerminal(false) で現在の内容をそのまま表示する。
-                if (terminalBuffer != null) {
-                    entries.add(new BufferPicker.BufferEntry("*terminal*", PSEUDO_TERMINAL_PATH));
-                }
                 telescopePicker = new BufferPicker(entries);
             }
             default -> { return; }
@@ -2047,10 +2012,6 @@ public class ModalEditor {
         exitTelescope();
         if (purpose == TelescopePurpose.RUN_MAIN_CLASS) {
             if (onRunMainClassSelected != null) onRunMainClassSelected.accept(item.display());
-            return;
-        }
-        if (PSEUDO_TERMINAL_PATH.equals(item.filePath())) {
-            enterTerminal(false);
             return;
         }
         if (PSEUDO_COMPILE_PATH.equals(item.filePath()) || PSEUDO_RUN_PATH.equals(item.filePath())) {
@@ -2422,8 +2383,6 @@ public class ModalEditor {
             loadFromFile(resolveRelativeToProjectRoot(path));
         } else if (cmd.equals("b")) {
             toggleBinaryMode();
-        } else if (cmd.equals("term") || cmd.equals("terminal")) {
-            executeTermCommand();
         } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
             openTutorial();
         } else if (cmd.equals("nimo")) {
@@ -3112,298 +3071,6 @@ public class ModalEditor {
         if (!ctrlDown && isHexDigit(keyChar)) { applyHexDigit(keyChar); return; }
     }
 
-    // -------------------------------------------------------------------------
-    // Mode.TERMINAL（Ctrl+Shift+T / :term コマンド、OS標準の対話型シェルを子プロセスとして起動する）
-    //
-    // 真のPTYを実装できない（CLAUDE.mdの「外部ライブラリ一切不使用」方針上、PTYにはJNIが必要で
-    // 不採用。SystemStatsMonitorのCPU温度取得と同じ判断）ため、以下は既知の制約として受け入れている:
-    //   - vim/less/top等フルスクリーンプログラムは正しく描画されない（raw modeがない）。
-    //   - Ctrl+Cは本物のSIGINT転送ができないため、プロセスを強制終了する代替動作にする
-    //     （以後は新しいセッションとして :term で再起動する運用）。
-    //   - シェル側のreadline（行編集）はttyが無いと動かないため、ユーザーが入力した文字は
-    //     シェルからエコーバックされない。ここでローカルエコーし、Enterで1行分をまとめて送信する。
-    //
-    // 実プロセスの起動・標準入出力の読み書き（TerminalSession）はSwingに依存しないため
-    // Main.java 側が所有し、ModalEditor はコールバック（terminalStartCallback/terminalWriteCallback/
-    // terminalKillCallback）経由でのみやり取りする（BindingDefinitionResolverの「実行機構の注入方式」
-    // と同じ設計。詳細はCLAUDE.md参照）。
-    // -------------------------------------------------------------------------
-
-    /**
-     * TERMINAL モードへ入る。restartIfDead=false（Ctrl+Shift+T によるトグル）は、既存セッションが
-     * 死んでいてもそのまま静的なログを表示するだけで再起動しない（見返すだけの用途を壊さないため）。
-     * restartIfDead=true（:term コマンド）は、セッションが存在しないか死んでいれば新しいバッファ・
-     * 新しいシェルプロセスを作り直す。
-     */
-    private void enterTerminal(boolean restartIfDead) {
-        // Ctrl+Shift+TはMain.javaのグローバルディスパッチャからprocessKey()を経由せず直接
-        // toggleTerminalMode()を呼ぶため、processKey()冒頭のスプラッシュ消去（本メソッド先頭参照）が
-        // 効かない。ファイル未指定でエディタを開き最初のキーとしてCtrl+Shift+Tを押した場合、
-        // スプラッシュ画面が消えずTERMINALモードの内容が一切画面に反映されない不具合があったため、
-        // ここでも明示的にスプラッシュを消す。
-        if (canvas != null && canvas.isShowSplash()) {
-            canvas.setShowSplash(false);
-        }
-        boolean needsNewSession = (terminalBuffer == null) || (restartIfDead && !terminalAlive);
-        terminalSavedBuffer = buffer;
-        terminalSavedFilePath = currentFilePath;
-        terminalSavedCursorRow = cursorRow;
-        terminalSavedCursorCol = cursorCol;
-        if (needsNewSession) {
-            terminalBuffer = new UndoablePieceTable("");
-            terminalErrorLines = new java.util.HashSet<>();
-            terminalNextRow = 0;
-            terminalPendingInput.setLength(0);
-            terminalPendingEchoSuppress = null;
-        }
-        buffer = terminalBuffer;
-        currentFilePath = null;
-        clearSearchHighlights();
-        grepResults = null;
-        fileNameResults = null;
-        mode = Mode.TERMINAL;
-        moveCursorToTerminalEnd();
-        if (needsNewSession) {
-            terminalAlive = true; // 起動失敗時は markTerminalStartFailed() が false に戻す
-            if (terminalStartCallback != null) terminalStartCallback.run();
-        }
-        // Ctrl+Shift+TはprocessKey()を経由しないため、processKey()末尾の自動syncCanvas()が効かない。
-        // ここで明示的に呼ばないと、非同期の出力（bashの起動バナー等）が届くまで画面が
-        // 前の内容・前のステータスラベル（"-- TERMINAL --"に変わらない等）のまま更新されない
-        // 不具合があった（コードレビューで指摘）。:term/telescope経由の呼び出しではprocessKey()の
-        // 末尾でも呼ばれ二重になるが、syncCanvas()はバッファのversion一致でキャッシュされるため
-        // 実質無害。
-        syncCanvas();
-    }
-
-    /** TERMINAL セッションを終了し、enterTerminal() で退避した元バッファに戻す（プロセス自体は生存し続ける）。 */
-    private void exitTerminal() {
-        mode = Mode.NORMAL;
-        buffer = terminalSavedBuffer != null ? terminalSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = terminalSavedFilePath;
-        cursorRow = terminalSavedCursorRow;
-        cursorCol = terminalSavedCursorCol;
-        terminalSavedBuffer = null;
-        terminalSavedFilePath = null;
-        // Enter直後（シェルの自己エコーがまだ届いていない状態）にEscで抜けた場合、
-        // terminalPendingEchoSuppressが残ったままセッションが生存し続け、後で再アタッチした際に
-        // 無関係な後続出力と偶然前方一致して誤って消費されうる（コードレビューで指摘）。
-        // TERMINALモードを離れる時点で必ずクリアし、次回入場時に改めて素の状態から始める。
-        terminalPendingEchoSuppress = null;
-        // enterTerminal()と同じ理由でCtrl+Shift+T/Esc経由の離脱でも画面を即座に反映する。
-        syncCanvas();
-    }
-
-    /** Ctrl+Shift+T: TERMINAL モードをトグルする（Main.java のグローバルキーディスパッチャから呼ばれる）。 */
-    public void toggleTerminalMode() {
-        if (mode == Mode.TERMINAL) {
-            exitTerminal();
-        } else {
-            enterTerminal(false);
-        }
-    }
-
-    /** :term / :terminal コマンド。既存セッションが死んでいれば新しいシェルプロセスで作り直す。 */
-    private void executeTermCommand() {
-        if (mode != Mode.TERMINAL) enterTerminal(true);
-    }
-
-    /** カーソルを terminalBuffer 末尾（プロンプト直後）へ移動する。 */
-    private void moveCursorToTerminalEnd() {
-        String[] lines = getLines();
-        cursorRow = Math.max(0, lines.length - 1);
-        cursorCol = lines.length > 0 ? lines[cursorRow].length() : 0;
-    }
-
-    private void processTerminalKey(int keyCode, char keyChar, int modifiers) {
-        // 単語補完ポップアップが開いている場合は、INSERTモードのAlt+/ポップアップと同じキー割り当てで
-        // ナビゲーション/確定/キャンセルを優先処理する（Up/Down=候補選択、Tab/Enter=確定、Esc=閉じる）。
-        // それ以外のキーが来た場合はポップアップを閉じてから通常のターミナル処理へフォールスルーする。
-        if (completionActive) {
-            switch (keyCode) {
-                case KeyEvent.VK_DOWN -> {
-                    completionSelectedIdx = Math.min(completionSelectedIdx + 1,
-                                                     completionItems.size() - 1);
-                    syncCompletionCanvas();
-                    return;
-                }
-                case KeyEvent.VK_UP -> {
-                    completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
-                    syncCompletionCanvas();
-                    return;
-                }
-                case KeyEvent.VK_TAB, KeyEvent.VK_ENTER -> {
-                    applyTerminalCompletion();
-                    return;
-                }
-                case KeyEvent.VK_ESCAPE -> {
-                    dismissCompletion();
-                    return;
-                }
-                default -> dismissCompletion();
-            }
-        }
-        // Escでも抜けられるようにする（Ctrl+Shift+Tを覚えていない・押せない状況での安全弁。
-        // プロセス終了後（!terminalAlive）でログを見ているだけの状態でも同様に抜けられる必要があるため、
-        // 下のterminalAliveガードより前に判定する）。
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            exitTerminal();
-            return;
-        }
-        if (!terminalAlive) return; // プロセス終了後はキー入力を無視し、ログの閲覧のみ許可する
-        boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
-        if (ctrlDown && keyCode == KeyEvent.VK_C) {
-            // 真のSIGINTは転送できないため、プロセスを強制終了する（destroyForcibly相当）。
-            if (terminalKillCallback != null) terminalKillCallback.run();
-            return;
-        }
-        if (keyCode == KeyEvent.VK_ENTER) {
-            String line = terminalPendingInput.toString();
-            terminalPendingInput.setLength(0);
-            buffer.insert(buffer.length(), "\n");
-            moveCursorToTerminalEnd();
-            terminalPendingEchoSuppress = line + "\n";
-            if (terminalWriteCallback != null) terminalWriteCallback.accept(line + "\n");
-            syncEditorWorkingDirectoryFromTypedCommand(line);
-            return;
-        }
-        if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (terminalPendingInput.length() > 0) {
-                terminalPendingInput.deleteCharAt(terminalPendingInput.length() - 1);
-                if (buffer.length() > 0) buffer.delete(buffer.length() - 1, 1);
-                moveCursorToTerminalEnd();
-            }
-            return;
-        }
-        // Tab → 単語補完トリガー（作業ディレクトリ配下の単語 + ターミナルの表示内容。WindowsもLinuxも
-        // ttyを介さず同じJava側のWordIndexで解決するため、OSによる分岐は不要）。
-        if (keyCode == KeyEvent.VK_TAB) {
-            triggerWordCompletion();
-            return;
-        }
-        if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            // シェル側のエコーは無効（ttyが無いため）のため、ここでローカルエコーする。
-            terminalPendingInput.append(keyChar);
-            buffer.insert(buffer.length(), String.valueOf(keyChar));
-            moveCursorToTerminalEnd();
-        }
-    }
-
-    /**
-     * TERMINALモードでの補完確定。通常のapplyCompletion()（buffer編集・カーソル更新・ポップアップ
-     * 終了）に加えて、Enter押下時にシェルへ送信される terminalPendingInput も同じ内容に同期させる
-     * （applyCompletion() は buffer のみを書き換え、terminalPendingInput の存在を知らないため）。
-     */
-    private void applyTerminalCompletion() {
-        if (!completionActive || completionItems.isEmpty()) return;
-        String label = completionItems.get(completionSelectedIdx).label();
-        int prefixLen = completionPrefix.length();
-        applyCompletion();
-        int removeLen = Math.min(prefixLen, terminalPendingInput.length());
-        terminalPendingInput.setLength(terminalPendingInput.length() - removeLen);
-        terminalPendingInput.append(label);
-    }
-
-    /**
-     * Main.java: シェルの標準出力/標準エラーを1チャンク読むたび呼ばれる。行区切りを待たず即座に
-     * 追記する（プロンプトは末尾に改行を含まないため、行単位だと表示されなくなってしまう）。
-     * \r\n/\r は \n に正規化する（プログレスバー等の「同一行上書き」はサポートせず、行の羅列として
-     * 表示する意図的な単純化。詳細はCLAUDE.md参照）。
-     */
-    public void appendTerminalOutput(String chunk, boolean isError) {
-        if (terminalBuffer == null) return;
-        String normalized = chunk.replace("\r\n", "\n").replace('\r', '\n');
-        if (normalized.isEmpty()) return;
-        if (isError) {
-            normalized = suppressEchoedInput(normalized);
-            if (normalized.isEmpty()) return;
-        }
-        int newlineCount = 0;
-        for (int i = 0; i < normalized.length(); i++) {
-            if (normalized.charAt(i) == '\n') newlineCount++;
-        }
-        terminalBuffer.insert(terminalBuffer.length(), normalized);
-        if (isError) {
-            // 末尾に\nがある場合、その直後の行はまだ何も書かれていない（次のチャンクがそこに
-            // 書かれるまで空）ため先読みでエラー扱いにしない。末尾が\nでない場合のみ、書きかけの
-            // 最終行自体もエラー行として含める（そうしないと後続のstdout/ローカルエコーが同じ行に
-            // 乗った時に誤って赤字化されてしまう）。
-            int markCount = normalized.endsWith("\n") ? newlineCount : newlineCount + 1;
-            for (int i = 0; i < markCount; i++) terminalErrorLines.add(terminalNextRow + i);
-        }
-        terminalNextRow += newlineCount;
-        followTerminalCursorIfShowing();
-    }
-
-    /**
-     * tty無しのシェルが自らエコーバックした入力行（ローカルエコーで既に表示済み）を取り除く。
-     * 実測（bash -i にパイプでコマンドを流し込む・標準出力/標準エラーを分離して確認）で、
-     * シェルのプロンプト・自己エコーバックはいずれも**標準エラー経由でのみ**書き戻され、
-     * 標準出力には実際のコマンド出力だけが乗ることを確認済み（詳細はCLAUDE.md参照）。
-     * このため呼び出し元の {@link #appendTerminalOutput} は isError==true（標準エラー）の
-     * チャンクにのみこのメソッドを適用する。標準出力チャンクは一切対象にしない。
-     *
-     * この制限は単なる最適化ではなく正しさのための制約: 標準出力/標準エラーはそれぞれ独立した
-     * 仮想スレッドが個別に {@code SwingUtilities.invokeLater} でEDTへディスパッチするため、
-     * 2ストリーム間の到着順序は保証されない（コードレビューで指摘）。もし標準出力チャンクも
-     * このメソッドの対象にしていた場合、実際のコマンド出力（標準出力）がシェルの自己エコー
-     * （標準エラー）より先にEDTへ届くと、標準出力チャンクが誤って前方一致判定を消費し
-     * {@code terminalPendingEchoSuppress} をクリアしてしまい、後から届く自己エコーが未抑制の
-     * まま表示される――この抑制機構自体が解消しようとしている二重表示バグが、スレッド
-     * スケジューリング次第で再発してしまう。標準エラー1ストリームに限定すれば、そのストリームの
-     * チャンクは単一の読み取りスレッドから順序どおりにディスパッチされるため、この競合は起きない。
-     *
-     * 前方一致すれば消費して除去し、チャンクが複数回のread()に分割される場合にも対応するため
-     * 部分一致も追跡する。シェルによってはエコーバックしない場合もあるため、不一致なら諦めて
-     * 素通しする（実害はローカルエコーとの二重表示が1回抑制されないだけで、出力の欠落は起きない）。
-     */
-    private static String suppressEchoedInput(String normalized) {
-        if (terminalPendingEchoSuppress == null || terminalPendingEchoSuppress.isEmpty()) {
-            return normalized;
-        }
-        if (normalized.startsWith(terminalPendingEchoSuppress)) {
-            String remainder = normalized.substring(terminalPendingEchoSuppress.length());
-            terminalPendingEchoSuppress = null;
-            return remainder;
-        }
-        if (terminalPendingEchoSuppress.startsWith(normalized)) {
-            terminalPendingEchoSuppress = terminalPendingEchoSuppress.substring(normalized.length());
-            return "";
-        }
-        terminalPendingEchoSuppress = null;
-        return normalized;
-    }
-
-    /** terminalBuffer を表示中のペインであれば、カーソルを末尾へ追従させる（他ペインからの出力更新時にも使う）。 */
-    public void followTerminalCursorIfShowing() {
-        if (buffer == terminalBuffer) {
-            moveCursorToTerminalEnd();
-        }
-    }
-
-    /** Main.java: シェルプロセスが終了した（exit入力・Ctrl+C強制終了含む）ときに呼ばれる。 */
-    public void markTerminalExited(int exitCode) {
-        if (terminalBuffer == null) return;
-        terminalAlive = false;
-        String text = terminalBuffer.getText();
-        String prefix = (!text.isEmpty() && !text.endsWith("\n")) ? "\n" : "";
-        appendTerminalOutput(prefix + "[process exited with code " + exitCode + "]\n", false);
-    }
-
-    /** Main.java: シェルプロセスの起動自体に失敗した（コマンドが見つからない等）ときに呼ばれる。 */
-    public void markTerminalStartFailed(String message) {
-        if (terminalBuffer == null) return;
-        terminalAlive = false;
-        appendTerminalOutput("[failed to start terminal: " + message + "]\n", true);
-    }
-
-    public void setTerminalStartCallback(Runnable cb) { this.terminalStartCallback = cb; }
-    public void setTerminalWriteCallback(java.util.function.Consumer<String> cb) { this.terminalWriteCallback = cb; }
-    public void setTerminalKillCallback(Runnable cb) { this.terminalKillCallback = cb; }
-    public boolean isTerminalMode() { return mode == Mode.TERMINAL; }
-    /** エディタプロセス全体で共有される単一のターミナルバッファ参照（未起動なら null）。Main.java が
-     *  出力反映後にどのペインが同じ参照を表示中かを判定するために使う（terminalBuffer自体はprivate static）。 */
-    public static UndoablePieceTable getSharedTerminalBuffer() { return terminalBuffer; }
 
     /** undo/redo後、buffer側の行数変化はない前提だがカーソルが範囲外になっていないかだけ保険として揃える。 */
     private void clampBinaryCursorAfterUndoRedo() {
@@ -5005,14 +4672,6 @@ public class ModalEditor {
                 statusMessage = "E: " + err;
                 return;
             }
-            // :cd の作業ディレクトリ変更を、生存中のTERMINALセッション（実shellプロセス）にも
-            // "cd <path>" として転送し、実shell自身のカレントディレクトリを追従させる。
-            // shellプロセスのcwdは外部プロセスから直接変更できない（PTraceのようなnative操作が
-            // 必要でCLAUDE.mdの「外部ライブラリ一切不使用」方針に反する）ため、組み込みコマンドの
-            // cdをそのまま入力として送るのが唯一のpure Javaでの実現手段。
-            if (terminalAlive && terminalWriteCallback != null) {
-                terminalWriteCallback.accept("cd " + quotePathForShellCd(target.toString()) + "\n");
-            }
             filerSavedBuffer = buffer;
             filerSavedFilePath = currentFilePath;
             filerSavedCursorRow = cursorRow;
@@ -5021,58 +4680,6 @@ public class ModalEditor {
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
         }
-    }
-
-    /**
-     * TERMINALモード中に入力された1行が {@code cd}/{@code cd <path>} コマンドであれば、
-     * :cd と同じ解決ルール（projectRoot基準・{@code ~}展開）でエディタ側のprojectRootも
-     * 追従させる（逆方向の同期。上記changeDirectory()内のshellへの転送と対になる）。
-     * 実shellへは常に生の入力をそのまま送っており、ここでの解決に失敗しても実shell側の
-     * cdの成否には影響しない（実shellのエラー表示はターミナル出力にそのまま現れる）。
-     * cd以外のコマンドや解決に失敗した場合は何もしない。
-     */
-    private void syncEditorWorkingDirectoryFromTypedCommand(String line) {
-        if (changeWdCallback == null) return;
-        String trimmed = line.trim();
-        String cmpKey = isWindowsOs() ? trimmed.toLowerCase(java.util.Locale.ROOT) : trimmed;
-        String arg;
-        if (cmpKey.equals("cd")) {
-            arg = "~";
-        } else if (cmpKey.startsWith("cd ")) {
-            arg = stripMatchingQuotes(trimmed.substring(3).trim());
-            if (arg.isEmpty()) arg = "~";
-        } else {
-            return;
-        }
-        try {
-            Path target = getProjectRoot().resolve(expandHome(arg)).toAbsolutePath().normalize();
-            changeWdCallback.apply(target); // 失敗時は無視。実shell自身のエラー出力に委ねる。
-        } catch (Exception ignored) {
-            // パス解決に失敗した場合も同様に無視する。
-        }
-    }
-
-    private static boolean isWindowsOs() {
-        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
-    }
-
-    /** 先頭・末尾が同じ引用符（"または'）で囲まれていればそれを取り除く。 */
-    private static String stripMatchingQuotes(String s) {
-        if (s.length() >= 2) {
-            char first = s.charAt(0), last = s.charAt(s.length() - 1);
-            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
-                return s.substring(1, s.length() - 1);
-            }
-        }
-        return s;
-    }
-
-    /** shellの標準入力へ書き込む "cd" コマンドの引数として安全な形にパスを引用符で囲む。 */
-    private static String quotePathForShellCd(String pathStr) {
-        if (isWindowsOs()) {
-            return "\"" + pathStr + "\"";
-        }
-        return "'" + pathStr.replace("'", "'\\''") + "'";
     }
 
     /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */
@@ -5203,15 +4810,12 @@ public class ModalEditor {
             java.util.Set<Integer> errorLines;
             if (outputErrorLinesOwner == buffer) {
                 errorLines = outputErrorLines;
-            } else if (buffer == terminalBuffer) {
-                errorLines = terminalErrorLines;
             } else {
                 errorLines = java.util.Set.of();
             }
             canvas.setErrorLines(errorLines);
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
-            canvas.setTerminalMode(mode == Mode.TERMINAL);
 
             boolean isVisual      = (mode == Mode.VISUAL);
             boolean isVisualLine  = (mode == Mode.VISUAL_LINE);
