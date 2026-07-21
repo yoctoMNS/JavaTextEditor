@@ -3216,6 +3216,33 @@ public class ModalEditor {
     }
 
     private void processTerminalKey(int keyCode, char keyChar, int modifiers) {
+        // 単語補完ポップアップが開いている場合は、INSERTモードのAlt+/ポップアップと同じキー割り当てで
+        // ナビゲーション/確定/キャンセルを優先処理する（Up/Down=候補選択、Tab/Enter=確定、Esc=閉じる）。
+        // それ以外のキーが来た場合はポップアップを閉じてから通常のターミナル処理へフォールスルーする。
+        if (completionActive) {
+            switch (keyCode) {
+                case KeyEvent.VK_DOWN -> {
+                    completionSelectedIdx = Math.min(completionSelectedIdx + 1,
+                                                     completionItems.size() - 1);
+                    syncCompletionCanvas();
+                    return;
+                }
+                case KeyEvent.VK_UP -> {
+                    completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
+                    syncCompletionCanvas();
+                    return;
+                }
+                case KeyEvent.VK_TAB, KeyEvent.VK_ENTER -> {
+                    applyTerminalCompletion();
+                    return;
+                }
+                case KeyEvent.VK_ESCAPE -> {
+                    dismissCompletion();
+                    return;
+                }
+                default -> dismissCompletion();
+            }
+        }
         // Escでも抜けられるようにする（Ctrl+Shift+Tを覚えていない・押せない状況での安全弁。
         // プロセス終了後（!terminalAlive）でログを見ているだけの状態でも同様に抜けられる必要があるため、
         // 下のterminalAliveガードより前に判定する）。
@@ -3248,12 +3275,33 @@ public class ModalEditor {
             }
             return;
         }
+        // Tab → 単語補完トリガー（作業ディレクトリ配下の単語 + ターミナルの表示内容。WindowsもLinuxも
+        // ttyを介さず同じJava側のWordIndexで解決するため、OSによる分岐は不要）。
+        if (keyCode == KeyEvent.VK_TAB) {
+            triggerWordCompletion();
+            return;
+        }
         if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             // シェル側のエコーは無効（ttyが無いため）のため、ここでローカルエコーする。
             terminalPendingInput.append(keyChar);
             buffer.insert(buffer.length(), String.valueOf(keyChar));
             moveCursorToTerminalEnd();
         }
+    }
+
+    /**
+     * TERMINALモードでの補完確定。通常のapplyCompletion()（buffer編集・カーソル更新・ポップアップ
+     * 終了）に加えて、Enter押下時にシェルへ送信される terminalPendingInput も同じ内容に同期させる
+     * （applyCompletion() は buffer のみを書き換え、terminalPendingInput の存在を知らないため）。
+     */
+    private void applyTerminalCompletion() {
+        if (!completionActive || completionItems.isEmpty()) return;
+        String label = completionItems.get(completionSelectedIdx).label();
+        int prefixLen = completionPrefix.length();
+        applyCompletion();
+        int removeLen = Math.min(prefixLen, terminalPendingInput.length());
+        terminalPendingInput.setLength(terminalPendingInput.length() - removeLen);
+        terminalPendingInput.append(label);
     }
 
     /**
