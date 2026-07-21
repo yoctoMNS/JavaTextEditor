@@ -714,7 +714,33 @@ public class EditorCanvasTest {
             pass += isAccent ? 1 : 0;
         }
 
-        int total = 48;
+        // Test 49: adjustCellWidth/adjustCellHeight 直後はサイズオーバーレイが表示される
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            boolean beforeHidden = !canvas.isSizeOverlayVisible();
+            canvas.adjustCellWidth(+1);
+            boolean afterVisible = canvas.isSizeOverlayVisible();
+            boolean ok = beforeHidden && afterVisible;
+            System.out.println((ok ? "[OK] " : "[FAIL] ")
+                + "adjustCellWidth直後にサイズオーバーレイが表示される");
+            pass += ok ? 1 : 0;
+        }
+
+        // Test 50: サイズオーバーレイは右上にアクセント色の矩形として描画される
+        {
+            EditorCanvas canvas = new EditorCanvas();
+            canvas.setTheme(Theme.LIGHT_MODE);
+            canvas.setText("hello");
+            canvas.adjustCellHeight(+1);
+            BufferedImage img = render(canvas, 400, 100);
+            int pixel = img.getRGB(390, 10); // 右上付近
+            boolean isAccent = !colorMatch(pixel, 0xF5, 0xF0, 0xE6);
+            System.out.println((isAccent ? "[OK] " : "[FAIL] ")
+                + "サイズオーバーレイが右上にアクセント色で描画される");
+            pass += isAccent ? 1 : 0;
+        }
+
+        int total = 50;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

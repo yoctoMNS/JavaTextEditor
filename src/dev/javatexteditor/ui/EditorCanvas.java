@@ -102,6 +102,15 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private int cellW = TtfMonoFont.BASE_CELL_W;
     private int cellH = TtfMonoFont.BASE_CELL_H;
 
+    // Ctrl+Shift+矢印でセルサイズを変更した直後、現在の幅×高さ(px)を3秒間だけ
+    // 画面右上に表示して自動的に消えるオーバーレイ。sizeOverlayHideTimerは
+    // 変更のたびにrestart()し、直近の変更から3秒間だけ表示され続けるようにする。
+    private boolean sizeOverlayVisible = false;
+    private final Timer sizeOverlayHideTimer = new Timer(3000, e -> {
+        sizeOverlayVisible = false;
+        repaint();
+    });
+
     // 半角ASCIIは IBM Plex Mono Regular (TTF) を cellW×cellH に合わせて
     // 非等方向にスケールしてラスタライズする（TtfMonoFont参照）。
     private final TtfMonoFont ttfFont = TtfMonoFont.INSTANCE;
@@ -194,6 +203,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     public EditorCanvas() {
+        sizeOverlayHideTimer.setRepeats(false);
         animTimer.start();
         acquireTimerResolutionPin();
         timerResolutionPinHeld = true;
@@ -513,6 +523,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         cellW = Math.max(5, Math.min(40, cellW + delta));
         invalidateGlyphCache();
         cachedCharWidth = cellW;
+        showSizeOverlay();
         repaint();
     }
 
@@ -521,8 +532,22 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         cellH = Math.max(8, Math.min(80, cellH + delta));
         invalidateGlyphCache();
         cachedLineHeight = cellH;
+        showSizeOverlay();
         repaint();
     }
+
+    /**
+     * 現在のフォントセル幅×高さ(px)を画面右上に3秒間だけ表示し、自動的に消す。
+     * Ctrl+Shift+矢印での変更のたびに呼ばれ、変更が連続した場合は表示中の3秒を
+     * 都度リセットする（restart()により、最後の変更から3秒間表示され続ける）。
+     */
+    private void showSizeOverlay() {
+        sizeOverlayVisible = true;
+        sizeOverlayHideTimer.restart();
+    }
+
+    /** テスト用: 現在サイズオーバーレイが表示中かどうかを返す。 */
+    public boolean isSizeOverlayVisible() { return sizeOverlayVisible; }
 
     public int getCellW() { return cellW; }
     public int getCellH() { return cellH; }
@@ -1020,6 +1045,26 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         if (completionActive && !completionLabels.isEmpty()) {
             drawCompletionPopup(g2, charWidth, lineHeight, gutterWidth);
         }
+
+        // 9. フォントセルサイズ変更直後の一時オーバーレイ（画面右上、最前面）
+        if (sizeOverlayVisible) {
+            drawSizeOverlay(g2, charWidth, lineHeight);
+        }
+    }
+
+    /** Ctrl+Shift+矢印でのセルサイズ変更直後、右上に「幅 x 高さ px」を表示する。 */
+    private void drawSizeOverlay(Graphics2D g2, int charWidth, int lineHeight) {
+        String label = cellW + " x " + cellH + " px";
+        int pad = 6;
+        int textW = uiTextWidth(label, charWidth);
+        int boxW = textW + pad * 2;
+        int boxH = lineHeight + pad * 2;
+        int x = getWidth() - boxW - 8;
+        int y = 8;
+
+        g2.setColor(theme.accent);
+        g2.fillRect(x, y, boxW, boxH);
+        drawUiText(g2, label, x + pad, y + pad + lineHeight, charWidth, lineHeight, theme.background);
     }
 
     private void drawTelescopeOverlay(Graphics2D g2, int lineHeight) {
