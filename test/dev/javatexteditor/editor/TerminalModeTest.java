@@ -53,6 +53,10 @@ public class TerminalModeTest {
         testToggleTerminalModeSyncsCanvasImmediately();
         testExitTerminalSyncsCanvasImmediately();
         testExitTerminalResetsEchoSuppressState();
+        testTabTriggersWordCompletionInTerminal();
+        testTabCompletionSyncsPendingInputOnEnterSubmit();
+        testEscDismissesCompletionWithoutExitingTerminal();
+        testTypingWhileCompletionActiveDismissesAndContinuesEcho();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -114,6 +118,14 @@ public class TerminalModeTest {
         int count = 0, idx = 0;
         while ((idx = text.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
         return count;
+    }
+
+    /** Tab単語補完（WordIndex）付きのTERMINAL用エディタを作る。Alt+/（WordCompletionTest）と同じ配線。 */
+    private static ModalEditor makeEditorWithTerminalWords(java.nio.file.Path root) {
+        ModalEditor ed = new ModalEditor("x");
+        ed.setProjectRoot(root);
+        ed.setWordIndex(dev.javatexteditor.analysis.WordIndex.buildSync(root));
+        return ed;
     }
 
     /** :cd をサポートする（FilerTestと同じパターンの）モック changeWdCallback 付きエディタを作る。 */
@@ -521,5 +533,103 @@ public class TerminalModeTest {
         String text = ed.getText();
         assertEquals("リセットされていれば古い抑制の影響を受けず'lsx'が計2回残る（ローカルエコー分+新規出力分）",
             2, countOccurrences(text, "lsx"));
+    }
+
+    /**
+     * TERMINALモードでTabを押すとAlt+/（WordCompletionTest）と同じWordIndexで単語補完ポップアップが
+     * 開く。ttyを介さないOS共通のJava側KeyboardFocusManager経由の処理のため、Windows/Linux問わず
+     * 同じ経路で動作する。
+     */
+    static void testTabTriggersWordCompletionInTerminal() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_tab_comp_");
+        try {
+            java.nio.file.Files.writeString(root.resolve("Sample.java"), "int targetWordXYZ = 1;");
+            ModalEditor ed = makeEditorWithTerminalWords(root);
+            new FakeTerminal().wire(ed);
+            typeCommand(ed, "term");
+            for (char c : "target".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+            ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+            assertTrue("Tabで補完ポップアップが開く", ed.isCompletionActive());
+            assertTrue("targetWordXYZが候補に含まれる",
+                ed.getCompletionItems().stream().anyMatch(it -> it.label().equals("targetWordXYZ")));
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    /**
+     * バグ回帰テスト: applyCompletion()はbuffer（画面表示用）のみを書き換え、Enter押下時に
+     * シェルへ送信されるterminalPendingInputの存在を知らない。Tab確定後にterminalPendingInputへ
+     * 反映し忘れると、実際にシェルへ送られる行が補完前の切り詰められたプレフィックスのままになる。
+     */
+    static void testTabCompletionSyncsPendingInputOnEnterSubmit() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_tab_comp2_");
+        try {
+            java.nio.file.Files.writeString(root.resolve("Sample.java"), "int uniqueTermWordABC = 1;");
+            ModalEditor ed = makeEditorWithTerminalWords(root);
+            FakeTerminal fake = new FakeTerminal();
+            fake.wire(ed);
+            typeCommand(ed, "term");
+            for (char c : "uniqueTerm".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+            ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+            assertTrue("補完ポップアップが開く", ed.isCompletionActive());
+            ed.processKey(KeyEvent.VK_ENTER, '\n', 0); // ポップアップ確定（送信ではない）
+            assertTrue("確定後は補完が閉じる", !ed.isCompletionActive());
+            assertEquals("バッファに補完結果が反映される", "uniqueTermWordABC", ed.getText());
+            ed.processKey(KeyEvent.VK_ENTER, '\n', 0); // ここで初めてシェルへ送信
+            assertEquals("write callbackに補完後の完全な単語が渡る（切り詰められたプレフィックスではない）",
+                "uniqueTermWordABC\n", fake.written.get(0));
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    /** 補完ポップアップが開いている間のEscはポップアップを閉じるだけで、TERMINALモード自体は抜けない。 */
+    static void testEscDismissesCompletionWithoutExitingTerminal() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_tab_comp3_");
+        try {
+            java.nio.file.Files.writeString(root.resolve("Sample.java"), "int anotherTermWordDEF = 1;");
+            ModalEditor ed = makeEditorWithTerminalWords(root);
+            new FakeTerminal().wire(ed);
+            typeCommand(ed, "term");
+            for (char c : "anotherTerm".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+            ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+            assertTrue("補完ポップアップが開く", ed.isCompletionActive());
+            ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Escで補完だけが閉じる", !ed.isCompletionActive());
+            assertTrue("TERMINALモードのままである", ed.isTerminalMode());
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    /** 補完ポップアップが開いている間に通常文字を打つと、ポップアップを閉じて通常のローカルエコーに戻る。 */
+    static void testTypingWhileCompletionActiveDismissesAndContinuesEcho() throws Exception {
+        resetSharedTerminalState();
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("term_tab_comp4_");
+        try {
+            java.nio.file.Files.writeString(root.resolve("Sample.java"), "int thirdTermWordGHI = 1;");
+            ModalEditor ed = makeEditorWithTerminalWords(root);
+            new FakeTerminal().wire(ed);
+            typeCommand(ed, "term");
+            for (char c : "thirdTerm".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
+            ed.processKey(KeyEvent.VK_TAB, '\t', 0);
+            assertTrue("補完ポップアップが開く", ed.isCompletionActive());
+            ed.processKey(KeyEvent.VK_UNDEFINED, 'Z', 0);
+            assertTrue("通常文字入力で補完が閉じる", !ed.isCompletionActive());
+            assertEquals("通常文字はそのままローカルエコーされる", "thirdTermZ", ed.getText());
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    private static void deleteDir(java.nio.file.Path dir) throws java.io.IOException {
+        if (!java.nio.file.Files.exists(dir)) return;
+        java.nio.file.Files.walk(dir)
+            .sorted(java.util.Comparator.reverseOrder())
+            .forEach(p -> { try { java.nio.file.Files.delete(p); } catch (java.io.IOException ignored) {} });
     }
 }
