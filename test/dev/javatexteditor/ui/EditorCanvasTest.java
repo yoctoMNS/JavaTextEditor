@@ -108,6 +108,19 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
+        // Test 5d: charCellWidthが囲み英数字（①②③丸数字等）を全角判定するか
+        // （丸数字が描画時に重なる不具合の回帰テスト。U+2460-24FFのEnclosed Alphanumerics
+        //  ブロックが旧実装では判定範囲に無く半角(1)扱いになっていたため、後続文字が
+        //  グリフの右半分に重なって描画されていた）
+        {
+            boolean ok = EditorCanvas.charCellWidth(0x2460) == 2   // ① CIRCLED DIGIT ONE（ブロック先頭）
+                && EditorCanvas.charCellWidth(0x2461) == 2         // ②
+                && EditorCanvas.charCellWidth(0x2462) == 2         // ③
+                && EditorCanvas.charCellWidth(0x24FF) == 2;        // ブロック末尾
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "charCellWidth判定（囲み英数字①②③）");
+            pass += ok ? 1 : 0;
+        }
+
         // Test 6: scrollRow の初期値は 0
         {
             EditorCanvas canvas = new EditorCanvas();
@@ -740,7 +753,7 @@ public class EditorCanvasTest {
             pass += isAccent ? 1 : 0;
         }
 
-        int total = 50;
+        int total = 51;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

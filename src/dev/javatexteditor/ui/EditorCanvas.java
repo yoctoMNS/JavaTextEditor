@@ -1752,6 +1752,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         if (codePoint >= 0xFF01 && codePoint <= 0xFF60) return 2; // 全角英数・記号（全角ASCII相当）
         if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return 2; // 全角記号（￠￡￢￤￥￦）
         if (codePoint >= 0x25A0 && codePoint <= 0x25FF) return 2; // 幾何学記号（■□▲△▼▽◆◇○◎●等）
+        if (codePoint >= 0x2460 && codePoint <= 0x24FF) return 2; // 囲み英数字（①②③丸数字等）
         return 1; // 半角カタカナ(0xFF61-0xFF9F)等はここでdefaultの1になる
     }
 }
