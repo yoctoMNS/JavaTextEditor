@@ -167,6 +167,21 @@ public class KeymapRegistry {
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_V,
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
                 "clipboard.paste"), "clipboard.paste");
+        // プロジェクト全体のコンパイルエラー間ジャンプ（Ctrl+> / Ctrl+<）。
+        // 物理的には Shift+ピリオド/Shift+カンマのため、修飾子は CTRL+SHIFT。
+        // NORMAL/INSERT どちらも未使用のキーで衝突しない。
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_PERIOD,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "compile.error.next"), "compile.error.next");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_PERIOD,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "compile.error.next"), "compile.error.next");
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_COMMA,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "compile.error.prev"), "compile.error.prev");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_COMMA,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK,
+                "compile.error.prev"), "compile.error.prev");
 
         // INSERT モード
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");

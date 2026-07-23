@@ -20,6 +20,7 @@ import dev.javatexteditor.classfile.ClassFileParser;
 import dev.javatexteditor.classfile.MnemonicFormatter;
 import dev.javatexteditor.projectbuild.BuildDiagnostic;
 import dev.javatexteditor.projectbuild.BuildResult;
+import dev.javatexteditor.projectbuild.ProjectBuilder;
 import dev.javatexteditor.refactor.RenameRefactorer;
 import dev.javatexteditor.refactor.RenameResult;
 import dev.javatexteditor.search.DirEntry;
@@ -224,6 +225,9 @@ public class ModalEditor {
     // ProjectSymbolResolver.resolve() の全文grepに時間がかかることがあるため、
     // タイムアウトした場合は諦めて JDK 側の検索にフォールバックする。
     private static final long PROJECT_SYMBOL_SEARCH_TIMEOUT_MS = 1500;
+    // Ctrl+>/Ctrl+<（プロジェクト全体のコンパイルエラー間ジャンプ）用: 全ファイルの javac
+    // コンパイル自体がgrep検索より重いため、上記の検索用タイムアウトより長めの値にした。
+    private static final long COMPILE_ERROR_NAV_TIMEOUT_MS = 8000;
     // 診断ジャンプ用: canvas なしのテスト環境でも保持できるようにする
     private List<CompileDiagnostic> localDiagnostics = List.of();
     // ファイル名検索 / ファイル内容grep（\f / \g）
@@ -884,6 +888,8 @@ public class ModalEditor {
             case "buffer.prev"   -> switchToRelativeBuffer(-1);
             case "buffer.next"   -> switchToRelativeBuffer(+1);
             case "motion.match.pair" -> jumpToMatchingBracket();
+            case "compile.error.next" -> jumpToProjectCompileError(true);
+            case "compile.error.prev" -> jumpToProjectCompileError(false);
         }
     }
 
@@ -1001,6 +1007,8 @@ public class ModalEditor {
                     case "file.end"      -> { dismissCompletion(); moveFileEnd(); }
                     case "insert.override" -> { dismissCompletion(); insertOverrideStub(); }
                     case "clipboard.paste" -> pasteFromSystemClipboard(false);
+                    case "compile.error.next" -> { dismissCompletion(); jumpToProjectCompileError(true); }
+                    case "compile.error.prev" -> { dismissCompletion(); jumpToProjectCompileError(false); }
                 }
             }
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
@@ -5638,11 +5646,16 @@ public class ModalEditor {
      * タイムアウト・例外時は null を返す（呼び出し側で「検索できなかった」ことを判定する）。
      */
     private <T> T withTimeout(Supplier<T> task) {
+        return withTimeout(task, PROJECT_SYMBOL_SEARCH_TIMEOUT_MS);
+    }
+
+    /** {@link #withTimeout(Supplier)} のタイムアウト時間を呼び出し側で指定できる版。 */
+    private <T> T withTimeout(Supplier<T> task, long timeoutMs) {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         Future<T> future = null;
         try {
             future = executor.submit(task::get);
-            return future.get(PROJECT_SYMBOL_SEARCH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             // タイムアウトした検索タスクへ割り込み、ProjectSearcher 側の協調キャンセル
             //（walk の TERMINATE / 並列 grep タスクの早期リターン）を発動させる。
@@ -6260,6 +6273,81 @@ public class ModalEditor {
             statusMessage = "診断なし";
         }
         syncCanvas();
+    }
+
+    /**
+     * Ctrl+&gt;/Ctrl+&lt;: プロジェクト全体（{@link #getBuildRoot()}配下）を javac でコンパイルし、
+     * エラー診断（警告は対象外）だけを filePath→lineNumber→column の順で並べた上で、
+     * 現在のファイル・カーソル位置から見て次/前のエラーへジャンプする。ファイルをまたぐ点が
+     * 現在ファイル限定の {@link #jumpToNextDiagnostic()}（[g）/{@link #jumpToPrevDiagnostic()}（[d）との違い。
+     * コンパイル自体は {@link #withTimeout(Supplier, long)} で {@link #COMPILE_ERROR_NAV_TIMEOUT_MS} に
+     * 制限し、EDT が無制限にフリーズしないようにする（Shift+K 等と同じ既存の妥協策）。
+     */
+    private void jumpToProjectCompileError(boolean forward) {
+        BuildResult result = withTimeout(
+            () -> new ProjectBuilder().compile(getBuildRoot()), COMPILE_ERROR_NAV_TIMEOUT_MS);
+        if (result == null) {
+            statusMessage = "E: compile check timed out";
+            return;
+        }
+        List<BuildDiagnostic> errors = new ArrayList<>();
+        for (BuildDiagnostic d : result.diagnostics()) {
+            if (d.isError()) errors.add(d);
+        }
+        if (errors.isEmpty()) {
+            statusMessage = "コンパイルエラーはありません";
+            return;
+        }
+        errors.sort((a, b) -> compareDiagLocation(a, b.filePath(), b.lineNumber(), b.column()));
+
+        String curPath = currentFilePath == null ? "" : currentFilePath;
+        BuildDiagnostic target = null;
+        if (forward) {
+            for (BuildDiagnostic d : errors) {
+                if (compareDiagLocation(d, curPath, cursorRow, cursorCol) > 0) { target = d; break; }
+            }
+            if (target == null) target = errors.get(0);
+        } else {
+            for (int i = errors.size() - 1; i >= 0; i--) {
+                BuildDiagnostic d = errors.get(i);
+                if (compareDiagLocation(d, curPath, cursorRow, cursorCol) < 0) { target = d; break; }
+            }
+            if (target == null) target = errors.get(errors.size() - 1);
+        }
+        openCompileErrorLocation(target);
+    }
+
+    /** filePath→lineNumber→column の辞書式順序で d と (path, row, col) を比較する。 */
+    private int compareDiagLocation(BuildDiagnostic d, String path, int row, int col) {
+        int c = d.filePath().compareTo(path);
+        if (c != 0) return c;
+        c = Integer.compare(d.lineNumber(), row);
+        if (c != 0) return c;
+        return Integer.compare(d.column(), col);
+    }
+
+    /** {@link #jumpToProjectCompileError(boolean)} が選んだ診断位置へ実際にジャンプする。 */
+    private void openCompileErrorLocation(BuildDiagnostic d) {
+        Path target = Path.of(d.filePath());
+        if (!target.toString().equals(currentFilePath)) {
+            try {
+                FileLoadResult result = readFileContentForBuffer(target);
+                if (result.binary() || result.classFileBytes() != null) {
+                    statusMessage = "E: cannot open binary/class file: " + d.filePath();
+                    return;
+                }
+                buffer = acquireBufferForOpen(target.toString(), result.text());
+                currentFilePath = target.toString();
+            } catch (IOException e) {
+                statusMessage = "E: " + e.getMessage();
+                return;
+            }
+        }
+        String[] lines = getLines();
+        cursorRow = Math.max(0, Math.min(d.lineNumber(), lines.length - 1));
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        cursorCol = Math.max(0, Math.min(d.column(), lineLen));
+        statusMessage = "E: " + d.message() + " (" + target.getFileName() + ":" + (d.lineNumber() + 1) + ")";
     }
 
     /** 未使用の import をすべて削除する（SPC+i+o / :oi）。 */
