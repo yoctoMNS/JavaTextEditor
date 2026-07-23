@@ -37,9 +37,11 @@ public class TutorialTest {
     }
 
     static void testContentHasAllLessons() {
-        for (int i = 1; i <= 18; i++) {
+        for (int i = 1; i <= 19; i++) {
             assertTrue("contains lesson " + i, Tutorial.CONTENT.contains("レッスン " + i + ":"));
         }
+        // C言語開発支援レッスンが含まれていること
+        assertTrue("mentions C tooling lesson", Tutorial.CONTENT.contains("C言語の開発支援"));
         assertTrue("mentions :tutor", Tutorial.CONTENT.contains(":tutor"));
         assertTrue("mentions hjkl basics", Tutorial.CONTENT.contains("h j k l"));
         passed("testContentHasAllLessons");

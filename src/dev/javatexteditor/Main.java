@@ -62,6 +62,12 @@ public class Main {
         new dev.javatexteditor.projectbuild.ProjectBuilder();
     private static final dev.javatexteditor.projectbuild.MainClassFinder MAIN_CLASS_FINDER =
         new dev.javatexteditor.projectbuild.MainClassFinder();
+    // C版のプロジェクトビルダ（gcc/clang/cc を外部起動。詳細は CProjectBuilder 参照）。
+    private static final dev.javatexteditor.projectbuild.CProjectBuilder C_PROJECT_BUILDER =
+        new dev.javatexteditor.projectbuild.CProjectBuilder();
+    // C版の1ファイル診断アナライザ（gcc -fsyntax-only）。
+    private static final dev.javatexteditor.analysis.CCompileAnalyzer C_COMPILE_ANALYZER =
+        new dev.javatexteditor.analysis.CCompileAnalyzer();
     // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
     private static Process runningProcess = null;
     // F11でmainクラスが複数見つかりtelescope選択待ちの間、選択確定後の実行まで
@@ -281,9 +287,12 @@ public class Main {
 
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
         Runnable trigger = () -> {
-            if (!isJavaBuffer(editor)) return;
-            editor.setStatusMessage("auto-import: 解析中...");
-            runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
+            if (isJavaBuffer(editor)) {
+                editor.setStatusMessage("auto-import: 解析中...");
+                runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
+            } else if (isCBuffer(editor)) {
+                runCAnalysis(editor, canvas, true);
+            }
         };
         // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替え、変換中表示を消してからコンパイル解析を実行する
         editor.setOnReturnToNormal(() -> {
@@ -294,12 +303,14 @@ public class Main {
         editor.setOnSave(trigger);
         // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
         editor.setOnOrganizeImports(() -> {
-            if (!isJavaBuffer(editor)) {
-                editor.setStatusMessage("E: Javaファイルではありません");
-                return;
+            if (isJavaBuffer(editor)) {
+                editor.setStatusMessage("import 整理中...");
+                runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗");
+            } else if (isCBuffer(editor)) {
+                organizeCIncludes(editor, canvas);
+            } else {
+                editor.setStatusMessage("E: Java/Cファイルではありません");
             }
-            editor.setStatusMessage("import 整理中...");
-            runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗");
         });
         // dd/p/u/Ctrl+R等、INSERT離脱・保存を経由しないバッファ変更操作は上記2フックの対象外で、
         // 行が増減しても診断（ガターの赤線）が古い行番号のまま残り、保存するまで直らない不具合が
@@ -323,6 +334,18 @@ public class Main {
     private static boolean isJavaBuffer(ModalEditor editor) {
         String path = editor.getCurrentFilePath();
         return path != null && path.toLowerCase(java.util.Locale.ROOT).endsWith(".java");
+    }
+
+    /**
+     * currentFilePath の拡張子が ".c" または ".h" である場合のみ Cバッファと判定する
+     * （isJavaBuffer と同じく、ファイルパス未設定の疑似バッファは対象外）。
+     * C の診断・auto-#include・F10/F11/F12 のルーティングに使う。
+     */
+    private static boolean isCBuffer(ModalEditor editor) {
+        String path = editor.getCurrentFilePath();
+        if (path == null) return false;
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".c") || lower.endsWith(".h");
     }
 
     /** バックグラウンド仮想スレッドでコンパイル解析し、EDT で診断反映と auto-import を行う。
@@ -357,6 +380,57 @@ public class Main {
                 Thread.currentThread().interrupt();
             }
         });
+    }
+
+    /**
+     * C バッファ版のバックグラウンド解析。gcc -fsyntax-only の診断をガター表示し、autoInclude が
+     * true なら未定義シンボル（implicit declaration / unknown type name / undeclared）に対応する
+     * 標準ヘッダを自動 #include する（Java の auto-import の C 版）。gcc が無い環境では静かに
+     * 診断なしにフォールバックする。
+     */
+    private static void runCAnalysis(ModalEditor editor, EditorCanvas canvas, boolean autoInclude) {
+        String source = editor.getText();
+        String snapshotPath = editor.getCurrentFilePath();
+        Thread.ofVirtual().start(() -> {
+            try {
+                List<CompileDiagnostic> diags = (snapshotPath != null)
+                    ? C_COMPILE_ANALYZER.analyzeWithPath(snapshotPath, source)
+                    : C_COMPILE_ANALYZER.analyze(source);
+                // 未定義シンボルから必要ヘッダを算出（ガター表示前の source を基準にする）
+                java.util.Set<String> symbols = new java.util.LinkedHashSet<>();
+                for (CompileDiagnostic d : diags) {
+                    String sym = dev.javatexteditor.analysis.CIncludeManager
+                        .extractSymbolFromMessage(d.message());
+                    if (sym != null) symbols.add(sym);
+                }
+                List<String> headers = dev.javatexteditor.analysis.CIncludeManager
+                    .missingHeadersForSymbols(source, symbols);
+                SwingUtilities.invokeLater(() -> {
+                    canvas.setDiagnostics(diags);
+                    if (autoInclude && !headers.isEmpty()) {
+                        int n = editor.applyCIncludes(headers);
+                        if (n > 0) editor.setStatusMessage("#include " + n + "件 追加しました");
+                    }
+                });
+            } catch (AnalysisException e) {
+                SwingUtilities.invokeLater(() -> canvas.setDiagnostics(List.of()));
+            }
+        });
+    }
+
+    /**
+     * :oi / SPC+i+o の C 版。ソース中に現れる標準ライブラリシンボルに対応する未 include のヘッダを
+     * まとめて追加する（ソース走査ベース。gcc 不要で同期実行）。
+     */
+    private static void organizeCIncludes(ModalEditor editor, EditorCanvas canvas) {
+        List<String> headers = dev.javatexteditor.analysis.CIncludeManager
+            .missingHeadersForSource(editor.getText());
+        if (headers.isEmpty()) {
+            editor.setStatusMessage("#include 整理完了（追加なし）");
+            return;
+        }
+        int n = editor.applyCIncludes(headers);
+        editor.setStatusMessage("#include " + n + "件 追加しました");
     }
 
     /**
@@ -480,6 +554,96 @@ public class Main {
             int finalExitCode = exitCode;
             SwingUtilities.invokeLater(() -> {
                 editor.finishRunOutput(fqcn, finalExitCode);
+                editor.syncCanvas();
+            });
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // F10/F11/F12 の C 版（gcc/clang/cc を外部起動）。Java 版と同じ *compile*/*run*
+    // 疑似バッファ・ストリーミング表示・多重実行防止（runningProcess）を再利用する。
+    // Java 版と異なりクラスパス入力プロンプト（enterClasspathInput）は挟まず直接コンパイルする
+    // （C にはクラスパスの概念がないため）。
+    // -------------------------------------------------------------------------
+
+    /** F10（C）: projectRoot 配下の全 .c を gcc で1実行ファイルにコンパイルし *compile* に表示する。 */
+    private static void triggerCompileC(ModalEditor editor, EditorCanvas canvas) {
+        doCompileC(editor, canvas, null);
+    }
+
+    /** F11（C）: 実行ファイルが無ければ拒否し、あれば実行する。 */
+    private static void triggerRunC(ModalEditor editor, EditorCanvas canvas) {
+        Path projectRoot = editor.getBuildRoot();
+        if (!C_PROJECT_BUILDER.hasExecutable(projectRoot)) {
+            editor.setStatusMessage("run: 実行ファイルがありません。先にF10でコンパイルしてください");
+            return;
+        }
+        runCExecutable(editor, canvas, projectRoot);
+    }
+
+    /** F12（C）: コンパイル→成功時のみ実行。 */
+    private static void triggerCompileAndRunC(ModalEditor editor, EditorCanvas canvas) {
+        doCompileC(editor, canvas, result -> {
+            if (result.success()) runCExecutable(editor, canvas, editor.getBuildRoot());
+        });
+    }
+
+    /** F10/F12（C）共通のコンパイル実行部。diagnostic をリアルタイムに *compile* へ追記する。 */
+    private static void doCompileC(ModalEditor editor, EditorCanvas canvas,
+            java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
+        editor.beginCompileOutput();
+        editor.syncCanvas();
+        Path projectRoot = editor.getBuildRoot();
+        Thread.ofVirtual().start(() -> {
+            dev.javatexteditor.projectbuild.BuildResult result =
+                C_PROJECT_BUILDER.compile(projectRoot, diag ->
+                    SwingUtilities.invokeLater(() -> {
+                        editor.appendCompileDiagnostic(diag);
+                        editor.syncCanvas();
+                    }));
+            SwingUtilities.invokeLater(() -> {
+                editor.finishCompileOutput(result);
+                editor.syncCanvas();
+                if (onDone != null) onDone.accept(result);
+            });
+        });
+    }
+
+    /**
+     * F11（C）: コンパイル済みの実行ファイルを別プロセスとして起動し、標準出力/標準エラーを
+     * *run* 疑似バッファへリアルタイム表示する（runJavaClass の C 版）。
+     */
+    private static void runCExecutable(ModalEditor editor, EditorCanvas canvas, Path projectRoot) {
+        if (runningProcess != null && runningProcess.isAlive()) {
+            runningProcess.destroy();
+        }
+        Path executable = C_PROJECT_BUILDER.executableFor(projectRoot);
+        String command = executable.toString();
+        editor.beginRunOutput(command, executable.getFileName().toString());
+        editor.syncCanvas();
+        Thread.ofVirtual().start(() -> {
+            int exitCode;
+            try {
+                ProcessBuilder pb = new ProcessBuilder(executable.toString());
+                pb.directory(projectRoot.toFile());
+                Process process = pb.start();
+                runningProcess = process;
+                Thread stdoutReader = startRunOutputReader(process.getInputStream(), editor, false);
+                Thread stderrReader = startRunOutputReader(process.getErrorStream(), editor, true);
+                exitCode = process.waitFor();
+                stdoutReader.join();
+                stderrReader.join();
+            } catch (IOException e) {
+                SwingUtilities.invokeLater(() ->
+                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
+                return;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            int finalExitCode = exitCode;
+            SwingUtilities.invokeLater(() -> {
+                editor.finishRunOutput(executable.getFileName().toString(), finalExitCode);
                 editor.syncCanvas();
             });
         });
@@ -875,10 +1039,11 @@ public class Main {
                             dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
                             EditorCanvas canvasBuild = active[0].canvas();
                             if (edBuild.isNormalMode()) {
+                                boolean c = isCBuffer(edBuild);
                                 switch (e.getKeyCode()) {
-                                    case KeyEvent.VK_F10 -> triggerCompile(edBuild, canvasBuild);
-                                    case KeyEvent.VK_F11 -> triggerRun(edBuild, canvasBuild);
-                                    case KeyEvent.VK_F12 -> triggerCompileAndRun(edBuild, canvasBuild);
+                                    case KeyEvent.VK_F10 -> { if (c) triggerCompileC(edBuild, canvasBuild); else triggerCompile(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F11 -> { if (c) triggerRunC(edBuild, canvasBuild); else triggerRun(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F12 -> { if (c) triggerCompileAndRunC(edBuild, canvasBuild); else triggerCompileAndRun(edBuild, canvasBuild); }
                                 }
                             }
                             pressedHandled[0] = true;
