@@ -209,6 +209,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL, KeyBinding.ofChar('k', "cursor.up"), "cursor.up");
         bind(Mode.VISUAL, KeyBinding.ofChar('y', "yank"), "yank");
         bind(Mode.VISUAL, KeyBinding.ofChar('d', "delete"), "delete");
+        bind(Mode.VISUAL, KeyBinding.ofChar('p', "paste.over"), "paste.over");
         bind(Mode.VISUAL, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
         bind(Mode.VISUAL, KeyBinding.ofChar('v', "enter.normal"), "enter.normal");
         bind(Mode.VISUAL, KeyBinding.ofChar('w', "word.forward"),  "word.forward");
@@ -242,6 +243,7 @@ public class KeymapRegistry {
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('k', "cursor.up"), "cursor.up");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('y', "yank"), "yank");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('d', "delete"), "delete");
+        bind(Mode.VISUAL_LINE, KeyBinding.ofChar('p', "paste.over"), "paste.over");
         bind(Mode.VISUAL_LINE, KeyBinding.ofCode(KeyEvent.VK_ESCAPE, 0, "enter.normal"), "enter.normal");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('V', "enter.normal"), "enter.normal");
         bind(Mode.VISUAL_LINE, KeyBinding.ofChar('G', "file.end"), "file.end");

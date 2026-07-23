@@ -45,6 +45,8 @@ public class ModalEditorTest {
         testVisualMovement();
         testVisualYank();
         testVisualDelete();
+        testVisualPasteOverChar();
+        testVisualLinePasteOverLine();
         testPasteAfter();
         testPasteBefore();
         testDeleteChar();
@@ -622,6 +624,34 @@ public class ModalEditorTest {
         check("選択範囲が削除される", ed.getText().equals("def"));
         check("yankRegister に削除分が保存", ed.getYankRegister().equals("abc"));
         check("カーソルが選択開始位置に", ed.getCursorCol() == 0);
+    }
+
+    static void testVisualPasteOverChar() {
+        System.out.println("[VISUALモード: p で選択範囲を上書き貼り付け]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'v');        // アンカー = (0, 0)
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');        // カーソル = (0, 2), 選択 "abc"
+        pressKey(ed, 'y');        // yankRegister = "abc"、NORMALへ
+        pressKey(ed, 'l');
+        pressKey(ed, 'l');        // カーソルを "e" (index 4) へ
+        pressKey(ed, 'v');
+        pressKey(ed, 'l');        // 選択 "ef"
+        pressKey(ed, 'p');
+        check("p でNORMALに戻る", !ed.isVisualMode());
+        check("選択範囲がヤンク内容で上書きされる", ed.getText().equals("dabcabc"));
+    }
+
+    static void testVisualLinePasteOverLine() {
+        System.out.println("[VISUAL LINEモード: p で選択行を上書き貼り付け]");
+        ModalEditor ed = new ModalEditor("aaa\nbbb\nccc");
+        pressKey(ed, 'V');        // アンカー行=0
+        pressKey(ed, 'y');        // yankRegister = "aaa\n"、NORMALへ
+        pressKey(ed, 'j');
+        pressKey(ed, 'V');        // 行1(bbb)を選択
+        pressKey(ed, 'p');
+        check("p でNORMALに戻る", !ed.isVisualLineMode());
+        check("選択行がヤンク行で上書きされる", ed.getText().equals("aaa\naaa\nccc"));
     }
 
     // -------------------------------------------------------------------------

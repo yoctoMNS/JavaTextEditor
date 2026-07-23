@@ -3391,6 +3391,18 @@ public class ModalEditor {
                 mode = Mode.NORMAL;
                 clampCursorForNormal();
             }
+            case "paste.over" -> {
+                if (!yankRegister.isEmpty()) {
+                    deleteSelected();
+                    int insertOffset = offsetOfCursor();
+                    buffer.insert(insertOffset, yankRegister);
+                    int newOffset = insertOffset + yankRegister.length() - 1;
+                    moveCursorToOffset(Math.max(insertOffset, newOffset));
+                }
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
+            }
             case "clipboard.copy" -> {
                 copyToSystemClipboard(getSelectedText());
                 int startOffset = Math.min(offsetAt(anchorRow, anchorCol), offsetOfCursor());
@@ -3467,6 +3479,21 @@ public class ModalEditor {
                 deleteLineRange(r1, r2);
                 saveLastVisualFromCurrentMode();
                 mode = Mode.NORMAL;
+            }
+            case "paste.over" -> {
+                int r1 = Math.min(anchorRow, cursorRow);
+                int r2 = Math.max(anchorRow, cursorRow);
+                if (!yankRegister.isEmpty()) {
+                    deleteLineRange(r1, r2);
+                    if (yankType == YankType.LINE) {
+                        pasteLineBefore();
+                    } else {
+                        buffer.insert(offsetOfCursor(), yankRegister);
+                    }
+                }
+                saveLastVisualFromCurrentMode();
+                mode = Mode.NORMAL;
+                clampCursorForNormal();
             }
             case "clipboard.copy" -> {
                 int r1 = Math.min(anchorRow, cursorRow);
