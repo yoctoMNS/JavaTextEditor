@@ -370,7 +370,7 @@ public class Main {
 
     /** F11: bin/ に .class がなければ拒否し、あれば追加クラスパスを尋ねて main クラスを解決・実行する。 */
     private static void triggerRun(ModalEditor editor, EditorCanvas canvas) {
-        Path projectRoot = editor.getProjectRoot();
+        Path projectRoot = editor.getBuildRoot();
         if (!PROJECT_BUILDER.hasCompiledClasses(projectRoot)) {
             editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
             return;
@@ -385,7 +385,7 @@ public class Main {
      */
     private static void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
         editor.enterClasspathInput("F12", extraClasspath -> {
-            Path projectRoot = editor.getProjectRoot();
+            Path projectRoot = editor.getBuildRoot();
             doCompile(editor, canvas, extraClasspath, result -> {
                 if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath);
             });
@@ -400,7 +400,7 @@ public class Main {
             java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
         editor.beginCompileOutput();
         editor.syncCanvas();
-        Path projectRoot = editor.getProjectRoot();
+        Path projectRoot = editor.getBuildRoot();
         Thread.ofVirtual().start(() -> {
             dev.javatexteditor.projectbuild.BuildResult result =
                 PROJECT_BUILDER.compile(projectRoot, extraClasspath, diag ->
@@ -587,7 +587,7 @@ public class Main {
         editor.setOnFileOpened(Main::registerBuffer);
         editor.setOnBufferDelete(Main::unregisterBuffer);
         editor.setOnRunMainClassSelected(
-            fqcn -> runJavaClass(editor, canvas, editor.getProjectRoot(), fqcn, pendingRunExtraClasspath));
+            fqcn -> runJavaClass(editor, canvas, editor.getBuildRoot(), fqcn, pendingRunExtraClasspath));
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }

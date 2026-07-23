@@ -228,6 +228,11 @@ public class ModalEditor {
     private List<CompileDiagnostic> localDiagnostics = List.of();
     // ファイル名検索 / ファイル内容grep（\f / \g）
     private Path projectRoot = null; // null のとき user.dir を使用
+    // :pr コマンドで明示設定するプロジェクトルート。null のとき getProjectRoot()（:cd 追従）を使う。
+    // F10/F11/F12（コンパイル・実行・追加クラスパス解決）だけがこの値を基準にし、
+    // grep/telescope/FILER/:e/:w は従来どおり getProjectRoot()（:cd 現在ディレクトリ）を使う。
+    // セッション中のみ保持し永続化しない（起動時 null）。上書きは再度 :pr を打つだけでよい。
+    private Path projectRootOverride = null;
     private final FileNameSearcher fileNameSearcher = new FileNameSearcher();
     private final StringBuilder fileSearchBuffer = new StringBuilder();
     private FileSearchType fileSearchType = FileSearchType.NAME;
@@ -1843,15 +1848,34 @@ public class ModalEditor {
         if (cb != null) cb.accept(extraClasspath);
     }
 
-    /** カンマ区切りの入力を projectRoot 基準の絶対パスへ解決する（空要素は無視）。 */
+    /**
+     * カンマ区切りの追加クラスパス入力を、プロジェクトルート（getBuildRoot()）基準の絶対パスへ
+     * 解決する（空要素は無視）。:e/:w の resolveRelativeToProjectRoot()（:cd 現在ディレクトリ基準）
+     * とは異なり、クラスパスは F10/F11/F12 のビルド/実行と足並みを揃えて getBuildRoot() 基準にする。
+     * これにより :cd でサブディレクトリへ移動した状態で実行しても、追加クラスパスの相対パスは
+     * :pr で固定したプロジェクトルートから解決される。
+     */
     private List<Path> parseClasspathInput(String input) {
         List<Path> result = new ArrayList<>();
         for (String raw : input.split(",")) {
             String trimmed = raw.trim();
             if (trimmed.isEmpty()) continue;
-            result.add(Path.of(resolveRelativeToProjectRoot(trimmed)));
+            result.add(Path.of(resolveRelativeToBuildRoot(trimmed)));
         }
         return result;
+    }
+
+    /**
+     * ~ 展開の上、絶対パスならそのまま・相対パスなら getBuildRoot() を基準に絶対パス化する。
+     * 追加クラスパス入力（F10/F11/F12）専用。resolveRelativeToProjectRoot() の getBuildRoot() 版。
+     */
+    private String resolveRelativeToBuildRoot(String pathSpec) {
+        String expanded = expandHome(pathSpec);
+        Path target = Path.of(expanded);
+        if (target.isAbsolute()) {
+            return target.toString();
+        }
+        return getBuildRoot().resolve(expanded).toAbsolutePath().toString();
     }
 
     // -------------------------------------------------------------------------
@@ -2410,6 +2434,16 @@ public class ModalEditor {
             wrapEnabled = false;
         } else if (cmd.equals("pwd")) {
             statusMessage = getProjectRoot().toString();
+        } else if (cmd.equals("pr")) {
+            // :pr — その時点の :cd 現在ディレクトリを F10/F11/F12 用プロジェクトルートとして記憶する。
+            // 別ディレクトリで再度 :pr を打てば上書きされる。セッション終了時に破棄（永続化しない）。
+            projectRootOverride = getProjectRoot();
+            statusMessage = "project root: " + projectRootOverride;
+        } else if (cmd.equals("pr?")) {
+            // :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。
+            statusMessage = (projectRootOverride != null)
+                ? "project root: " + projectRootOverride
+                : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
         } else if (cmd.startsWith("cd ")) {
             changeDirectory(cmd.substring(3).trim());
         } else if (cmd.equals("bnext") || cmd.equals("bn")) {
@@ -4934,6 +4968,18 @@ public class ModalEditor {
     public Path getProjectRoot() {
         return (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
     }
+
+    /**
+     * F10/F11/F12（コンパイル・実行・追加クラスパス解決）が基準にするプロジェクトルート。
+     * :pr で明示設定されていればそのルートを、未設定なら getProjectRoot()（:cd 追従）を返す。
+     * :cd でサブディレクトリに移動しても、:pr 設定済みならビルド/実行のルートは動かない。
+     */
+    public Path getBuildRoot() {
+        return (projectRootOverride != null) ? projectRootOverride : getProjectRoot();
+    }
+
+    /** テスト用: :pr で設定されたプロジェクトルート（未設定なら null）。 */
+    public Path getProjectRootOverride() { return projectRootOverride; }
 
     // F10/F11: *compile*/*run* 疑似バッファのリアルタイムログ表示用の状態。
     // outputErrorLinesOwner は「この行番号集合がどの buffer インスタンスに対応するか」を
