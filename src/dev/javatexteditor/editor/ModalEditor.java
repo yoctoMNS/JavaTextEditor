@@ -2,6 +2,7 @@ package dev.javatexteditor.editor;
 
 import dev.javatexteditor.analysis.AutoImportHandler;
 import dev.javatexteditor.analysis.BindingDefinitionResolver;
+import dev.javatexteditor.analysis.CIncludeManager;
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.EntryPointIndex;
 import dev.javatexteditor.analysis.JdkClassIndex;
@@ -6290,6 +6291,27 @@ public class ModalEditor {
     }
 
     /** 未使用の import をすべて削除する（SPC+i+o / :oi）。 */
+    /**
+     * C バッファに {@code #include <...>} ヘッダ群を追加する（Java の auto-import の C 版）。
+     * 既に include 済みのヘッダは重複して追加しない。実際に追加した件数を返す。
+     * 挿入位置・カーソル非追従は Java 側の {@link AutoImportHandler#applyImport}（buffer.insert のみ）と
+     * 同じトレードオフを踏襲する。
+     */
+    public int applyCIncludes(List<String> headers) {
+        if (headers == null || headers.isEmpty()) return 0;
+        String source = buffer.getText();
+        java.util.Set<String> already = CIncludeManager.existingIncludes(source);
+        List<String> missing = new ArrayList<>();
+        for (String h : headers) {
+            if (!already.contains(h) && !missing.contains(h)) missing.add(h);
+        }
+        if (missing.isEmpty()) return 0;
+        int offset = CIncludeManager.insertOffset(source);
+        buffer.insert(offset, CIncludeManager.formatIncludeBlock(missing));
+        syncCanvas();
+        return missing.size();
+    }
+
     /** Main.java の onOrganizeImports コールバックから EDT 上で呼ばれる：未使用 import 削除のみ。 */
     public void organizeImportsRemoveUnused() {
         if (autoImportHandler == null) return;

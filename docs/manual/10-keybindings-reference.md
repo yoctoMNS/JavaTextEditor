@@ -9,9 +9,9 @@
 | キー | 動作 |
 |---|---|
 | `F2` | カーソル行のエラー・警告一覧をダイアログ表示（[編集支援機能](06-editing-features.md)） |
-| `F10` | プロジェクト全体をコンパイル（[Java開発支援](04-java-tooling.md)） |
-| `F11` | mainクラスを解決して実行（[Java開発支援](04-java-tooling.md)） |
-| `F12` | コンパイルして成功時のみ実行（[Java開発支援](04-java-tooling.md)） |
+| `F10` | プロジェクト全体をコンパイル（開いている拡張子で Java=`javac`/C=`gcc` を自動切替。[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
+| `F11` | 実行（Java=mainクラス解決 / C=実行ファイル起動。[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
+| `F12` | コンパイルして成功時のみ実行（Java/C 共通。[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
 | `Ctrl+Shift+←` / `→` | アクティブペインのフォントセル幅を調整（[編集支援機能](06-editing-features.md)） |
 | `Ctrl+Shift+↑` / `↓` | アクティブペインのフォントセル高さを調整（[編集支援機能](06-editing-features.md)） |
 | マウスクリック | クリックしたペインへフォーカス移動 |
@@ -49,8 +49,9 @@
 | `~` | カーソル位置の1文字の大文字/小文字を反転（[モーダル編集](02-modal-editing.md)） |
 | `guu` `gUU` `g~~` | 現在行を小文字化/大文字化/大文字小文字反転（[モーダル編集](02-modal-editing.md)） |
 | `Space+g+g` `Space+g+s` `Space+g+d` | Getter/Setter生成（[Java開発支援](04-java-tooling.md)） |
-| `Space+i+o` / `Ctrl+Shift+O` | import整理（[Java開発支援](04-java-tooling.md)） |
-| `[g` `[d` | 次/前のエラー・警告行へ（[Java開発支援](04-java-tooling.md)） |
+| `Space+i+o` | import整理（Java）/ `#include`整理（C）（[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
+| `Ctrl+Shift+O` | カーソル位置に `@Override` + 改行を挿入（[Java開発支援](04-java-tooling.md)） |
+| `[g` `[d` | 次/前のエラー・警告行へ（Java/C 共通。[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
 
 ### モード遷移・検索・ナビゲーション
 
@@ -87,7 +88,7 @@
 | `Ctrl+]` `Ctrl+[` | 保存してNORMALへ |
 | `Ctrl+Space` | マージ補完（[コード補完](05-completion.md)） |
 | `Alt+/` | 単語補完（[コード補完](05-completion.md)） |
-| `Ctrl+Shift+O` | import整理 |
+| `Ctrl+Shift+O` | カーソル位置に `@Override` + 改行を挿入 |
 
 ## COMMANDモード
 
