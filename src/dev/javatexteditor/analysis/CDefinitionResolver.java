@@ -2,15 +2,20 @@ package dev.javatexteditor.analysis;
 
 import dev.javatexteditor.search.FileNameSearcher;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,12 +27,33 @@ import java.util.regex.Pattern;
  *   <li>カーソルが {@code #include "foo.h"} / {@code #include <foo.h>} の行にある場合 → その
  *       ヘッダファイルを開く（引用符形式はまず編集中ファイルと同じディレクトリ、次にプロジェクト全体、
  *       山括弧形式はプロジェクト全体→標準インクルードディレクトリの順に探す）。</li>
- *   <li>カーソルが識別子の上にある場合 → プロジェクト配下の {@code .c}/{@code .h} を走査し、
+ *   <li>カーソルが識別子の上にある場合 → まずプロジェクト配下の {@code .c}/{@code .h} を走査し、
  *       関数定義（本体 {@code &#123;}）・マクロ（{@code #define}）・型（{@code typedef}/{@code struct}/
  *       {@code enum}/{@code union}）・関数プロトタイプ（{@code ;} で終わる宣言）の順で最も優先度の
  *       高い定義箇所へジャンプする。ヘッダにプロトタイプしか無い関数でも、実装（{@code .c} の関数
- *       定義）が見つかればそちらを優先するため「ヘッダ→実装」をたどれる。</li>
+ *       定義）が見つかればそちらを優先するため「ヘッダ→実装」をたどれる。プロジェクト内に見つから
+ *       なければ、現在のファイルが実際に {@code #include} しているヘッダ（プロジェクト内／標準ヘッダを
+ *       問わず、そのヘッダがさらに {@code #include} するヘッダも幅優先で追う）から
+ *       {@code printf}/{@code NULL}/{@code size_t} のような標準ライブラリの宣言を探す。</li>
  * </ol>
+ *
+ * <p><b>標準ヘッダの探索範囲を「現在のファイルが実際に #include しているものだけ」に限定している
+ * 理由</b>: 当初は標準インクルードディレクトリ（{@code /usr/include} 等）配下を丸ごと総当たりする
+ * 実装だったが、実機検証で2つの問題が判明した。①ディレクトリ配下には無関係な大量のライブラリ
+ * （openssl・X11・valgrind 等）が同居しており、コメント中に偶然シンボル名が現れるだけの行を
+ * 誤検出する事故が実際に発生した。②総ファイル数が数千に達し、1回の検索に数秒かかり
+ * {@code ModalEditor} 側の1500msタイムアウトを恒常的に超過した。このため、現在のバッファが
+ * 実際に {@code #include} している（かつそこから辿れる）ヘッダだけを対象にする幅優先探索に
+ * 変更した。これは実際のCコンパイラのシンボル解決規則（インクルードしていないヘッダの宣言は
+ * そもそも見えない）とも一致しており、正しさと速さを両立する。
+ *
+ * <p><b>標準インクルードディレクトリの解決</b>: OS別のパスをハードコードするのではなく、実際に
+ * インストールされている C コンパイラ（{@code gcc}→{@code clang}→{@code cc}。{@code CProjectBuilder}/
+ * {@code CCompileAnalyzer} と同じ検出順）に {@code <compiler> -E -v} で問い合わせ、コンパイラ自身が
+ * 報告する検索パス（{@code #include <...> search starts here:} 〜 {@code End of search list.}）を使う。
+ * これにより Linux（glibc）でも Windows（MinGW-w64/MSYS2 等）でも、その環境に実際に入っている
+ * ツールチェーンの標準ヘッダへ正しくジャンプできる（OS別パスのハードコードでは Windows で機能しない）。
+ * 検出結果はプロセス起動を伴うため JVM 内で1回だけ計算しキャッシュする。
  *
  * Java の {@link BindingDefinitionResolver}（javac 属性付け）と異なり、C にはインプロセスの型解決 API が
  * 無いため、正規表現ベースの ctags 風ヒューリスティックで実装する（{@code gr}/{@code :grep} と同じ
@@ -45,10 +71,18 @@ public final class CDefinitionResolver {
     /** 2MB 超のファイルは読み飛ばす（WordIndex/ProjectSearcher と同じ上限）。 */
     private static final long MAX_FILE_SIZE = 2L * 1024 * 1024;
 
-    /** 山括弧 include がプロジェクトに無い場合に直接解決を試みる標準インクルードディレクトリ。 */
-    private static final List<Path> SYSTEM_INCLUDE_DIRS = List.of(
-        Path.of("/usr/include"),
-        Path.of("/usr/local/include"));
+    /**
+     * 検出を試みる C コンパイラ（{@link dev.javatexteditor.projectbuild.CProjectBuilder}/
+     * {@link CCompileAnalyzer} と同じ検出順・同じ検出ロジック。3クラス目の重複だが、CLAUDE.md の
+     * 「3行の重複は早すぎる抽象化よりよい」という既存方針を踏襲しあえて共通化しなかった）。
+     */
+    private static final List<String> COMPILER_CANDIDATES = List.of("gcc", "clang", "cc");
+
+    // 標準インクルードディレクトリ一覧の遅延キャッシュ。コンパイラへの問い合わせはプロセス起動を
+    // 伴うため、JVM内（＝エディタのセッション中）で1回だけ計算する。インストール済みツールチェーンは
+    // セッション中に変わらない前提。
+    private static volatile List<Path> systemIncludeDirsCache = null;
+    private static volatile boolean systemIncludeDirsAttempted = false;
 
     private static final Pattern INCLUDE_PATTERN =
         Pattern.compile("^\\s*#\\s*include\\s*([<\"])([^>\"]+)[>\"]");
@@ -90,28 +124,39 @@ public final class CDefinitionResolver {
         // 2) カーソル位置の識別子を定義探索する。
         String word = wordAt(line, cursorCol);
         if (word == null || word.isEmpty() || KEYWORDS.contains(word)) return null;
-        return resolveSymbol(word, currentFile, projectRoot);
+        return resolveSymbol(word, source, currentFile, projectRoot);
     }
 
     // ---- #include の解決 --------------------------------------------------
 
+    /** header の実ファイルパスの解決結果。system==true なら標準インクルードディレクトリ側で見つかった。 */
+    private record ResolvedHeader(Path path, boolean system) {}
+
     private Location resolveInclude(String header, boolean quoted, Path currentFile, Path projectRoot) {
-        // 引用符形式: まず編集中ファイルと同じディレクトリからの相対で探す。
+        ResolvedHeader rh = resolveIncludePath(header, quoted, currentFile, projectRoot);
+        if (rh == null) return null;
+        return new Location(rh.path(), 0, rh.system() ? "system header" : "header");
+    }
+
+    /**
+     * header の実ファイルパスを解決する（#include ジャンプ・標準ヘッダ経由のシンボル探索の
+     * 両方から使う共通ロジック）。引用符形式はまず編集中ファイルと同じディレクトリ、次にプロジェクト
+     * 全体、山括弧形式はプロジェクト全体→標準インクルードディレクトリの順に探す。見つからなければ null。
+     */
+    private ResolvedHeader resolveIncludePath(String header, boolean quoted, Path currentFile, Path projectRoot) {
         if (quoted && currentFile != null) {
             Path parent = currentFile.toAbsolutePath().getParent();
             if (parent != null) {
                 Path direct = parent.resolve(header).normalize();
-                if (Files.isRegularFile(direct)) return new Location(direct, 0, "header");
+                if (Files.isRegularFile(direct)) return new ResolvedHeader(direct, false);
             }
         }
-        // プロジェクト全体からファイル名（またはパス末尾）一致で探す。
         Path found = findFileInProject(header, projectRoot);
-        if (found != null) return new Location(found, 0, "header");
+        if (found != null) return new ResolvedHeader(found, false);
 
-        // 山括弧形式（またはプロジェクトに無い場合）: 標準インクルードディレクトリを直接解決。
-        for (Path base : SYSTEM_INCLUDE_DIRS) {
+        for (Path base : systemIncludeDirs()) {
             Path candidate = base.resolve(header).normalize();
-            if (Files.isRegularFile(candidate)) return new Location(candidate, 0, "system header");
+            if (Files.isRegularFile(candidate)) return new ResolvedHeader(candidate, true);
         }
         return null;
     }
@@ -136,7 +181,7 @@ public final class CDefinitionResolver {
 
     // ---- 識別子の定義探索 -------------------------------------------------
 
-    private Location resolveSymbol(String word, Path currentFile, Path projectRoot) {
+    private Location resolveSymbol(String word, String source, Path currentFile, Path projectRoot) {
         List<Path> files = new ArrayList<>();
         walkCFiles(projectRoot, (file, attrs) -> files.add(file), true, null);
         // 編集中ファイルを先に見る（同一ファイル内の定義を優先）。残りはパス順で決定的に。
@@ -155,7 +200,7 @@ public final class CDefinitionResolver {
         for (Path file : files) {
             List<String> lines;
             try {
-                lines = Files.readAllLines(file);
+                lines = stripComments(Files.readAllLines(file));
             } catch (IOException e) {
                 continue;
             }
@@ -170,7 +215,117 @@ public final class CDefinitionResolver {
         for (int pri = 0; pri <= PRI_PROTOTYPE; pri++) {
             if (best[pri] != null) return best[pri];
         }
+        // プロジェクト内に見つからなければ、現在のファイルが実際に #include しているヘッダ
+        // （そこからさらに #include されるヘッダも含む）から標準ライブラリの宣言を探す
+        // （printf/NULL/size_t 等。#include 行以外の使用箇所での K でもここに到達する）。
+        return resolveSymbolInIncludedHeaders(word, source, currentFile, projectRoot);
+    }
+
+    /** 1回の探索で辿るヘッダ数の上限（無関係な巨大ツリーへ広がりすぎるのを防ぐ安全弁）。 */
+    private static final int MAX_HEADER_SCAN = 300;
+
+    /**
+     * 現在のファイルが実際に {@code #include} しているヘッダ群から word の定義を幅優先で探す
+     * （{@link #resolveSymbol} からプロジェクト内に見つからなかった場合のフォールバック）。
+     * 標準インクルードディレクトリを丸ごと総当たりするのではなく、実際にこのファイルから見える
+     * ヘッダ（そのヘッダがさらに #include するヘッダも含む）だけを対象にすることで、無関係な
+     * ライブラリのコメント等からの誤検出を避けつつ、数千ファイル規模の走査を避けて高速に保つ
+     * （クラス Javadoc の「標準ヘッダの探索範囲を…」参照）。標準ヘッダ由来のヒットはラベルに
+     * "(system header)" を付け、標準ライブラリ側へジャンプしたことをステータスバーで分かるようにする。
+     */
+    private Location resolveSymbolInIncludedHeaders(
+            String word, String source, Path currentFile, Path projectRoot) {
+        Set<Path> visited = new HashSet<>();
+        Deque<ResolvedHeader> queue = new ArrayDeque<>();
+        enqueueIncludes(source, currentFile, projectRoot, visited, queue);
+
+        Location[] best = new Location[PRI_PROTOTYPE + 1];
+        int scanned = 0;
+        while (!queue.isEmpty() && scanned < MAX_HEADER_SCAN) {
+            if (Thread.currentThread().isInterrupted()) break;
+            ResolvedHeader rh = queue.poll();
+            scanned++;
+            List<String> rawLines;
+            try {
+                rawLines = Files.readAllLines(rh.path());
+            } catch (IOException e) {
+                continue;
+            }
+            List<String> lines = stripComments(rawLines);
+            for (int i = 0; i < lines.size(); i++) {
+                int pri = classifyDefinition(lines.get(i), word);
+                if (pri >= 0 && best[pri] == null) {
+                    String suffix = rh.system() ? " (system header)" : "";
+                    best[pri] = new Location(rh.path(), i, labelFor(pri) + suffix);
+                    if (pri == PRI_FUNCTION_DEF) return best[pri];
+                }
+            }
+            // このヘッダがさらに #include しているヘッダも探索対象に加える
+            // （size_t 等、間接的に標準ヘッダを経由する宣言をたどるため）。
+            enqueueIncludes(String.join("\n", rawLines), rh.path(), projectRoot, visited, queue);
+        }
+        for (int pri = 0; pri <= PRI_PROTOTYPE; pri++) {
+            if (best[pri] != null) return best[pri];
+        }
         return null;
+    }
+
+    /** source 中の #include 行を解決し、未訪問のものだけを queue に追加する。 */
+    private void enqueueIncludes(String source, Path fromFile, Path projectRoot,
+            Set<Path> visited, Deque<ResolvedHeader> queue) {
+        for (String line : source.split("\n", -1)) {
+            Matcher m = INCLUDE_PATTERN.matcher(line);
+            if (!m.find()) continue;
+            boolean quoted = m.group(1).equals("\"");
+            ResolvedHeader rh = resolveIncludePath(m.group(2), quoted, fromFile, projectRoot);
+            if (rh != null && visited.add(rh.path())) queue.add(rh);
+        }
+    }
+
+    /**
+     * ブロックコメント（{@code /* ... *&#47;}）・行コメント（{@code //}）を大まかに除去した各行の
+     * リストを返す。行コメントは行頭からの出現位置を見るだけの単純な判定のため、文字列リテラル内の
+     * {@code //}/{@code /*} は考慮しない（例: {@code "http://example.com"}）。標準ヘッダ・プロジェクト
+     * コードのコメント中に識別子名が偶然現れて誤って定義行と判定される事故を防ぐための簡易実装で、
+     * 完全な字句解析ではない（{@code gr}/{@code :grep} と同じ正規表現ヒューリスティックの延長）。
+     * ブロックコメントの開閉状態はファイル全体を通して1回のループで引き継ぐ。
+     */
+    static List<String> stripComments(List<String> lines) {
+        List<String> result = new ArrayList<>(lines.size());
+        boolean inBlock = false;
+        for (String line : lines) {
+            StringBuilder sb = new StringBuilder();
+            int i = 0;
+            while (i < line.length()) {
+                if (inBlock) {
+                    int end = line.indexOf("*/", i);
+                    if (end < 0) { i = line.length(); break; }
+                    i = end + 2;
+                    inBlock = false;
+                    continue;
+                }
+                int lineCommentIdx = line.indexOf("//", i);
+                int blockCommentIdx = line.indexOf("/*", i);
+                if (lineCommentIdx >= 0 && (blockCommentIdx < 0 || lineCommentIdx < blockCommentIdx)) {
+                    sb.append(line, i, lineCommentIdx);
+                    break;
+                }
+                if (blockCommentIdx >= 0) {
+                    sb.append(line, i, blockCommentIdx);
+                    int end = line.indexOf("*/", blockCommentIdx + 2);
+                    if (end < 0) {
+                        inBlock = true;
+                        break;
+                    }
+                    i = end + 2;
+                    continue;
+                }
+                sb.append(line, i, line.length());
+                break;
+            }
+            result.add(sb.toString());
+        }
+        return result;
     }
 
     private static String labelFor(int pri) {
@@ -180,6 +335,112 @@ public final class CDefinitionResolver {
             case PRI_TYPE         -> "type";
             default               -> "declaration";
         };
+    }
+
+    // ---- 標準インクルードディレクトリの動的検出 ----------------------------
+
+    /**
+     * インストールされている C コンパイラ（gcc→clang→cc）の標準インクルードディレクトリ一覧
+     * （JVM内で1回だけ計算・キャッシュ）。コンパイラが見つからない・問い合わせに失敗した場合は
+     * 空リスト（以後の呼び出しでも再試行しない。頻繁に呼ばれる K のたびにプロセス起動を
+     * 繰り返さないため）。
+     *
+     * <p>ModalEditor 側の {@code withTimeout()}（1500ms）に途中で割り込まれた場合は、不完全な
+     * 結果を「検出失敗」として永続キャッシュしない（次回の K で再試行させる）。割り込みを永続化
+     * すると、たまたま最初の K 押下時にコンパイラの初回起動が遅かっただけで、以後のセッション
+     * 全体で標準ヘッダへのジャンプが機能しなくなるため。
+     */
+    private static synchronized List<Path> systemIncludeDirs() {
+        if (systemIncludeDirsAttempted) return systemIncludeDirsCache;
+        List<Path> result = discoverSystemIncludeDirs();
+        if (Thread.currentThread().isInterrupted()) {
+            return result; // 中断された結果はキャッシュしない
+        }
+        systemIncludeDirsCache = result;
+        systemIncludeDirsAttempted = true;
+        return systemIncludeDirsCache;
+    }
+
+    private static List<Path> discoverSystemIncludeDirs() {
+        String compiler = findCompiler();
+        if (compiler == null) return List.of();
+        Path tempSrc;
+        try {
+            tempSrc = Files.createTempFile("jte-cinc-", ".c");
+        } catch (IOException e) {
+            return List.of();
+        }
+        Process process = null;
+        try {
+            ProcessBuilder pb = new ProcessBuilder(compiler, "-E", "-v", tempSrc.toString());
+            pb.redirectErrorStream(true); // -v の検索パス一覧は stderr に出るため合流させて読む
+            process = pb.start();
+            String output;
+            try (var in = process.getInputStream()) {
+                output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            process.waitFor(5, TimeUnit.SECONDS);
+            return parseIncludeSearchPaths(output);
+        } catch (IOException e) {
+            return List.of();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return List.of();
+        } finally {
+            // 割り込み等でまだ生きていれば、子プロセスが残留しないよう強制終了する。
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            try {
+                Files.deleteIfExists(tempSrc);
+            } catch (IOException ignored) {
+                // 一時ファイル削除失敗は無視
+            }
+        }
+    }
+
+    /**
+     * gcc/clang の {@code -E -v} 出力から、{@code #include <...> search starts here:} と
+     * {@code End of search list.} の間に列挙されるディレクトリ一覧を抽出する。両コンパイラとも
+     * 同じ書式（ビルドツールがコンパイラのデフォルト検索パスを検出するのに使う標準的な慣習）で
+     * 出力するため、gcc/clang 共通のパーサで扱える。実在しないディレクトリ（出力の解釈ミス等）は
+     * 除外する。
+     */
+    static List<Path> parseIncludeSearchPaths(String verboseOutput) {
+        List<Path> dirs = new ArrayList<>();
+        boolean inSection = false;
+        for (String line : verboseOutput.split("\n")) {
+            String trimmed = line.strip();
+            if (trimmed.startsWith("#include") && trimmed.contains("search starts here")) {
+                inSection = true;
+                continue;
+            }
+            if (trimmed.equals("End of search list.")) {
+                inSection = false;
+                continue;
+            }
+            if (inSection && !trimmed.isEmpty()) {
+                // clang は "(framework directory)" 等の注記を付けることがあるため取り除く。
+                String pathStr = trimmed.replaceAll("\\s*\\(.*\\)\\s*$", "").strip();
+                if (pathStr.isEmpty()) continue;
+                Path p = Path.of(pathStr);
+                if (Files.isDirectory(p)) dirs.add(p);
+            }
+        }
+        return List.copyOf(dirs);
+    }
+
+    /** PATH 上で最初に見つかった C コンパイラ名を返す（無ければ null）。 */
+    private static String findCompiler() {
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null) return null;
+        for (String candidate : COMPILER_CANDIDATES) {
+            for (String dir : pathEnv.split(Pattern.quote(java.io.File.pathSeparator))) {
+                if (dir.isEmpty()) continue;
+                Path p = Path.of(dir, candidate);
+                if (Files.isRegularFile(p) && Files.isExecutable(p)) return candidate;
+                if (Files.isRegularFile(Path.of(dir, candidate + ".exe"))) return candidate;
+            }
+        }
+        return null;
     }
 
     /**

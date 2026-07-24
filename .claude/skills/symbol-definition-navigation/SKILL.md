@@ -670,10 +670,12 @@ catch して NotFound に変換する（⑧ と同じ graceful degradation）。
 - jdk-source 疑似バッファ内でのバインディング解決（表示専用ソースであり compilation unit として
   意味解析する対象ではない。native トレース含め既存フローを維持）。
 
-## C言語の Shift+K（2026-07-24 追加）
+## C言語の Shift+K（2026-07-24 追加、2026-07-25 標準ヘッダ対応を修正）
 
-C言語（`.c`/`.h`）バッファでは、`lookupJdkDoc()`（K の入口）冒頭で `isCFilePath(currentFilePath) && !inJdkSourceBuffer` を判定し、Java 経路（JDT バインディング解決・ヒューリスティック）とは別の `lookupCDefinition()` へ振り分ける。実体は `dev.javatexteditor.analysis.CDefinitionResolver`（正規表現ベースの ctags 風）。設計判断の詳細・分類優先度・安全装置・テストは CLAUDE.md 「C言語の Shift+K 定義ジャンプ（2026-07-24）」節を正とする。要点のみ:
+C言語（`.c`/`.h`）バッファでは、`lookupJdkDoc()`（K の入口）冒頭で `isCFilePath(currentFilePath) && !inJdkSourceBuffer` を判定し、Java 経路（JDT バインディング解決・ヒューリスティック）とは別の `lookupCDefinition()` へ振り分ける。実体は `dev.javatexteditor.analysis.CDefinitionResolver`（正規表現ベースの ctags 風）。設計判断の詳細・分類優先度・安全装置・テストは CLAUDE.md 「C言語の Shift+K 定義ジャンプ（2026-07-24）」「Windows でも Shift+K が標準ライブラリへジャンプできるようにする修正（2026-07-25）」節を正とする。要点のみ:
 
-- `#include "foo.h"`/`<foo.h>` 行 → そのヘッダを開く（引用符=同ディレクトリ優先、山括弧=プロジェクト→`/usr/include`等）。
-- 識別子 → 関数実装(`{`)＞マクロ(`#define`)＞型(`struct`/`enum`/`union`/`typedef`)＞プロトタイプ(`;`) の順。関数実装を最優先することで「ヘッダの宣言→`.c`の実装」をたどれる。
+- `#include "foo.h"`/`<foo.h>` 行 → そのヘッダを開く（引用符=同ディレクトリ優先→プロジェクト全体、山括弧=プロジェクト全体→標準インクルードディレクトリ）。
+- 識別子 → まずプロジェクト内を、関数実装(`{`)＞マクロ(`#define`)＞型(`struct`/`enum`/`union`/`typedef`)＞プロトタイプ(`;`) の順で探す。関数実装を最優先することで「ヘッダの宣言→`.c`の実装」をたどれる。見つからなければ現在のファイルが実際に `#include` しているヘッダ（そこから辿れるヘッダも含む）を幅優先で探索し、標準ライブラリの宣言（`printf`/`NULL`/`size_t` 等）にも対応する。
+- **標準インクルードディレクトリは OS別パスのハードコードではなく、実際にインストールされている C コンパイラ（gcc→clang→cc）に `<compiler> -E -v` で問い合わせて動的に検出する**（Windows の MinGW-w64/MSYS2 でも Linux の glibc でも、その環境の実際のツールチェーンを反映するため正しく動く）。検出結果は JVM 内で1回だけキャッシュする。標準ヘッダ探索は「現在のファイルが実際に #include しているヘッダとその先」だけに限定し、標準インクルードディレクトリ全体を総当たりしない（全走査すると無関係な大量ライブラリのコメントからの誤検出・数秒級の遅延という2つの実害が実機検証で判明したため）。
+- コメント（`/* ... */`・`//`）はマッチング前に除去する（`stripComments`）。除去しないと、コメント中に偶然シンボル名が現れるだけで誤って定義行と判定されてしまう。
 - `withTimeout()`（1500ms）で全走査を打ち切り、`recordJumpOriginIfMoved()` で Shift+J 復帰元を記録（Java の K と共通機構）。Java 経路は無変更。
