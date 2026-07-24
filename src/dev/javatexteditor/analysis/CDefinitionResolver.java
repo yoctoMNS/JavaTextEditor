@@ -412,36 +412,60 @@ public final class CDefinitionResolver {
      * この見出し行も翻訳されうる。英語文字列に一致させる方式では翻訳された環境で常に0件になり、
      * 標準ヘッダへのジャンプが機能しなくなっていた。
      *
-     * <p>代わりに、gcc がこの一覧を出力する際の**構造**（各行が半角スペース1個＋絶対パスという
+     * <p>代わりに、gcc がこの一覧を出力する際の**構造**（各行が半角スペース1個以上＋絶対パスという
      * 固定書式で、この書式自体はロケールに関わらずgcc本体のコードが直接生成するため翻訳されない）
-     * に着目し、「行頭が半角スペースちょうど1個、かつその後が絶対パス（Unix形式 {@code /...} または
+     * に着目し、「行頭が半角スペースで始まり、その後が絶対パス（Unix形式 {@code /...} または
      * Windowsのドライブレター形式 {@code X:\...}/{@code X:/...}）に見える」行だけを抽出する。
      * 最終的に実在するディレクトリだけを残すため、たまたま同じ書式に見える無関係な行が
      * 誤って混入するリスクも低い（コロン+パス形式の非ディレクトリ文字列が実在する可能性は低いため）。
+     *
+     * <p><b>円記号（¥/￥）とバックスラッシュの区別</b>: 日本語ロケールのWindows実機で
+     * このディレクトリ区切りが半角/全角の円記号（{@code ¥}/{@code ￥}）として出力される事例を確認した
+     * （CP932/Shift_JISでバイト0x5Cを円記号として扱う古くからの慣習に由来する）。
+     * {@link #looksLikeAbsolutePath} はこれらもバックスラッシュと同様に区切り文字として認識し、
+     * 実際に {@link Path} を組み立てる前に {@link #normalizeYenSigns} で本物のバックスラッシュへ
+     * 変換する（Javaの{@link Path}実装は円記号を区切り文字として認識しないため、認識するだけでは
+     * 不十分で、変換までしないと実在するディレクトリを正しく指せない）。
      */
     static List<Path> parseIncludeSearchPaths(String verboseOutput) {
         List<Path> dirs = new ArrayList<>();
         for (String line : verboseOutput.split("\n")) {
-            if (!hasExactlyOneLeadingSpace(line)) continue;
+            if (!hasLeadingIndent(line)) continue;
             // clang は "(framework directory)" 等の注記を付けることがあるため取り除く。
-            String pathStr = line.substring(1).replaceAll("\\s*\\(.*\\)\\s*$", "").strip();
+            String pathStr = line.stripLeading().replaceAll("\\s*\\(.*\\)\\s*$", "").strip();
             if (pathStr.isEmpty() || !looksLikeAbsolutePath(pathStr)) continue;
-            Path p = Path.of(pathStr);
+            Path p = Path.of(normalizeYenSigns(pathStr));
             if (Files.isDirectory(p)) dirs.add(p);
         }
         return List.copyOf(dirs);
     }
 
-    /** 行頭が半角スペースちょうど1個で、2文字目以降が空白でない（gccのインクルードパス一覧の書式）。 */
-    private static boolean hasExactlyOneLeadingSpace(String line) {
-        return line.length() > 1 && line.charAt(0) == ' ' && !Character.isWhitespace(line.charAt(1));
+    /** 行頭が半角スペース1個以上で、その直後が空白でない（gccのインクルードパス一覧の書式）。 */
+    private static boolean hasLeadingIndent(String line) {
+        int i = 0;
+        while (i < line.length() && line.charAt(i) == ' ') i++;
+        return i > 0 && i < line.length() && !Character.isWhitespace(line.charAt(i));
     }
 
-    /** Unix形式（{@code /...}）または Windowsのドライブレター形式（{@code X:\...}/{@code X:/...}）。 */
-    private static boolean looksLikeAbsolutePath(String s) {
+    // 半角円記号(U+00A5)・全角円記号(U+FFE5)。日本語ロケールのCP932/Shift_JISコンソールでは
+    // バックスラッシュ(0x5C)がこれらの見た目で扱われることがある（実機確認済み）。
+    private static final char YEN_SIGN = '\u00A5';
+    private static final char FULLWIDTH_YEN_SIGN = '\uFFE5';
+
+    /**
+     * Unix形式（{@code /...}）または Windowsのドライブレター形式（{@code X:\...}/{@code X:/...}、
+     * 区切り文字が円記号 {@code ¥}/{@code ￥} の場合も含む）。
+     */
+    static boolean looksLikeAbsolutePath(String s) {
         if (s.startsWith("/")) return true;
-        return s.length() >= 3 && Character.isLetter(s.charAt(0)) && s.charAt(1) == ':'
-            && (s.charAt(2) == '\\' || s.charAt(2) == '/');
+        if (s.length() < 3 || !Character.isLetter(s.charAt(0)) || s.charAt(1) != ':') return false;
+        char sep = s.charAt(2);
+        return sep == '\\' || sep == '/' || sep == YEN_SIGN || sep == FULLWIDTH_YEN_SIGN;
+    }
+
+    /** 円記号（¥/￥）を本物のバックスラッシュへ変換する（{@link Path} が区切り文字として認識できるようにする）。 */
+    static String normalizeYenSigns(String s) {
+        return s.replace(YEN_SIGN, '\\').replace(FULLWIDTH_YEN_SIGN, '\\');
     }
 
     /** PATH 上で最初に見つかった C コンパイラ名を返す（無ければ null）。 */

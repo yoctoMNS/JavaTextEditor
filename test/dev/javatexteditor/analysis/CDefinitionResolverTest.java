@@ -54,9 +54,16 @@ public class CDefinitionResolverTest {
         testParseIncludeSearchPathsBasic();
         testParseIncludeSearchPathsStripsAnnotation();
         testParseIncludeSearchPathsIgnoresLocalizedMarkerText();
+        testParseIncludeSearchPathsVerbatimJapaneseMinGWOutput();
         testParseIncludeSearchPathsIgnoresNonExistentDirs();
         testParseIncludeSearchPathsNoSectionReturnsEmpty();
         testParseIncludeSearchPathsIgnoresIndentedProse();
+        testLooksLikeAbsolutePathAcceptsYenSignSeparator();
+        testLooksLikeAbsolutePathAcceptsFullwidthYenSignSeparator();
+        testLooksLikeAbsolutePathStillAcceptsRealBackslash();
+        testNormalizeYenSignsConvertsHalfWidthToBackslash();
+        testNormalizeYenSignsConvertsFullWidthToBackslash();
+        testNormalizeYenSignsLeavesOtherTextUnchanged();
 
         // 実コンパイラに依存する統合テスト（無い環境ではskip）
         testResolveStandardLibrarySymbolViaRealCompiler();
@@ -370,6 +377,71 @@ public class CDefinitionResolverTest {
         assertEquals("localized markers still yield 2 dirs", 2, dirs.size());
         assertTrue("contains d1 despite localized headers", dirs.contains(d1));
         assertTrue("contains d2 despite localized headers", dirs.contains(d2));
+    }
+
+    static void testParseIncludeSearchPathsVerbatimJapaneseMinGWOutput() throws IOException {
+        // ユーザーが実機（日本語ロケールのWindows + MinGW.org GCC 6.3.0）で報告した gcc -E -v の
+        // 実際の出力の文言・構造をほぼそのまま再現する（ディレクトリ部分だけ実在する一時ディレクトリに
+        // 差し替え）。見出し行が完全に日本語化されていても、ディレクトリ一覧の行だけを正しく
+        // 抽出できることを検証する。
+        Path d1 = Files.createTempDirectory("mingw1");
+        Path d2 = Files.createTempDirectory("mingw2");
+        String output = """
+            組み込み spec を使用しています。
+            COLLECT_GCC=gcc
+            ターゲット: mingw32
+            configure 設定: ../src/gcc-6.3.0/configure --host=mingw32
+            スレッドモデル: win32
+            gcc バージョン 6.3.0 (MinGW.org GCC-6.3.0-1)
+            COLLECT_GCC_OPTIONS='-E' '-v' '-mtune=generic' '-march=i586'
+             c:/mingw/bin/../libexec/gcc/mingw32/6.3.0/cc1.exe -E -quiet -v mini.c
+            # 1 "mini.c"
+            int main(void){return 0;}
+            存在しないディレクトリ "c:/mingw/does/not/exist" を無視します
+            重複したディレクトリ "c:/mingw/duplicate" を無視します
+            #include "..." の探索はここから始まります:
+            #include <...> の探索はここから始まります:
+             %s
+             %s
+            探索リストの終わりです。
+            COMPILER_PATH=c:/mingw/bin/../libexec/gcc/mingw32/6.3.0/
+            """.formatted(d1, d2);
+        java.util.List<Path> dirs = CDefinitionResolver.parseIncludeSearchPaths(output);
+        assertEquals("verbatim real-world output yields exactly 2 dirs", 2, dirs.size());
+        assertTrue("contains d1", dirs.contains(d1));
+        assertTrue("contains d2", dirs.contains(d2));
+    }
+
+    // ---- 円記号（¥/￥）をバックスラッシュとして扱う（日本語CP932コンソールの既知の挙動） ----
+
+    static void testLooksLikeAbsolutePathAcceptsYenSignSeparator() {
+        assertTrue("half-width yen sign recognized as Windows path separator",
+            CDefinitionResolver.looksLikeAbsolutePath("c:\u00A5mingw\u00A5bin"));
+    }
+
+    static void testLooksLikeAbsolutePathAcceptsFullwidthYenSignSeparator() {
+        assertTrue("full-width yen sign recognized as Windows path separator",
+            CDefinitionResolver.looksLikeAbsolutePath("c:\uFFE5mingw\uFFE5bin"));
+    }
+
+    static void testLooksLikeAbsolutePathStillAcceptsRealBackslash() {
+        assertTrue("real backslash still recognized",
+            CDefinitionResolver.looksLikeAbsolutePath("c:\\mingw\\bin"));
+    }
+
+    static void testNormalizeYenSignsConvertsHalfWidthToBackslash() {
+        assertEquals("half-width yen -> backslash", "c:\\mingw\\bin",
+            CDefinitionResolver.normalizeYenSigns("c:\u00A5mingw\u00A5bin"));
+    }
+
+    static void testNormalizeYenSignsConvertsFullWidthToBackslash() {
+        assertEquals("full-width yen -> backslash", "c:\\mingw\\bin",
+            CDefinitionResolver.normalizeYenSigns("c:\uFFE5mingw\uFFE5bin"));
+    }
+
+    static void testNormalizeYenSignsLeavesOtherTextUnchanged() {
+        assertEquals("no yen signs -> unchanged", "/usr/include",
+            CDefinitionResolver.normalizeYenSigns("/usr/include"));
     }
 
     static void testParseIncludeSearchPathsIgnoresNonExistentDirs() {
