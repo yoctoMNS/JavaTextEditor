@@ -10,7 +10,7 @@ Vimのモーダル編集とEmacsの拡張性の良い所を統合した、Java S
 - **マクロ・大文字小文字変換**: `q`/`@` によるキーストローク記録・再生、`~`/`guu`/`gUU`/`g~~` による大文字小文字変換
 - **高速バッファ**: ピーステーブル方式により大規模ファイル（数十万行）でも高速に挿入・削除
 - **Java開発支援**: コンパイルエラー表示、定義ジャンプ、Javadoc参照、auto-import、プロジェクト全体のリネーム、`java`/`javac` launcher・HotSpotソースへのジャンプ、`F10`/`F11`/`F12` によるプロジェクト全体のコンパイル・実行
-- **C言語開発支援**: `gcc`/`clang` 連携によるコンパイル・実行（`F10`/`F11`/`F12`）、`gcc -fsyntax-only` によるエラー・警告のインライン表示、`#include` の自動挿入、`Shift+K` による定義ジャンプ（ヘッダ→実装をたどる・`#include` 先を開く）（`.c`/`.h` を開くと有効。詳細は [docs/manual/11-c-tooling.md](docs/manual/11-c-tooling.md)）
+- **C言語開発支援**: `gcc`/`clang` 連携によるコンパイル・実行（`F10`/`F11`/`F12`）、`gcc -fsyntax-only` によるエラー・警告のインライン表示、`#include` の自動挿入、`Shift+K` による定義ジャンプ（ヘッダ→実装をたどる・`#include` 先を開く・実際のCコンパイラに問い合わせて標準ライブラリ（`printf`/`size_t`等）へもジャンプ、Windows/Linux両対応）（`.c`/`.h` を開くと有効。詳細は [docs/manual/11-c-tooling.md](docs/manual/11-c-tooling.md)）
 - **検索・ナビゲーション**: バッファ内検索、ファイル名/grep検索、telescope風ファジーファインダー、ディレクトリブラウザ（FILER）
 - **コード補完**: 作業ディレクトリ全体の識別子とJDKクラス名を対象にしたリアルタイム補完
 - **プラグインシステム**: `javax.tools.JavaCompiler` による動的コンパイルでJavaファイルをその場でロード
