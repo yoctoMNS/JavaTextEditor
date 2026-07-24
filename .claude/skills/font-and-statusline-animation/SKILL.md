@@ -404,3 +404,17 @@ static int testFrameCalculation() {
 - このプロジェクトの関連スキル:
   - `.claude/skills/gui-rendering-pipeline/SKILL.md`: Swing/AWT描画の基礎（カーソル・全角対応）
   - `.claude/skills/gui-rendering-pipeline/references/future-phases.md`: v4以降の描画拡張計画
+
+## 実装済みの変更: TTF（IBM Plex Mono Regular）から MiscFixedFont10x20 への回帰（2026-07・第3弾）
+
+直前の節（「misc-fixed 生成ビットマップフォント方式から実TTFレンダリング方式への全面移行」）でTTF方式へ全面移行していたが、ユーザーから改めて「やっぱりMiscFixedFontの10x20を採用してほしい。ただし文字の大きさの比率は維持してほしい」という指示があり、TTFベースの `TtfMonoFont` を廃止して `dev.javatexteditor.ui.MiscFixedFont10x20`（新設）によるビットマップ描画へ回帰した。
+
+- **実装前に `AskUserQuestion` で2点確認済み**: ①変更範囲は「単一の10x20ビットマップのみ復活」（TTF移行前に存在した5x7〜9x18の12サイズ自動切替アーキテクチャ（`FixedBitmapFont`/`FixedFontCatalog`/`FixedFontRenderer`）は再導入しない）、②「比率を維持」は「セルの縦横比（幅:高さ）」を指す。`TtfMonoFont.BASE_CELL_W`/`BASE_CELL_H` は移行後も10/20のまま変わっていなかったため、この確認により「既定セル比率10:20は変更不要、glyph自体のネイティブ描画に戻すだけでよい」ことが確定した。
+- **グリフデータの再取得**: 過去に存在した `BitmapFont10x20.java`（手書きバイト配列）は、TTF移行時に完全削除されリポジトリ履歴にも一切残っていなかった（`git log --all -S` で確認済み、コミットされたことが無かった）。そのため `apt-get install xfonts-base pcf2bdf` で実際の X11 misc-fixed 10x20（`/usr/share/fonts/X11/misc/10x20-ISO8859-1.pcf.gz`）を取得し直し、`pcf2bdf` でBDF化した上でPythonスクリプトでBBX/BITMAPセクションを読み取ってJavaの`byte[]`ソースを機械生成した（生成スクリプトは使い捨てのためリポジトリには残していない。手法自体は本SKILLの「横縦比率に応じたビットマップフォント自動切替」節で確立済みの生成パイプラインの再利用）。全95グリフ（ASCII 0x20-0x7E）ともBBXが `10 20 0 -4`（幅10・高さ20・descent 4・ascent 16）で完全に統一されており、パディングオフセット計算は不要だった。
+- **`MiscFixedFont10x20` の設計**: シングルトン（`INSTANCE`）。`isSupported(int)`/`descentPixels(int)`/`renderGlyph(int,int,int,int)` という `TtfMonoFont` と全く同じ3メソッド契約を維持したドロップイン置き換えにした（`EditorCanvas`/`Main` 側の呼び出し規約変更を最小化するため）。`renderGlyph()` はネイティブ10x20ビットマップを `cellW`/`cellH` へ縦横独立のニアレストネイバーで拡縮する（TTF版が非等方向アフィン変換で実現していた「Ctrl+Shift+矢印でセル比率が崩れても破綻しない」という可変仕様を、ビットマップ版では独立軸ニアレストネイバーで実現するという、TTF移行前の`FixedFontRenderer`と同じ考え方に回帰している）。`descentPixels(cellH)` はネイティブ比率 `4/20` をセル高さへ比例配分する。
+- **`EditorCanvas`/`Main`側の変更**: `TtfMonoFont` → `MiscFixedFont10x20` への機械的な置き換え（型・`BASE_CELL_W`/`BASE_CELL_H`参照）に加え、フィールド名 `ttfFont` → `bitmapFont`（実体を正確に表す名前へ変更）、コメント中の「IBM Plex Mono」「TTF」表記を「misc-fixed」表記へ更新した。`cellW`/`cellH` の可変範囲（5〜40 / 8〜80）・グリフキャッシュ機構（`glyphCacheFg`/`Bg`/`uiGlyphCache`）は無変更。
+- **`scripts/setup.sh`/`setup.bat` のフォントダウンロード処理（第2弾で追加した「4. IBM Plex Mono Regular (TTF) の取得」節）を削除した**。misc-fixed版はグリフデータをソースに直接埋め込むため、`lib/fonts/`への実行時ダウンロードが不要になったため（TTF移行前の状態と同じ、フォント関連の外部リソース取得ステップ自体が存在しない）。`lib/fonts/IBMPlexMono-Regular.ttf`・`IBMPlexMono-OFL.txt` は今後生成されない。
+- **削除したファイル**: `TtfMonoFont.java`。テスト（`EditorCanvasTest`）は `TtfMonoFont.INSTANCE.xxx` の呼び出し3箇所を `MiscFixedFont10x20.INSTANCE.xxx` に機械的に置き換えただけで、アサーション内容自体は変更していない（サイズ検証・点灯ピクセル数検証はフォント実装に依存しない検証のため、そのまま有効）。
+- **ライセンス**: misc-fixedはPublic domain（BDFの`COPYRIGHT`プロパティに`"Public domain font. Share and enjoy."`と明記）。IBM Plex Mono（SIL OFL 1.1）に伴っていたライセンス表記・配布条件の考慮は不要になった。
+- **テスト・目視確認**: 既存の `EditorCanvasTest`（フォント関連3テスト含む51/51）・全体テストスイート（既知のベースラインFAIL、`ScrollTest`2件・`ModalEditorTest`1件を除き全PASS）を確認済み。加えてスクラッチパッドで簡易プレビュー画像を生成し、10x20セルでのASCII全体・記号類の可読性を目視確認済み。
+- **意図的にスコープ外とした点**: TTF移行前に存在した「セル縦横比に応じて5x7〜9x18の12サイズから自動選択する」仕組み（`FixedFontCatalog.select()`）は今回のユーザー指示（「単一の10x20ビットマップのみ復活」を選択）により再導入していない。`Ctrl+Shift+矢印`でセルサイズを大きく変えた場合、TTF版のようなアンチエイリアス付きベクター変形ではなく、ネイティブ10x20ビットマップをニアレストネイバーで拡縮した結果になる（拡大時は角ばった見た目になる）ことは、ユーザーが明示的に選択した仕様である。
