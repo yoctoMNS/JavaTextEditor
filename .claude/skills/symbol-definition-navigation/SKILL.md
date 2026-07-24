@@ -669,3 +669,11 @@ catch して NotFound に変換する（⑧ と同じ graceful degradation）。
   MAX_SOURCE_FILES と非同期化で実用上問題ないと判断）。
 - jdk-source 疑似バッファ内でのバインディング解決（表示専用ソースであり compilation unit として
   意味解析する対象ではない。native トレース含め既存フローを維持）。
+
+## C言語の Shift+K（2026-07-24 追加）
+
+C言語（`.c`/`.h`）バッファでは、`lookupJdkDoc()`（K の入口）冒頭で `isCFilePath(currentFilePath) && !inJdkSourceBuffer` を判定し、Java 経路（JDT バインディング解決・ヒューリスティック）とは別の `lookupCDefinition()` へ振り分ける。実体は `dev.javatexteditor.analysis.CDefinitionResolver`（正規表現ベースの ctags 風）。設計判断の詳細・分類優先度・安全装置・テストは CLAUDE.md 「C言語の Shift+K 定義ジャンプ（2026-07-24）」節を正とする。要点のみ:
+
+- `#include "foo.h"`/`<foo.h>` 行 → そのヘッダを開く（引用符=同ディレクトリ優先、山括弧=プロジェクト→`/usr/include`等）。
+- 識別子 → 関数実装(`{`)＞マクロ(`#define`)＞型(`struct`/`enum`/`union`/`typedef`)＞プロトタイプ(`;`) の順。関数実装を最優先することで「ヘッダの宣言→`.c`の実装」をたどれる。
+- `withTimeout()`（1500ms）で全走査を打ち切り、`recordJumpOriginIfMoved()` で Shift+J 復帰元を記録（Java の K と共通機構）。Java 経路は無変更。

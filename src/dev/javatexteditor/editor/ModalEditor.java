@@ -214,6 +214,9 @@ public class ModalEditor {
     // Main.java が本番配線で有効化し、実行機構（仮想スレッド + SwingUtilities.invokeLater）を注入する。
     // テストは同期実行機構（Runnable::run）で有効化することで processKey 直後の同期 assert を維持できる。
     private final BindingDefinitionResolver bindingDefinitionResolver = new BindingDefinitionResolver();
+    // C言語（.c/.h）の Shift+K 定義ジャンプ用リゾルバ（正規表現ベースの ctags 風）。
+    private final dev.javatexteditor.analysis.CDefinitionResolver cDefinitionResolver =
+        new dev.javatexteditor.analysis.CDefinitionResolver();
     private boolean bindingLookupEnabled = false;
     private Consumer<Runnable> bindingLookupExecutor = Runnable::run;
     private Consumer<Runnable> bindingLookupUiDispatcher = Runnable::run;
@@ -5494,6 +5497,12 @@ public class ModalEditor {
     private void lookupJdkDoc() {
         BufferSnapshot before = new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
 
+        // C言語（.c/.h）バッファでは C 専用の定義ジャンプへ振り分ける（jdk-source 疑似バッファ内は除く）。
+        if (isCFilePath(currentFilePath) && !inJdkSourceBuffer) {
+            lookupCDefinition(before);
+            return;
+        }
+
         // 最優先段: Eclipse JDT 流のバインディング解決（有効化されている場合のみ）。
         // jdk-source 疑似バッファ内は対象外（表示専用のJDKソース/ネイティブスニペットであり、
         // プロジェクトの compilation unit として意味解析する対象ではない。ネイティブトレース等の
@@ -5529,6 +5538,47 @@ public class ModalEditor {
 
         lookupJdkDocAndJump(before.text());
         recordJumpOriginIfMoved(before);
+    }
+
+    /** currentFilePath が C 系（.c/.h/.cc/.cpp/.hpp 等）拡張子かどうか。 */
+    private static boolean isCFilePath(String path) {
+        if (path == null) return false;
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".c") || lower.endsWith(".h") || lower.endsWith(".cc")
+            || lower.endsWith(".cpp") || lower.endsWith(".cxx")
+            || lower.endsWith(".hpp") || lower.endsWith(".hh") || lower.endsWith(".hxx");
+    }
+
+    /**
+     * C言語の Shift+K 定義ジャンプ。カーソルが #include 行ならそのヘッダを開き、識別子の上なら
+     * プロジェクト配下の .c/.h から定義（関数実装＞マクロ＞型＞プロトタイプの順）を探してジャンプする。
+     * プロジェクト全体走査は {@link #withTimeout} で打ち切り、EDT の長時間フリーズを防ぐ
+     * （Java 側ヒューリスティック経路と同じ扱い）。
+     */
+    private void lookupCDefinition(BufferSnapshot before) {
+        final String src = before.text();
+        final Path root = getProjectRoot();
+        final Path currentFile = (currentFilePath != null) ? Path.of(currentFilePath) : null;
+        final int row = cursorRow;
+        final int col = cursorCol;
+        dev.javatexteditor.analysis.CDefinitionResolver.Location loc = withTimeout(() ->
+            cDefinitionResolver.resolve(src, currentFile, row, col, root));
+        if (loc == null) {
+            setStatusMessage("C: definition not found");
+            return;
+        }
+        String targetPath = loc.file().toString();
+        if (!targetPath.equals(currentFilePath)) {
+            loadFromFile(targetPath);
+        }
+        String[] lines = getLines();
+        cursorRow = Math.max(0, Math.min(loc.line(), lines.length - 1));
+        cursorCol = 0;
+        String fileName = loc.file().getFileName() != null
+            ? loc.file().getFileName().toString() : targetPath;
+        setStatusMessage("→ " + loc.label() + "  " + fileName + ":" + (loc.line() + 1));
+        recordJumpOriginIfMoved(before);
+        syncCanvas();
     }
 
     /**
