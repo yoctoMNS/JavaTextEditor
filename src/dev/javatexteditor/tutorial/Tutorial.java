@@ -520,6 +520,12 @@ C コンパイラが見つからない環境では、これらの機能は静か
               保存時・INSERT→NORMAL 復帰時に gcc -fsyntax-only で
               解析され、E/W ガターと波下線が表示されます（Java と共通）
   F2          カーソル行のエラー・警告の一覧をダイアログ表示（共通）
+  K           定義ジャンプ（Shift+K）。カーソル位置により動作が変わります:
+              ・関数名の上 → プロジェクト内の実装（.c の関数本体）へジャンプ。
+                ヘッダに宣言しか無くても実装をたどれます
+              ・マクロ／型（struct/enum/typedef）の上 → 定義行（多くはヘッダ）へ
+              ・#include "foo.h" / <foo.h> の行 → そのヘッダファイルを開く
+  Shift+J     直前の K ジャンプ元へ戻る（Java と共通）
 
 #include の自動挿入（Java の auto-import の C 版）も備えています。
 printf / malloc / strlen / sqrt / size_t のような標準ライブラリの

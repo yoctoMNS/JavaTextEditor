@@ -65,8 +65,8 @@
 | `Esc` `Esc`（2回連続） | 検索ハイライトを強制クリア（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `\f` `\g` | ファイル名検索/grep検索（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `SPC+f` `SPC+/` `SPC+b` | telescope（ファイル/grep/バッファ）（[検索・ナビゲーション](03-search-and-navigation.md)） |
-| `K` | 定義・ドキュメント参照（[Java開発支援](04-java-tooling.md)） |
-| `Shift+J` | `K` ジャンプ元へ戻る（[Java開発支援](04-java-tooling.md)） |
+| `K` | 定義・ドキュメント参照。Java=定義/Javadoc、C=定義/ヘッダジャンプ（[Java](04-java-tooling.md) / [C](11-c-tooling.md#定義ジャンプshiftk--k)） |
+| `Shift+J` | `K` ジャンプ元へ戻る（Java/C 共通。[Java開発支援](04-java-tooling.md)） |
 | `gr` `gR` | 参照検索・全ファイル参照検索（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `sv` `ss` | ペイン垂直/水平分割（[編集支援機能](06-editing-features.md)） |
 | `sh` `sk` `sl` `sj` | 前/次のペインへフォーカス移動（[編集支援機能](06-editing-features.md)） |
