@@ -374,6 +374,11 @@ public final class CDefinitionResolver {
         try {
             ProcessBuilder pb = new ProcessBuilder(compiler, "-E", "-v", tempSrc.toString());
             pb.redirectErrorStream(true); // -v の検索パス一覧は stderr に出るため合流させて読む
+            // gcc/clang は環境のロケールに応じて診断メッセージ自体を翻訳することがある
+            // （日本語Windows環境で実機確認済み）。LC_ALL/LANGをCへ強制し、可能な限り
+            // 未翻訳の出力にする（parseIncludeSearchPaths側の構造的な解析と合わせた二重の対策）。
+            pb.environment().put("LC_ALL", "C");
+            pb.environment().put("LANG", "C");
             process = pb.start();
             String output;
             try (var in = process.getInputStream()) {
@@ -398,34 +403,45 @@ public final class CDefinitionResolver {
     }
 
     /**
-     * gcc/clang の {@code -E -v} 出力から、{@code #include <...> search starts here:} と
-     * {@code End of search list.} の間に列挙されるディレクトリ一覧を抽出する。両コンパイラとも
-     * 同じ書式（ビルドツールがコンパイラのデフォルト検索パスを検出するのに使う標準的な慣習）で
-     * 出力するため、gcc/clang 共通のパーサで扱える。実在しないディレクトリ（出力の解釈ミス等）は
-     * 除外する。
+     * gcc/clang の {@code -E -v} 出力から標準インクルードディレクトリ一覧を抽出する。
+     *
+     * <p><b>英語の見出し文字列（{@code #include <...> search starts here:} /
+     * {@code End of search list.}）には依存しない</b>。実機（日本語ロケールのWindows + MinGW）で
+     * 検証したところ、gcc は診断メッセージ全体をシステムロケールに応じて翻訳することがあり
+     * （{@code gcc -v} 単体の出力でも "Configured with:" 等が翻訳されていることを確認済み）、
+     * この見出し行も翻訳されうる。英語文字列に一致させる方式では翻訳された環境で常に0件になり、
+     * 標準ヘッダへのジャンプが機能しなくなっていた。
+     *
+     * <p>代わりに、gcc がこの一覧を出力する際の**構造**（各行が半角スペース1個＋絶対パスという
+     * 固定書式で、この書式自体はロケールに関わらずgcc本体のコードが直接生成するため翻訳されない）
+     * に着目し、「行頭が半角スペースちょうど1個、かつその後が絶対パス（Unix形式 {@code /...} または
+     * Windowsのドライブレター形式 {@code X:\...}/{@code X:/...}）に見える」行だけを抽出する。
+     * 最終的に実在するディレクトリだけを残すため、たまたま同じ書式に見える無関係な行が
+     * 誤って混入するリスクも低い（コロン+パス形式の非ディレクトリ文字列が実在する可能性は低いため）。
      */
     static List<Path> parseIncludeSearchPaths(String verboseOutput) {
         List<Path> dirs = new ArrayList<>();
-        boolean inSection = false;
         for (String line : verboseOutput.split("\n")) {
-            String trimmed = line.strip();
-            if (trimmed.startsWith("#include") && trimmed.contains("search starts here")) {
-                inSection = true;
-                continue;
-            }
-            if (trimmed.equals("End of search list.")) {
-                inSection = false;
-                continue;
-            }
-            if (inSection && !trimmed.isEmpty()) {
-                // clang は "(framework directory)" 等の注記を付けることがあるため取り除く。
-                String pathStr = trimmed.replaceAll("\\s*\\(.*\\)\\s*$", "").strip();
-                if (pathStr.isEmpty()) continue;
-                Path p = Path.of(pathStr);
-                if (Files.isDirectory(p)) dirs.add(p);
-            }
+            if (!hasExactlyOneLeadingSpace(line)) continue;
+            // clang は "(framework directory)" 等の注記を付けることがあるため取り除く。
+            String pathStr = line.substring(1).replaceAll("\\s*\\(.*\\)\\s*$", "").strip();
+            if (pathStr.isEmpty() || !looksLikeAbsolutePath(pathStr)) continue;
+            Path p = Path.of(pathStr);
+            if (Files.isDirectory(p)) dirs.add(p);
         }
         return List.copyOf(dirs);
+    }
+
+    /** 行頭が半角スペースちょうど1個で、2文字目以降が空白でない（gccのインクルードパス一覧の書式）。 */
+    private static boolean hasExactlyOneLeadingSpace(String line) {
+        return line.length() > 1 && line.charAt(0) == ' ' && !Character.isWhitespace(line.charAt(1));
+    }
+
+    /** Unix形式（{@code /...}）または Windowsのドライブレター形式（{@code X:\...}/{@code X:/...}）。 */
+    private static boolean looksLikeAbsolutePath(String s) {
+        if (s.startsWith("/")) return true;
+        return s.length() >= 3 && Character.isLetter(s.charAt(0)) && s.charAt(1) == ':'
+            && (s.charAt(2) == '\\' || s.charAt(2) == '/');
     }
 
     /** PATH 上で最初に見つかった C コンパイラ名を返す（無ければ null）。 */
