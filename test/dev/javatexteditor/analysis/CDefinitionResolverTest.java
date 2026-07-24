@@ -53,8 +53,10 @@ public class CDefinitionResolverTest {
         // parseIncludeSearchPaths（gcc/clang -E -v 出力の解析）
         testParseIncludeSearchPathsBasic();
         testParseIncludeSearchPathsStripsAnnotation();
+        testParseIncludeSearchPathsIgnoresLocalizedMarkerText();
         testParseIncludeSearchPathsIgnoresNonExistentDirs();
         testParseIncludeSearchPathsNoSectionReturnsEmpty();
+        testParseIncludeSearchPathsIgnoresIndentedProse();
 
         // 実コンパイラに依存する統合テスト（無い環境ではskip）
         testResolveStandardLibrarySymbolViaRealCompiler();
@@ -351,6 +353,25 @@ public class CDefinitionResolverTest {
         assertEquals("strips clang framework annotation", java.util.List.of(d1), dirs);
     }
 
+    static void testParseIncludeSearchPathsIgnoresLocalizedMarkerText() throws IOException {
+        // 実機（日本語ロケールのWindows + MinGW）で確認した事象の再現: gcc が見出し行を翻訳しても、
+        // ディレクトリ一覧の行そのもの（半角スペース1個 + 絶対パス）はロケールに関わらず解析できる
+        // ことを検証する（英語の "search starts here"/"End of search list." が存在しない状況）。
+        Path d1 = Files.createTempDirectory("localized1");
+        Path d2 = Files.createTempDirectory("localized2");
+        String output = """
+            使用するビルトイン spec を表示します
+            インクルード検索はここから始まります:
+             %s
+             %s
+            検索リストの終わり。
+            """.formatted(d1, d2);
+        java.util.List<Path> dirs = CDefinitionResolver.parseIncludeSearchPaths(output);
+        assertEquals("localized markers still yield 2 dirs", 2, dirs.size());
+        assertTrue("contains d1 despite localized headers", dirs.contains(d1));
+        assertTrue("contains d2 despite localized headers", dirs.contains(d2));
+    }
+
     static void testParseIncludeSearchPathsIgnoresNonExistentDirs() {
         String output = """
             #include <...> search starts here:
@@ -364,6 +385,13 @@ public class CDefinitionResolverTest {
     static void testParseIncludeSearchPathsNoSectionReturnsEmpty() {
         assertEquals("no search-list markers -> empty", 0,
             CDefinitionResolver.parseIncludeSearchPaths("just some unrelated compiler output\n").size());
+    }
+
+    static void testParseIncludeSearchPathsIgnoresIndentedProse() {
+        // 半角スペース1個で始まる行でも、絶対パスの形をしていなければ無視する
+        // （構造的検出への変更で、無関係な1字下げテキストを誤って拾わないことを確認）。
+        assertEquals("indented non-path text ignored", 0,
+            CDefinitionResolver.parseIncludeSearchPaths(" this is just some indented note\n").size());
     }
 
     // ---- 実コンパイラに依存する統合テスト（無い環境ではskip） ----
