@@ -99,8 +99,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private Set<Integer> errorLines = Set.of();
 
     // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
-    private int cellW = TtfMonoFont.BASE_CELL_W;
-    private int cellH = TtfMonoFont.BASE_CELL_H;
+    private int cellW = MiscFixedFont10x20.BASE_CELL_W;
+    private int cellH = MiscFixedFont10x20.BASE_CELL_H;
 
     // Ctrl+Shift+矢印でセルサイズを変更した直後、現在の幅×高さ(px)を3秒間だけ
     // 画面右上に表示して自動的に消えるオーバーレイ。sizeOverlayHideTimerは
@@ -111,9 +111,9 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         repaint();
     });
 
-    // 半角ASCIIは IBM Plex Mono Regular (TTF) を cellW×cellH に合わせて
-    // 非等方向にスケールしてラスタライズする（TtfMonoFont参照）。
-    private final TtfMonoFont ttfFont = TtfMonoFont.INSTANCE;
+    // 半角ASCIIは X11 misc-fixed 10x20 のビットマップグリフを cellW×cellH に合わせて
+    // 縦横独立にニアレストネイバー拡縮してラスタライズする（MiscFixedFont10x20参照）。
+    private final MiscFixedFont10x20 bitmapFont = MiscFixedFont10x20.INSTANCE;
 
     // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
     // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
@@ -573,21 +573,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private BufferedImage getUiGlyph(int codePoint, int cw, int ch, Color color) {
         UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
         return uiGlyphCache.computeIfAbsent(key,
-            k -> ttfFont.renderGlyph(codePoint, cw, ch, color.getRGB()));
+            k -> bitmapFont.renderGlyph(codePoint, cw, ch, color.getRGB()));
     }
 
     /**
-     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を IBM Plex Mono
+     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を misc-fixed
      * ビットマップフォントで描画する（本文の drawLineWithFullWidthSupport と同じ配色規則:
      * ASCIIはビットマップフォント、それ以外（日本語等）は Swing フォールバックフォント）。
      * y はセル下端（ベースライン）のY座標。
      */
     private void drawUiText(Graphics2D g2, String s, int x, int y, int cw, int ch, Color color) {
-        int swingBaselineY = y - ttfFont.descentPixels(ch);
+        int swingBaselineY = y - bitmapFont.descentPixels(ch);
         for (int i = 0; i < s.length(); ) {
             int cp = s.codePointAt(i);
             int widthMult = charCellWidth(cp);
-            if (ttfFont.isSupported(cp)) {
+            if (bitmapFont.isSupported(cp)) {
                 g2.drawImage(getUiGlyph(cp, cw, ch, color), x, y - ch, null);
             } else {
                 Color prev = g2.getColor();
@@ -622,12 +622,12 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     private BufferedImage getGlyphFg(int cp) {
         return glyphCacheFg.computeIfAbsent(cp,
-            k -> ttfFont.renderGlyph(k, cellW, cellH, theme.foreground.getRGB()));
+            k -> bitmapFont.renderGlyph(k, cellW, cellH, theme.foreground.getRGB()));
     }
 
     private BufferedImage getGlyphBg(int cp) {
         return glyphCacheBg.computeIfAbsent(cp,
-            k -> ttfFont.renderGlyph(k, cellW, cellH, theme.background.getRGB()));
+            k -> bitmapFont.renderGlyph(k, cellW, cellH, theme.background.getRGB()));
     }
 
     private Font getSwingFont() {
@@ -924,7 +924,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     private void paintContent(Graphics2D g2) {
-        // ビットマップフォント(TtfMonoFont)のグリフはラスタライズ時に既にアンチエイリアス済みだが、
+        // ビットマップフォント(MiscFixedFont10x20)のグリフはニアレストネイバーで拡縮済みだが、
         // 非ASCIIフォールバック（Swingフォント）でのdrawString呼び出し（ステータス行・スプラッシュ・
         // telescope・補完ポップアップ等）にはヒントが効いていなかったため、この g2 を使う全描画に
         // 共通で適用されるようここで一度だけ設定する（以下の draw* メソッドは全て同じ g2 を共有する）。
@@ -1085,7 +1085,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.setColor(theme.accent);
         g2.drawRect(ox, oy, overlayW, overlayH);
 
-        // 本文と同じ IBM Plex Mono のセルサイズをそのまま使う
+        // 本文と同じ misc-fixed のセルサイズをそのまま使う
         int cw = cellW;
         int fh = lineHeight;
         int pad = 4;
@@ -1219,7 +1219,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     /**
      * 全角文字を考慮しながら1行を描画する。
-     * ASCII(0x20-0x7E): TtfMonoFont (IBM Plex Mono Regular) でレンダリング。
+     * ASCII(0x20-0x7E): MiscFixedFont10x20 (X11 misc-fixed 10x20) でレンダリング。
      * それ以外: Swing フォント（g2 に設定済み）で描画。
      * y はベースライン（セル底辺）の Y 座標。
      */
@@ -1227,13 +1227,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             int charWidth, int scrollOffsetX, int gutterWidth, boolean isErrorLine) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
-        int swingBaselineY = y - ttfFont.descentPixels(cellH);
+        int swingBaselineY = y - bitmapFont.descentPixels(cellH);
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
             int widthMult = charCellWidth(codePoint);
             int charPixelWidth = charWidth * widthMult;
             if (x + charPixelWidth > 0 && x < getWidth()) {
-                if (ttfFont.isSupported(codePoint)) {
+                if (bitmapFont.isSupported(codePoint)) {
                     // errorLines 指定行のみ ERROR_COLOR の別キャッシュ（uiGlyphCache）で描画する。
                     // 通常行は本文専用キャッシュ（glyphCacheFg、テーマ色固定）のまま高速に保つ。
                     BufferedImage glyph = isErrorLine
@@ -1280,11 +1280,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.setColor(theme.foreground);
         g2.fillRect(x, yTop, blockWidth, lineHeight);
         if (codePoint != -1) {
-            if (ttfFont.isSupported(codePoint)) {
+            if (bitmapFont.isSupported(codePoint)) {
                 g2.drawImage(getGlyphBg(codePoint), x, yTop, null);
             } else {
                 g2.setColor(theme.background);
-                int swingBaselineY = (screenRow + 1) * lineHeight - ttfFont.descentPixels(lineHeight);
+                int swingBaselineY = (screenRow + 1) * lineHeight - bitmapFont.descentPixels(lineHeight);
                 g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
             }
         }
