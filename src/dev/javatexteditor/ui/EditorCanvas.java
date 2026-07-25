@@ -99,8 +99,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private Set<Integer> errorLines = Set.of();
 
     // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
-    private int cellW = MiscFixedBold10x20.BASE_CELL_W;
-    private int cellH = MiscFixedBold10x20.BASE_CELL_H;
+    private int cellW = MiscFixedBold9x15.BASE_CELL_W;
+    private int cellH = MiscFixedBold9x15.BASE_CELL_H;
 
     // Ctrl+Shift+矢印でセルサイズを変更した直後、現在の幅×高さ(px)を3秒間だけ
     // 画面右上に表示して自動的に消えるオーバーレイ。sizeOverlayHideTimerは
@@ -111,10 +111,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         repaint();
     });
 
-    // 半角ASCIIは X11 misc-fixed Bold 10x20（Regularの実データを疑似太字化）の
-    // ビットマップグリフを cellW×cellH に合わせて縦横独立にニアレストネイバー拡縮して
-    // ラスタライズする（MiscFixedBold10x20参照）。
-    private final MiscFixedBold10x20 bitmapFont = MiscFixedBold10x20.INSTANCE;
+    // 半角ASCIIは X11 misc-fixed Bold 9x15（実機xtermの `ps` 出力から特定した本物の
+    // ビットマップデータ）を cellW×cellH に合わせて縦横独立にニアレストネイバー拡縮して
+    // ラスタライズする（MiscFixedBold9x15参照）。
+    private final MiscFixedBold9x15 bitmapFont = MiscFixedBold9x15.INSTANCE;
 
     // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
     // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
@@ -925,7 +925,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     private void paintContent(Graphics2D g2) {
-        // ビットマップフォント(MiscFixedBold10x20)のグリフはニアレストネイバーで拡縮済みだが、
+        // ビットマップフォント(MiscFixedBold9x15)のグリフはニアレストネイバーで拡縮済みだが、
         // 非ASCIIフォールバック（Swingフォント）でのdrawString呼び出し（ステータス行・スプラッシュ・
         // telescope・補完ポップアップ等）にはヒントが効いていなかったため、この g2 を使う全描画に
         // 共通で適用されるようここで一度だけ設定する（以下の draw* メソッドは全て同じ g2 を共有する）。
@@ -1220,7 +1220,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     /**
      * 全角文字を考慮しながら1行を描画する。
-     * ASCII(0x20-0x7E): MiscFixedBold10x20 (X11 misc-fixed Bold 10x20) でレンダリング。
+     * ASCII(0x20-0x7E): MiscFixedBold9x15 (X11 misc-fixed Bold 9x15) でレンダリング。
      * それ以外: Swing フォント（g2 に設定済み）で描画。
      * y はベースライン（セル底辺）の Y 座標。
      */

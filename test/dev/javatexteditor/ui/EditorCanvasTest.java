@@ -371,24 +371,24 @@ public class EditorCanvasTest {
         }
 
         // =====================================================================
-        // 半角フォント（MiscFixedBold10x20 / X11 misc-fixed Bold 10x20）テスト
+        // 半角フォント（MiscFixedBold9x15 / X11 misc-fixed Bold 9x15）テスト
         // =====================================================================
 
         // Test 23: isSupported - ASCII 範囲は true、範囲外は false
         {
-            MiscFixedBold10x20 f = MiscFixedBold10x20.INSTANCE;
+            MiscFixedBold9x15 f = MiscFixedBold9x15.INSTANCE;
             boolean ok = f.isSupported(' ')
                 && f.isSupported('A')
                 && f.isSupported('~')
                 && !f.isSupported(0x3041)   // ひらがな
                 && !f.isSupported(0x4E00);  // 漢字
-            System.out.println((ok ? "[OK] " : "[FAIL] ") + "MiscFixedBold10x20.isSupported 範囲判定");
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "MiscFixedBold9x15.isSupported 範囲判定");
             pass += ok ? 1 : 0;
         }
 
         // Test 24: renderGlyph - 返される画像のサイズがセルサイズと一致する
         {
-            java.awt.image.BufferedImage img = MiscFixedBold10x20.INSTANCE.renderGlyph('A', 10, 20, 0xFFFFFF);
+            java.awt.image.BufferedImage img = MiscFixedBold9x15.INSTANCE.renderGlyph('A', 10, 20, 0xFFFFFF);
             boolean ok = img.getWidth() == 10 && img.getHeight() == 20;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
                 + "renderGlyph サイズ (10x20) -> " + img.getWidth() + "x" + img.getHeight());
@@ -397,7 +397,7 @@ public class EditorCanvasTest {
 
         // Test 25: renderGlyph - 'A' の一部ピクセルが点灯している（コンテンツ検証）
         {
-            java.awt.image.BufferedImage img = MiscFixedBold10x20.INSTANCE.renderGlyph('A', 10, 20, 0xFF0000);
+            java.awt.image.BufferedImage img = MiscFixedBold9x15.INSTANCE.renderGlyph('A', 10, 20, 0xFF0000);
             int litCount = 0;
             for (int row = 0; row < 20; row++)
                 for (int col = 0; col < 10; col++)
@@ -453,7 +453,7 @@ public class EditorCanvasTest {
 
         // Test 30: セルサイズ変更後の renderGlyph が新サイズを反映する
         {
-            java.awt.image.BufferedImage img = MiscFixedBold10x20.INSTANCE.renderGlyph('B', 20, 40, 0xFFFFFF);
+            java.awt.image.BufferedImage img = MiscFixedBold9x15.INSTANCE.renderGlyph('B', 20, 40, 0xFFFFFF);
             boolean ok = img.getWidth() == 20 && img.getHeight() == 40;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
                 + "renderGlyph 20x40 サイズ -> " + img.getWidth() + "x" + img.getHeight());
@@ -468,7 +468,7 @@ public class EditorCanvasTest {
         // =====================================================================
 
         // Test 31: IME変換中の未確定文字列がカーソル位置にリアルタイムでオーバーレイ表示される
-        // （下線がアクセント色で描画される。cellH=20のため下線のy座標は19）
+        // （下線がアクセント色で描画される。cellH=15(既定)のため下線のy座標はcellH-1=14）
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.setSize(400, 300);
@@ -483,7 +483,7 @@ public class EditorCanvasTest {
             canvas.inputMethodTextChanged(evt);
 
             BufferedImage img = render(canvas, 400, 300);
-            int pixel = img.getRGB(5, 19);
+            int pixel = img.getRGB(5, canvas.getCellH() - 1);
             pass += checkColor("IME変換中オーバーレイの下線色", 0x99, 0x99, 0x99, pixel);
         }
 
@@ -659,15 +659,15 @@ public class EditorCanvasTest {
         }
 
         // Test 44: wrap時、ensureCursorVisible は折返し後のスクリーン行数を考慮して scrollRow を進める。
-        //          canvas高さ80・lineHeight=20 => visibleRows=3。50文字(2画面行)の行が3行あり、
+        //          canvas高さ60・lineHeight=15(既定) => visibleRows=3。50文字(2画面行)の行が3行あり、
         //          3行目(cursorRow=2)へ移動すると、1・2行目をスクロールアウトしてscrollRow=2になる。
         {
             EditorCanvas canvas = new EditorCanvas();
-            canvas.setSize(400, 80);
+            canvas.setSize(400, 60);
             String line = "A".repeat(50);
             canvas.setText(line + "\n" + line + "\n" + line);
             canvas.setWrapEnabled(true);
-            render(canvas, 400, 80); // cachedCharWidth/cachedLineHeight を確定させる
+            render(canvas, 400, 60); // cachedCharWidth/cachedLineHeight を確定させる
 
             canvas.ensureCursorVisible(2);
             boolean ok = canvas.getScrollRow() == 2;
