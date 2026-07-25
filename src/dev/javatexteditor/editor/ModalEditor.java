@@ -913,6 +913,21 @@ public class ModalEditor {
 
         // 補完ポップアップが開いているときのナビゲーションキー処理
         if (completionActive) {
+            boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
+                && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
+            if (ctrlOnly && keyCode == KeyEvent.VK_N) {
+                completionSelectedIdx = Math.min(completionSelectedIdx + 1,
+                                                 completionItems.size() - 1);
+                syncCompletionCanvas();
+                syncCanvas();
+                return;
+            }
+            if (ctrlOnly && keyCode == KeyEvent.VK_P) {
+                completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
+                syncCompletionCanvas();
+                syncCanvas();
+                return;
+            }
             switch (keyCode) {
                 case KeyEvent.VK_DOWN -> {
                     completionSelectedIdx = Math.min(completionSelectedIdx + 1,

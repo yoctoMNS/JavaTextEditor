@@ -15,6 +15,8 @@ import java.util.List;
  * Alt+/ 単語補完（WordIndex 連携）のテスト。
  * Ctrl+N は INSERT モードで Emacs 式カーソル下移動に割り当て済みのため、
  * 単語補完のトリガーには Alt+/ を使う（keymap-conflict-resolution スキール参照）。
+ * ただし補完ポップアップが開いている間は Ctrl+N/Ctrl+P が候補選択（下/上）に
+ * 割り込み、カーソル移動は行わない。
  */
 public class WordCompletionTest {
 
@@ -32,6 +34,8 @@ public class WordCompletionTest {
         testBufferOnlyWordIsCandidate();
         testNoCandidatesShowsNothing();
         testCtrlSpaceIncludesJdkClassEvenWhenWordMatchesFillBudget();
+        testCtrlNMovesSelectionDownWhileCompletionActive();
+        testCtrlPMovesSelectionUpWhileCompletionActive();
 
         System.out.println("=== " + passed + "/" + (passed + failed) + " PASSED ===");
         if (failed > 0) System.exit(1);
@@ -201,6 +205,53 @@ public class WordCompletionTest {
             List<CompletionItem> items = editor.getCompletionItems();
             assertTrue("String などの JDK クラス名が候補に含まれる（wordIndex に枠を独占されない）",
                 items.stream().anyMatch(it -> "cls".equals(it.kind()) && it.label().startsWith("St")));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    private static void testCtrlNMovesSelectionDownWhileCompletionActive() throws IOException {
+        Path tmp = Files.createTempDirectory("wordcomp_ctrln_active_");
+        try {
+            Files.writeString(tmp.resolve("Sample.java"),
+                "int navWordAlpha = 1; int navWordBeta = 2;");
+            ModalEditor editor = makeEditorWithWords(tmp, "navWord");
+            enterInsertMode(editor);
+            editor.processKey(KeyEvent.VK_E, KeyEvent.CHAR_UNDEFINED, InputEvent.CTRL_DOWN_MASK);
+            pressAltSlash(editor);
+            List<CompletionItem> items = editor.getCompletionItems();
+            if (items.size() < 2) { System.out.println("  SKIP ctrl+n (less than 2 candidates)"); passed++; return; }
+            int rowBefore = editor.getCursorRow();
+            editor.processKey(KeyEvent.VK_N, 'n', InputEvent.CTRL_DOWN_MASK);
+            assertTrue("補完アクティブ中の Ctrl+N はカーソルを動かさない",
+                editor.getCursorRow() == rowBefore);
+            editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Ctrl+N で2番目の候補を選んで Enter で確定できる",
+                editor.getText().contains(items.get(1).label()));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    private static void testCtrlPMovesSelectionUpWhileCompletionActive() throws IOException {
+        Path tmp = Files.createTempDirectory("wordcomp_ctrlp_active_");
+        try {
+            Files.writeString(tmp.resolve("Sample.java"),
+                "int navWordAlpha = 1; int navWordBeta = 2;");
+            ModalEditor editor = makeEditorWithWords(tmp, "navWord");
+            enterInsertMode(editor);
+            editor.processKey(KeyEvent.VK_E, KeyEvent.CHAR_UNDEFINED, InputEvent.CTRL_DOWN_MASK);
+            pressAltSlash(editor);
+            List<CompletionItem> items = editor.getCompletionItems();
+            if (items.size() < 2) { System.out.println("  SKIP ctrl+p (less than 2 candidates)"); passed++; return; }
+            editor.processKey(KeyEvent.VK_N, 'n', InputEvent.CTRL_DOWN_MASK); // move to index 1 first
+            int rowBefore = editor.getCursorRow();
+            editor.processKey(KeyEvent.VK_P, 'p', InputEvent.CTRL_DOWN_MASK);
+            assertTrue("補完アクティブ中の Ctrl+P はカーソルを動かさない",
+                editor.getCursorRow() == rowBefore);
+            editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Ctrl+P で1番目の候補に戻して Enter で確定できる",
+                editor.getText().contains(items.get(0).label()));
         } finally {
             deleteDir(tmp);
         }
