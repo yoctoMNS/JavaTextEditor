@@ -99,8 +99,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private Set<Integer> errorLines = Set.of();
 
     // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）
-    private int cellW = MiscFixedFont10x20.BASE_CELL_W;
-    private int cellH = MiscFixedFont10x20.BASE_CELL_H;
+    private int cellW = TerminusBold10x20.BASE_CELL_W;
+    private int cellH = TerminusBold10x20.BASE_CELL_H;
 
     // Ctrl+Shift+矢印でセルサイズを変更した直後、現在の幅×高さ(px)を3秒間だけ
     // 画面右上に表示して自動的に消えるオーバーレイ。sizeOverlayHideTimerは
@@ -111,9 +111,9 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         repaint();
     });
 
-    // 半角ASCIIは X11 misc-fixed 10x20 のビットマップグリフを cellW×cellH に合わせて
-    // 縦横独立にニアレストネイバー拡縮してラスタライズする（MiscFixedFont10x20参照）。
-    private final MiscFixedFont10x20 bitmapFont = MiscFixedFont10x20.INSTANCE;
+    // 半角ASCIIは Terminus Bold 10x20 のビットマップグリフを cellW×cellH に合わせて
+    // 縦横独立にニアレストネイバー拡縮してラスタライズする（TerminusBold10x20参照）。
+    private final TerminusBold10x20 bitmapFont = TerminusBold10x20.INSTANCE;
 
     // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
     // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
@@ -577,7 +577,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     /**
-     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を misc-fixed
+     * telescope・ステータス行・補完ポップアップ等、本文以外のUI文字列を Terminus Bold
      * ビットマップフォントで描画する（本文の drawLineWithFullWidthSupport と同じ配色規則:
      * ASCIIはビットマップフォント、それ以外（日本語等）は Swing フォールバックフォント）。
      * y はセル下端（ベースライン）のY座標。
@@ -924,7 +924,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     private void paintContent(Graphics2D g2) {
-        // ビットマップフォント(MiscFixedFont10x20)のグリフはニアレストネイバーで拡縮済みだが、
+        // ビットマップフォント(TerminusBold10x20)のグリフはニアレストネイバーで拡縮済みだが、
         // 非ASCIIフォールバック（Swingフォント）でのdrawString呼び出し（ステータス行・スプラッシュ・
         // telescope・補完ポップアップ等）にはヒントが効いていなかったため、この g2 を使う全描画に
         // 共通で適用されるようここで一度だけ設定する（以下の draw* メソッドは全て同じ g2 を共有する）。
@@ -1085,7 +1085,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.setColor(theme.accent);
         g2.drawRect(ox, oy, overlayW, overlayH);
 
-        // 本文と同じ misc-fixed のセルサイズをそのまま使う
+        // 本文と同じ Terminus Bold のセルサイズをそのまま使う
         int cw = cellW;
         int fh = lineHeight;
         int pad = 4;
@@ -1219,7 +1219,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     /**
      * 全角文字を考慮しながら1行を描画する。
-     * ASCII(0x20-0x7E): MiscFixedFont10x20 (X11 misc-fixed 10x20) でレンダリング。
+     * ASCII(0x20-0x7E): TerminusBold10x20 (Terminus Bold 10x20) でレンダリング。
      * それ以外: Swing フォント（g2 に設定済み）で描画。
      * y はベースライン（セル底辺）の Y 座標。
      */

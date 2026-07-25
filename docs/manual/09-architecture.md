@@ -60,7 +60,7 @@ project-root/
 │   └── ui/
 │       ├── Theme.java               # カラーテーマ（LIGHT_MODE / DARK_MODE）
 │       ├── EditorCanvas.java        # Swing描画コンポーネント
-│       └── MiscFixedFont10x20.java  # 半角ASCII描画（X11 misc-fixed 10x20 埋め込みビットマップ、ニアレストネイバー拡縮）
+│       └── TerminusBold10x20.java   # 半角ASCII描画（Terminus Bold 10x20 埋め込みビットマップ、ニアレストネイバー拡縮）
 ├── test/dev/javatexteditor/         # 自作 main ハーネス形式のテスト（*Test.java）
 ├── docs/
 │   ├── manual/                      # 本マニュアル
@@ -194,7 +194,7 @@ n/N → currentMatchIdx を ±1（折り返しあり）
 
 `JPanel` を継承した `EditorCanvas` が `Graphics2D` で直接描画します。
 
-- 全角文字（CJK・ひらがな・カタカナ）を2セル幅として正確に描画。半角ASCIIは `MiscFixedFont10x20`（X11 misc-fixed 10x20 の埋め込みビットマップ）を縦横独立のニアレストネイバー拡縮でセルに合わせて描画
+- 全角文字（CJK・ひらがな・カタカナ）を2セル幅として正確に描画。半角ASCIIは `TerminusBold10x20`（Terminus Bold 10x20 の埋め込みビットマップ）を縦横独立のニアレストネイバー拡縮でセルに合わせて描画
 - NORMALモード: ブロックカーソル。INSERTモード: 縦棒カーソル（2px幅）
 - VISUAL: 文字単位ハイライト。VISUAL LINE: 行全幅ハイライト。VISUAL BLOCK: 矩形ハイライト
 - 画面最下部のステータス行（右から）: 診断件数バッジ ← システムステータス（`CPU 12% | MEM 62%`、`SystemStatsMonitor` が2秒間隔のバックグラウンドスレッドで更新しEDTは非ブロッキングでキャッシュを読むだけ） ← 時計（`HH:mm:ss`）。歩行キャラクターアニメーションも表示（いずれもアクティブペインのみ）

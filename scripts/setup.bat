@@ -153,8 +153,8 @@ if exist "%WORK_DIR%\src\hotspot\share\" (
 :cleanup
 rmdir /s /q "%WORK_DIR%"
 
-rem Font used to render half-width ASCII (X11 misc-fixed 10x20) is embedded
-rem directly in MiscFixedFont10x20.java as a bitmap byte array, so no
+rem Font used to render half-width ASCII (Terminus Bold 10x20) is embedded
+rem directly in TerminusBold10x20.java as a bitmap byte array, so no
 rem download step is needed here. See
 rem .claude/skills/font-and-statusline-animation/SKILL.md for details.
 

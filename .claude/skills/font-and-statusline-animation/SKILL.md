@@ -418,3 +418,17 @@ static int testFrameCalculation() {
 - **ライセンス**: misc-fixedはPublic domain（BDFの`COPYRIGHT`プロパティに`"Public domain font. Share and enjoy."`と明記）。IBM Plex Mono（SIL OFL 1.1）に伴っていたライセンス表記・配布条件の考慮は不要になった。
 - **テスト・目視確認**: 既存の `EditorCanvasTest`（フォント関連3テスト含む51/51）・全体テストスイート（既知のベースラインFAIL、`ScrollTest`2件・`ModalEditorTest`1件を除き全PASS）を確認済み。加えてスクラッチパッドで簡易プレビュー画像を生成し、10x20セルでのASCII全体・記号類の可読性を目視確認済み。
 - **意図的にスコープ外とした点**: TTF移行前に存在した「セル縦横比に応じて5x7〜9x18の12サイズから自動選択する」仕組み（`FixedFontCatalog.select()`）は今回のユーザー指示（「単一の10x20ビットマップのみ復活」を選択）により再導入していない。`Ctrl+Shift+矢印`でセルサイズを大きく変えた場合、TTF版のようなアンチエイリアス付きベクター変形ではなく、ネイティブ10x20ビットマップをニアレストネイバーで拡縮した結果になる（拡大時は角ばった見た目になる）ことは、ユーザーが明示的に選択した仕様である。
+
+## 実装済みの変更: MiscFixedFont10x20 から TerminusBold10x20 への差し替え（2026-07・第4弾）
+
+直前の節でmisc-fixed 10x20へ回帰した直後、ユーザーから「添付画像のフォントと同じものを使ってほしい。`misc-fixed-bold-r-*-*-45-*-90-*-*-*-iso10646-1` というXLFDに該当する」という追加依頼があった。調査の結果、そのXLFD文字列自体は標準のX11 misc-fixedのどのサイズとも一致しない（misc-fixedのBold版は6x13B/7x13B/7x14B/8x13B/9x15B/9x18Bの6種のみで10x20のBoldは存在しない）ことが判明し、ユーザーに`AskUserQuestion`で確認を試みたが2回とも却下された。その後ユーザーが実際のスクリーンショット（`bisqwit@hariyu`という端末タイトルバー、本SKILLが参考にしている`bisqwit/that_terminal`の作者本人の環境と思われる、`ntsc.cc`というNTSC信号レンダリングコードを編集中の画面）を添付し、「これを参考にしてください」と指示した。
+
+- **フォント特定の手順**: 添付画像の字形（`g`の開いたフック型ディセンダー、二階建ての`a`、太いストローク）から、`misc-fixed`ではなく **Terminus**（Dimitar Toshkov Zhekov氏によるビットマップフォント、Debian/Ubuntuでは`console-setup`/`kbd`パッケージ経由で`/usr/share/consolefonts/`にPSF形式で配布）の**Bold**である可能性が高いと判断した。`apt-get install kbd`でPSFフォント一式を取得し、Pythonで自作したPSF1/PSF2パーサーで`Lat15-TerminusBold20x10.psf.gz`（ファイル名の`20x10`はheightxwidthの意味で、実際のグリフ寸法は幅10×高さ20px = 既存の`MiscFixedFont10x20`と完全に同じセルサイズ）をレンダリングし、添付画像と同じコード行（`static void RenderSignal(unsigned* texture, ...)`）を再現して`SendUserFile`で提示、ユーザーの明示的な確認（「trueタイプフォントである必要はない、前のバイナリで表現した形で」）を得てから実装した。
+- **ネイティブディセント値の確認**: PSFフォーマット自体はBDFの`FONT_DESCENT`のようなメタデータを持たないため、`A`（ディセンダーなし文字、上から16行分=行0-15に収まる）と`g`（ディセンダーあり文字、残り4行のうち3行=行16-18まで伸びる）の実際のビットパターンを目視確認し、misc-fixed版と同じ「20行中下4行がディセント領域」（`NATIVE_DESCENT=4`）であることを確認した。この値はソースコードを変更せず流用できた。
+- **`TerminusBold10x20`（新設、`MiscFixedFont10x20`を置き換え）の設計**: シングルトン（`INSTANCE`）。`isSupported(int)`/`descentPixels(int)`/`renderGlyph(int,int,int,int)`という同じ3メソッド契約・同じ`GLYPH_W`/`GLYPH_H`/`BYTES_PER_ROW`/`BYTES_PER_GLYPH`/`NATIVE_DESCENT`の定数構成をそのまま維持し、`GLYPHS`バイト配列の中身だけをmisc-fixedからTerminus Boldへ総入れ替えした（生成パイプライン・データ形式が実質的に共通のため、ドロップイン置き換えで済んだ）。PSF2フォーマットはASCII範囲でコードポイントとグリフインデックスが一致するため、BDF版と同じ「codePoint - FIRST_CHARでオフセット計算」がそのまま使えた。
+- **`EditorCanvas`/`Main`/テスト側の変更**: `MiscFixedFont10x20` → `TerminusBold10x20`への機械的なクラス名置き換え（`bitmapFont`というフィールド名は実体を正しく表しているため変更不要）。コメント中の「misc-fixed」表記を「Terminus Bold」へ更新した。
+- **`scripts/setup.sh`/`setup.bat`**: フォントデータをソースに直接埋め込む方式（ダウンロード不要）である点は変更なしのため、ファイル名の言及のみ`MiscFixedFont10x20.java`→`TerminusBold10x20.java`に更新した。
+- **ライセンス**: Terminus フォントは SIL Open Font License 1.1で配布されている（Debianパッケージ`xfonts-terminus`/`console-setup`も同ライセンス）。OFLはビットマップへの変換・ソースコードへの埋め込みを妨げない。
+- **削除したファイル**: `MiscFixedFont10x20.java`。
+- **テスト・目視確認**: `EditorCanvasTest`のフォント関連3テストを含む全体テストスイートが、既知のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件）を除き全PASSであることを確認。加えて実際の`TerminusBold10x20`クラス経由でサンプルコードをレンダリングしたPNGを目視確認し、Python版プロトタイプでの検証結果と一致することを確認した。
+- **教訓（今後同種の依頼を受けた場合の参考）**: ユーザーが提示したXLFD文字列やフォント名の記憶は必ずしも正確とは限らない（今回は「misc-fixed-bold」という誤った手がかりだった）。標準フォントパッケージに実際に存在するサイズ・バリエーションを`find`/`apt-cache`等で機械的に確認し、疑わしい場合はスクリーンショットの字形を最終的な判断材料にするのが確実。`AskUserQuestion`（構造化選択式)が繰り返し却下される場合、それ以上の選択式確認を重ねず、証拠に基づく最有力候補をレンダリングして`SendUserFile`で提示し、プレーンテキストで確認を求める方が受け入れられやすい。

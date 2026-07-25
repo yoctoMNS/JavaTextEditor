@@ -114,10 +114,10 @@ rm -rf "$WORK_DIR"
 
 fi # JDK_SOURCES_READY
 
-# フォント本体（半角ASCIIの描画）は X11 misc-fixed 10x20 のビットマップグリフを
-# MiscFixedFont10x20.java にソースへ直接埋め込んでいるため、外部ダウンロードは不要。
+# フォント本体（半角ASCIIの描画）は Terminus Bold 10x20 のビットマップグリフを
+# TerminusBold10x20.java にソースへ直接埋め込んでいるため、外部ダウンロードは不要。
 # （かつて IBM Plex Mono Regular (TTF) を実行時ダウンロードしていたが、
-# MiscFixedFont10x20への回帰に伴いこのダウンロード処理自体を廃止した。
+# ビットマップフォントへの回帰に伴いこのダウンロード処理自体を廃止した。
 # 詳細は .claude/skills/font-and-statusline-animation/SKILL.md 参照。）
 
 echo ""
