@@ -402,6 +402,84 @@ project-root/
   タイムアウトは掛かっていない）を引き継ぐ。今回はauto-import自体がバックグラウンド仮想スレッドで実行
   されるため（`Main.runCompileAnalysis`）、既存のShift+K/grepで問題になったEDTブロッキングの心配はない。
 
+## auto-import選択ポップアップの無限再発とimport挿入位置がpackage文より前になる不具合の修正（2026-07-25）
+
+「Javaファイルを保存したタイミングでauto-importが実行され、複数候補がある場合の選択ポップアップ
+（IMPORT_SELECTモード）が、何度選択しても際限なく再表示され続ける」「import文がpackage文より前に
+挿入されてしまう」という2件の報告を調査したところ、**どちらも独立した別々のバグではなく、一部は
+同じ根本原因（UTF-8 BOM未除去）を共有し、もう一部は別の根本原因（コンパイル解析の二重発火）を持つ**
+ことが判明した。実機を操作できない環境のため、`ModalEditor`/`AutoImportHandler`/`CompileAnalyzer`を
+直接呼び出す再現コード（`javac`実プロセスを使う本物の診断）で両方とも再現・修正確認済み。
+
+- **根本原因1（両方の症状を同時に説明する）: UTF-8 BOM（先頭のEF BB BF = U+FEFF）が除去されずに
+  バッファへ読み込まれていた**。`ModalEditor.readFileContentForBuffer(Path)`（`:e`・FILER・telescope・
+  `\f`/`\g`・`gr`・Ctrl+U/Ctrl+P経由の全ファイルオープンが通る唯一の読み込み口。「`currentFilePath`
+  の絶対パス統一」節と同じ「5箇所の分散処理を1箇所に集約済み」の恩恵で、直すべき箇所は1つで済んだ）が
+  `new String(bytes, StandardCharsets.UTF_8)`でバイト列を文字列化する際、BOMの3バイトはそのまま
+  U+FEFF文字としてデコードされる（BOMを検出して読み飛ばすのは`StandardJavaFileManager`のようなファイル
+  単位のAPIが内部で行う処理であり、バイト列から`String`を直接構築する経路では行われないため）。
+  実機再現の結果、これが2つの症状それぞれの直接原因になっていた:
+  1. **import挿入位置がpackage文より前になる**: `AutoImportHandler.findImportInsertOffset()`は
+     `line.stripLeading().startsWith("package ")`という単純な文字列比較でpackage行を検出するが、
+     `String.stripLeading()`はU+FEFFを空白文字として扱わない（`Character.isWhitespace(0xFEFF)`は
+     `false`）。そのため先頭にBOMが残っていると1行目が`"package "`で始まると判定されず、package行
+     そのものが「見つからない」扱いになり、挿入オフセットが`0`（＝ファイルの本当の先頭＝BOM文字の前）
+     になってしまう。
+  2. **選択ポップアップの無限再発**: BOM付きのソースを`javax.tools.JavaCompiler`（このエディタの
+     コンパイル解析はメモリ上の`String`をそのまま`JavaFileObject`として渡すため、ファイル単位の
+     BOMスキップは効かない）に渡すと、`illegal character`から始まる構文エラーの連鎖が
+     発生し、ファイル全体が正しく解析できない状態になる。この状態では自動生成された未定義シンボルの
+     診断（`cannot find symbol`）が、importを何回挿入しても消えない（BOMという構文エラーそのものは
+     解消されないため）。`AutoImportHandler.resolveCandidates()`は診断からこの未解決シンボルを毎回
+     再検出し続けるため、`IMPORT_SELECT`の選択ポップアップが際限なく再表示される。
+  - **修正**: `readFileContentForBuffer()`の末尾、UTF-8デコード直後に
+    `if (text.startsWith("\uFEFF")) text = text.substring(1);`を追加し、先頭のBOM文字を1文字読み込み
+    時点で除去するようにした。全ファイルオープン経路がこの1メソッドを通るため、修正箇所は1箇所のみ。
+    保存（`:w`）はバッファの内容（＝BOM除去済み）をそのまま書き出すため、以後保存し直したファイルは
+    BOMなしになる（意図した正規化。BOMをJavaソースに残すことに実用上のメリットはなく、往復での
+    バイト完全一致を保証する設計にはしていない。この点はバイナリエディタ（`:b`）やクリップボードの
+    ISO-8859-1可逆変換のような「バイト列を厳密に保持する」設計とは異なる別カテゴリの機能である）。
+- **根本原因2（無限再発の症状を単独でも起こしうる、根本原因1とは独立の不具合）: コンパイル解析トリガの
+  二重発火によるレース**。`Main.setupCompileAnalysis()`は`editor.setOnReturnToNormal(...)`（INSERT離脱時）
+  と`editor.setOnSave(trigger)`（保存時）の両方に、実質同じ`trigger`（コンパイル解析→`handleAutoImport`）
+  を登録している。INSERTモードから直接保存する`"save.from.insert"`アクション（`Ctrl+[`/`Ctrl+]`）は
+  `onReturnToNormal`を呼んだ**直後**に`saveToFile()`（内部で`onSave`を呼ぶ）も呼ぶため、**同一内容に
+  対して2つのバックグラウンド仮想スレッドが同時にコンパイル解析を開始する**（`:w`と`Esc`をほぼ同時に
+  行った場合も、非同期解析が完了する前に両方のトリガーが発火すれば同様に発生しうる）。2つの解析は
+  完了順序が保証されないため、以下のような実害のある競合が発生することを実機再現で確認した:
+  1. 解析A完了 → 曖昧候補（例: `Date`は`java.util.Date`/`java.sql.Date`の2択）を選択UIで表示。
+  2. ユーザーが`java.util.Date`を選択 → 正しく`import`が挿入される。
+  3. 解析B（**古い**、選択前の診断結果を使っている）が遅れて完了 → `handleAutoImport()`を再実行。
+     `resolveCandidates()`は現在のバッファ（既に`java.util.Date`をimport済み）から「既にimport済み」を
+     除外するため、候補が`[java.sql.Date]`の1件だけに見えてしまい、**確認なしで自動的に誤ったimportが
+     追加される**。結果、`java.util.Date`と`java.sql.Date`が同時にimportされ
+     `reference to Date is ambiguous`という新たなコンパイルエラーが発生し、しかもこのエラーメッセージは
+     `findMissingSymbols()`の`"symbol:"`パターンにマッチしないため自動修復もされず、恒久的に壊れた状態
+     で残る。候補がJDKクラス索引の都合で3択以上になるシンボル（例:「List」は`java.util.List`/
+     `java.awt.List`/`com.sun.tools.javac.util.List`の3択）では、この競合が起きるたびに残り候補数が
+     1つずつ減っていくため、ユーザーには「選択してもポップアップが再度出る」ように見え、ユーザーが
+     混乱して保存を繰り返す（＝トリガーの二重発火をさらに繰り返す）ことで症状が長引く悪循環になりうる。
+  - **修正**: `Main.setupCompileAnalysis()`に`AtomicLong compileGeneration`（編集対象ごとに1つ、
+    クロージャで保持）を導入した。`runCompileAnalysis()`は解析開始時に`generation.incrementAndGet()`で
+    「自分の世代番号」を取得し、バックグラウンドスレッド完了時（`SwingUtilities.invokeLater`内）に
+    `generation.get() != myGeneration`であれば（＝自分より新しい解析要求が発行済みなら）診断反映も
+    `handleAutoImport()`呼び出しも行わずに黙って破棄する。これにより「後から届いた古い診断で状態が
+    上書きされる」という競合そのものを構造的になくした（`outputErrorLinesOwner`/`binaryModeOwner`と
+    同系の「参照/世代一致による古い結果の自動破棄」パターンの応用）。二重発火自体（`save.from.insert`が
+    `onReturnToNormal`と`onSave`を両方呼ぶこと）は今回あえて温存した——`onReturnToNormal`はIME関連の
+    副作用（`switchToHalfWidth`/`clearImeComposition`）も担っており、`"save.from.insert"`から
+    どちらか一方だけを呼ぶよう手術するより、「複数の解析要求が競合しても最後の1つだけが必ず勝つ」
+    という世代ガードの方が、他の非同期トリガー経路（デバウンスタイマー等）まで含めて汎用的に安全。
+- **テスト**: `test/dev/javatexteditor/editor/BinaryFileOpenTest.java`に2テスト追加
+  （`testOpenUtf8FileWithBomStripsBom`/`testOpenUtf8FileWithoutBomUnaffected`）し、`:e`経由でBOM付き
+  ファイルを開くとBOMが除去されpackage文が先頭に来ることを回帰テストとして固定した。`Main.java`の
+  世代ガード自体はGUI/バックグラウンドスレッドに依存するため、F10/F11/F12や他の非同期トリガーと同様
+  自動テスト対象外（既知のテストギャップ）だが、`AutoImportHandler`/`CompileAnalyzer`/`ModalEditor`を
+  直接呼び出す再現コードで、修正前は`import java.sql.Date;`が確認なしに追加され
+  `reference to Date is ambiguous`エラーが残ることを確認し、`readFileContentForBuffer()`のBOM除去
+  単体でも「BOM付きファイルではimportがpackage文より前に挿入され続ける」症状が解消されることを
+  個別に確認済み。
+
 ## `currentFilePath` の絶対パス統一と新規ファイル作成時の不具合修正
 
 複数の不具合報告（「新しく作ったファイルが再度開かないと正しくコンパイル結果が反映されない」
