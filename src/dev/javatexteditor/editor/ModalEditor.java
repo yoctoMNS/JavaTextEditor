@@ -2965,6 +2965,15 @@ public class ModalEditor {
      * にフォールスルーする。NULバイトを含む、またはUTF-8として不正なバイト列（画像・実行ファイル等
      * のバイナリ、UTF-16等の他エンコーディング）は Mode.BINARY（{@link #enterBinaryMode}）へ
      * 渡すための生バイト列を返す（{@link BinaryFileDetector} 参照）。
+     *
+     * <p>先頭のUTF-8 BOM（U+FEFF）は除去する。{@code Files.readAllBytes}+{@code new String(...,
+     * UTF_8)} はBOMを構成する3バイト（EF BB BF）をそのままU+FEFF文字としてデコードしてしまい
+     * （BOMを特別扱いして読み飛ばすのはStandardJavaFileManager等ファイル単位のAPIの挙動であり、
+     * バイト列からのString生成では行われない）、除去しないまま{@code javac}へ渡すと
+     * 「illegal character」（不正な文字）から始まる構文エラーの連鎖でファイル全体が解析不能になり、
+     * auto-importのpackage文検出（先頭行が"package "で始まるかの単純な文字列比較）も
+     * BOM文字が邪魔をして常に失敗する（挿入位置がpackage文より前になる／未解決シンボルが
+     * 永久に解消されずimport選択ポップアップが再発し続ける、の双方の原因になる）。
      */
     private FileLoadResult readFileContentForBuffer(Path path) throws IOException {
         byte[] bytes = Files.readAllBytes(path);
@@ -2982,6 +2991,7 @@ public class ModalEditor {
             return new FileLoadResult(null, true, bytes, null, null);
         }
         String text = new String(bytes, StandardCharsets.UTF_8).replace("\r\n", "\n");
+        if (text.startsWith("\uFEFF")) text = text.substring(1);
         return new FileLoadResult(text, false, null, null, null);
     }
 

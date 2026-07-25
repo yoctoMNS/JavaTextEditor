@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -292,10 +293,21 @@ public class Main {
     }
 
     private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
+        // onReturnToNormal（INSERT離脱）とonSave（:w等）は同じ"save.from.insert"アクション
+        // （INSERT中のCtrl+[/Ctrl+]保存）や「Escした直後にすぐ:wする」操作で立て続けに両方発火しうる。
+        // その場合、内容が同一の2つのコンパイル解析がほぼ同時にバックグラウンドスレッドで走り、
+        // 完了順序が入れ替わると「先に完了した解析がambiguous importを正しく選択・適用した直後に、
+        // 後から届いた古い（選択前の）診断結果を使うhandleAutoImportが再実行され、既にimport済みの
+        // 候補が除外された結果『残り1件』に見えてしまい確認なしで誤ったimportを追加する」という
+        // 実害のある不具合につながる（AutoImportHandlerTest等では再現しないが、実機で
+        // "cannot find symbol"が解消されないまま import 選択ポップアップが再発し続ける形で観測される）。
+        // compileGeneration で「最後に発行した解析要求」だけを世代番号として追跡し、結果が返って
+        // きた時点で世代が古ければ（＝その後により新しい解析要求が発行済みなら）黙って破棄する。
+        AtomicLong compileGeneration = new AtomicLong(0);
         Runnable trigger = () -> {
             if (isJavaBuffer(editor)) {
                 editor.setStatusMessage("auto-import: 解析中...");
-                runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗");
+                runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗", compileGeneration);
             } else if (isCBuffer(editor)) {
                 runCAnalysis(editor, canvas, true);
             }
@@ -311,7 +323,7 @@ public class Main {
         editor.setOnOrganizeImports(() -> {
             if (isJavaBuffer(editor)) {
                 editor.setStatusMessage("import 整理中...");
-                runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗");
+                runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗", compileGeneration);
             } else if (isCBuffer(editor)) {
                 organizeCIncludes(editor, canvas);
             } else {
@@ -358,11 +370,15 @@ public class Main {
      *  @param useRealPathIfSaved true のとき、保存済みファイルなら analyzeWithProject を使う
      *                            （INSERT→NORMAL / 保存トリガ用。public class 名不一致エラーを防ぐ）。
      *                            false のとき常に analyzeWithProject を使う（Ctrl+Shift+O 用。複数ファイル対応）。
-     *  @param failureMessage 解析失敗時にステータス行へ出す文言 */
+     *  @param failureMessage 解析失敗時にステータス行へ出す文言
+     *  @param generation setupCompileAnalysis が編集対象ごとに1つ保持する世代カウンタ。
+     *                     結果反映時にこの呼び出し以降より新しい解析要求が発行されていれば
+     *                     （＝このスレッドが取得した診断は古い）、EDT反映を丸ごと破棄する。 */
     private static void runCompileAnalysis(ModalEditor editor, EditorCanvas canvas,
-            boolean useRealPathIfSaved, String failureMessage) {
+            boolean useRealPathIfSaved, String failureMessage, AtomicLong generation) {
         String source = editor.getText();
         String snapshotPath = editor.getCurrentFilePath();
+        long myGeneration = generation.incrementAndGet();
         Thread.ofVirtual().start(() -> {
             try {
                 // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
@@ -372,6 +388,7 @@ public class Main {
                     ? COMPILE_ANALYZER.analyzeWithProject(snapshotPath, source, projectRoot)
                     : COMPILE_ANALYZER.analyzeWithProject("<buffer>", source, projectRoot);
                 SwingUtilities.invokeLater(() -> {
+                    if (generation.get() != myGeneration) return; // より新しい解析要求に上書き済み: 破棄
                     canvas.setDiagnostics(diags);
                     // 未使用削除は handleAutoImport の全候補処理完了後に実行
                     editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
@@ -379,6 +396,7 @@ public class Main {
                 });
             } catch (AnalysisException e) {
                 SwingUtilities.invokeLater(() -> {
+                    if (generation.get() != myGeneration) return;
                     canvas.setDiagnostics(List.of());
                     editor.setStatusMessage(failureMessage);
                 });
