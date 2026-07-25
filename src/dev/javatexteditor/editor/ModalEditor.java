@@ -346,6 +346,11 @@ public class ModalEditor {
     // スキル参照）のため、単語補完のトリガーは Alt+/ を使う。
     private dev.javatexteditor.analysis.WordIndex wordIndex = null;
     private boolean completionIsWordMode = false; // true の間は recheckCompletion() が wordIndex を使う
+    // Cバッファの入力補完（Ctrl+Space/Alt+/）向け: #include しているヘッダの識別子キャッシュ。
+    // #include 行の構成（cHeaderWordsCacheKey）が変わらない限り再走査しない
+    // （includedHeaderWords() はディスク走査を伴うため、通常のタイピングのたびに毎回呼ぶと重い）。
+    private String cHeaderWordsCacheKey = null;
+    private java.util.Set<String> cHeaderWordsCache = java.util.Set.of();
     // バッファ履歴（Ctrl+U で前へ・Ctrl+P で次へ）
     private record BufferSnapshot(String text, String filePath, int row, int col) {}
     private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
@@ -1073,7 +1078,10 @@ public class ModalEditor {
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryMergedCompletion(String prefix) {
         java.util.List<dev.javatexteditor.analysis.CompletionItem> merged = new java.util.ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
-        boolean classAvailable = completionIndex != null && completionIndex.isReady();
+        // Cバッファでは Java クラス名（completionIndex）を一切候補に出さない
+        // （CLAUDE.md「C言語のファイルを開いているときの入力補完候補」節）。
+        boolean classAvailable = !isCFilePath(currentFilePath)
+            && completionIndex != null && completionIndex.isReady();
         // JDK クラス名の枠を確保するため、wordIndex 側にはあらかじめ縮小した上限を渡す
         // （classAvailable が false の場合は満枠まで使ってよい）。
         int wordBudget = classAvailable
@@ -1134,12 +1142,46 @@ public class ModalEditor {
         int cursorOffset = prefixStartOffset();
         java.util.List<String> bufferWordsOrdered = dev.javatexteditor.analysis.WordIndex
             .extractWordsByProximity(buffer.getText(), cursorOffset, prefix);
-        java.util.List<String> words = wordIndex.query(prefix, maxResults, bufferWordsOrdered);
+        java.util.List<String> words = new java.util.ArrayList<>(
+            wordIndex.query(prefix, maxResults, bufferWordsOrdered));
+        // Cバッファはプロジェクトルート配下の単語（wordIndex）に加え、#include しているヘッダの
+        // 識別子も候補に含める（CLAUDE.md「C言語のファイルを開いているときの入力補完候補」節）。
+        if (words.size() < maxResults && isCFilePath(currentFilePath)) {
+            java.util.Set<String> seen = new java.util.HashSet<>(words);
+            String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
+            java.util.List<String> headerMatches = new java.util.ArrayList<>();
+            for (String w : cHeaderWords()) {
+                if (w.toLowerCase(Locale.ROOT).startsWith(lowerPrefix) && seen.add(w)) {
+                    headerMatches.add(w);
+                }
+            }
+            java.util.Collections.sort(headerMatches);
+            for (String w : headerMatches) {
+                if (words.size() >= maxResults) break;
+                words.add(w);
+            }
+        }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = new java.util.ArrayList<>(words.size());
         for (String w : words) {
             items.add(new dev.javatexteditor.analysis.CompletionItem(w, "wd"));
         }
         return items;
+    }
+
+    /**
+     * 現在のCバッファが #include しているヘッダの識別子集合（キャッシュ付き）。
+     * #include 行の構成が変わらない限り {@link dev.javatexteditor.analysis.CDefinitionResolver#includedHeaderWords}
+     * （ディスク走査を伴う）を再実行しない。
+     */
+    private java.util.Set<String> cHeaderWords() {
+        if (currentFilePath == null) return java.util.Set.of();
+        String source = buffer.getText();
+        String key = currentFilePath + "|" + String.join(",", CIncludeManager.existingIncludes(source));
+        if (!key.equals(cHeaderWordsCacheKey)) {
+            cHeaderWordsCache = cDefinitionResolver.includedHeaderWords(source, Path.of(currentFilePath), getProjectRoot());
+            cHeaderWordsCacheKey = key;
+        }
+        return cHeaderWordsCache;
     }
 
     /** 入力中プレフィックス（カーソル直前の識別子）の先頭位置を、バッファ全体でのオフセットとして返す。 */

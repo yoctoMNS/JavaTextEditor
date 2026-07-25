@@ -270,6 +270,36 @@ public final class CDefinitionResolver {
         return null;
     }
 
+    /**
+     * 現在のファイルが実際に {@code #include} しているヘッダ（そこから辿れるヘッダも含む）に
+     * 含まれる識別子を集める。C バッファの入力補完（Ctrl+Space/Alt+/）のうち、ヘッダ側の候補を
+     * 提供するために使う（プロジェクトルート配下の単語自体は {@link WordIndex} が別途担当する）。
+     * 走査範囲を「実際に見えるヘッダだけ」に限定する理由は {@link #resolveSymbolInIncludedHeaders}
+     * と同じ（標準インクルードディレクトリ全体を総当たりすると無関係なライブラリまで拾ってしまい遅い）。
+     */
+    public Set<String> includedHeaderWords(String source, Path currentFile, Path projectRoot) {
+        Set<Path> visited = new HashSet<>();
+        Deque<ResolvedHeader> queue = new ArrayDeque<>();
+        enqueueIncludes(source, currentFile, projectRoot, visited, queue);
+
+        Set<String> words = new HashSet<>();
+        int scanned = 0;
+        while (!queue.isEmpty() && scanned < MAX_HEADER_SCAN) {
+            if (Thread.currentThread().isInterrupted()) break;
+            ResolvedHeader rh = queue.poll();
+            scanned++;
+            String content;
+            try {
+                content = Files.readString(rh.path());
+            } catch (IOException e) {
+                continue;
+            }
+            words.addAll(WordIndex.extractWords(content));
+            enqueueIncludes(content, rh.path(), projectRoot, visited, queue);
+        }
+        return words;
+    }
+
     /** source 中の #include 行を解決し、未訪問のものだけを queue に追加する。 */
     private void enqueueIncludes(String source, Path fromFile, Path projectRoot,
             Set<Path> visited, Deque<ResolvedHeader> queue) {
