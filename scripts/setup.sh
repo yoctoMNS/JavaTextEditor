@@ -114,8 +114,8 @@ rm -rf "$WORK_DIR"
 
 fi # JDK_SOURCES_READY
 
-# フォント本体（半角ASCIIの描画）は X11 misc-fixed Bold 9x18 のビットマップグリフを
-# MiscFixedBold9x18.java にソースへ直接埋め込んでいるため、外部ダウンロードは不要。
+# フォント本体（半角ASCIIの描画）は X11 misc-fixed Bold 10x20 のビットマップグリフを
+# MiscFixedBold10x20.java にソースへ直接埋め込んでいるため、外部ダウンロードは不要。
 # （かつて IBM Plex Mono Regular (TTF) を実行時ダウンロードしていたが、
 # ビットマップフォントへの回帰に伴いこのダウンロード処理自体を廃止した。
 # 詳細は .claude/skills/font-and-statusline-animation/SKILL.md 参照。）
