@@ -13,6 +13,8 @@ import dev.javatexteditor.ui.MiscFixedBold9x15;
 import dev.javatexteditor.ui.Theme;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
+import java.awt.Font;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -29,9 +31,13 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
+import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 
 public class Main {
 
@@ -833,6 +839,19 @@ public class Main {
     }
 
     /**
+     * F2診断ポップアップの文字サイズを、フレームが乗っている画面の高さに比例して計算する。
+     * 4Kディスプレイ等の高解像度画面でも既定のJOptionPaneフォント（画面によらず固定サイズ）が
+     * 相対的に小さく読みにくくなる問題への対応。14〜28ptの範囲でクランプする。
+     */
+    private static Font computeF2PopupFont(JFrame frame) {
+        int screenHeight = frame.getGraphicsConfiguration().getBounds().height;
+        int size = Math.max(14, Math.min(28, screenHeight / 45));
+        Font base = UIManager.getFont("OptionPane.messageFont");
+        String family = base != null ? base.getFamily() : Font.SANS_SERIF;
+        return new Font(family, Font.PLAIN, size);
+    }
+
+    /**
      * Ctrl+Alt+矢印: アクティブペインを囲む祖先のうち、キーの方向に対応するorientationを持つ
      * 最初のJSplitPaneだけを調整し、現在ペインを伸縮する。対応する分割が見つからなければ何もしない。
      * PaneNode/Splitツリーではなく、実際に画面に貼られたSwingコンポーネント階層を直接辿る
@@ -999,9 +1018,12 @@ public class Main {
                             List<CompileDiagnostic> rowDiags = diags.stream()
                                 .filter(d -> d.lineNumber() == row)
                                 .toList();
+                            Font f2Font = computeF2PopupFont(frame);
                             if (rowDiags.isEmpty()) {
+                                JLabel f2Label = new JLabel("この行にエラー・警告はありません。");
+                                f2Label.setFont(f2Font);
                                 JOptionPane.showMessageDialog(frame,
-                                    "この行にエラー・警告はありません。",
+                                    f2Label,
                                     "診断情報（行 " + (row + 1) + "）",
                                     JOptionPane.INFORMATION_MESSAGE);
                             } else {
@@ -1023,8 +1045,21 @@ public class Main {
                                     d -> d.kind() == dev.javatexteditor.analysis.DiagnosticKind.ERROR)
                                     ? JOptionPane.ERROR_MESSAGE
                                     : JOptionPane.WARNING_MESSAGE;
+                                JTextArea f2Area = new JTextArea(sb.toString());
+                                f2Area.setFont(f2Font);
+                                f2Area.setEditable(false);
+                                f2Area.setLineWrap(true);
+                                f2Area.setWrapStyleWord(true);
+                                f2Area.setBackground(UIManager.getColor("OptionPane.background"));
+                                int screenW = frame.getGraphicsConfiguration().getBounds().width;
+                                int screenH = frame.getGraphicsConfiguration().getBounds().height;
+                                JScrollPane f2Scroll = new JScrollPane(f2Area);
+                                f2Scroll.setBorder(BorderFactory.createEmptyBorder());
+                                f2Scroll.setPreferredSize(new Dimension(
+                                    Math.min(screenW * 3 / 5, 900),
+                                    Math.min(screenH * 2 / 5, 500)));
                                 JOptionPane.showMessageDialog(frame,
-                                    sb.toString(),
+                                    f2Scroll,
                                     "診断情報（行 " + (row + 1) + "）",
                                     iconType);
                             }
