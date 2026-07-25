@@ -371,24 +371,24 @@ public class EditorCanvasTest {
         }
 
         // =====================================================================
-        // 半角フォント（MiscFixedBold9x18 / X11 misc-fixed Bold 9x18）テスト
+        // 半角フォント（MiscFixedBold10x20 / X11 misc-fixed Bold 10x20）テスト
         // =====================================================================
 
         // Test 23: isSupported - ASCII 範囲は true、範囲外は false
         {
-            MiscFixedBold9x18 f = MiscFixedBold9x18.INSTANCE;
+            MiscFixedBold10x20 f = MiscFixedBold10x20.INSTANCE;
             boolean ok = f.isSupported(' ')
                 && f.isSupported('A')
                 && f.isSupported('~')
                 && !f.isSupported(0x3041)   // ひらがな
                 && !f.isSupported(0x4E00);  // 漢字
-            System.out.println((ok ? "[OK] " : "[FAIL] ") + "MiscFixedBold9x18.isSupported 範囲判定");
+            System.out.println((ok ? "[OK] " : "[FAIL] ") + "MiscFixedBold10x20.isSupported 範囲判定");
             pass += ok ? 1 : 0;
         }
 
         // Test 24: renderGlyph - 返される画像のサイズがセルサイズと一致する
         {
-            java.awt.image.BufferedImage img = MiscFixedBold9x18.INSTANCE.renderGlyph('A', 10, 20, 0xFFFFFF);
+            java.awt.image.BufferedImage img = MiscFixedBold10x20.INSTANCE.renderGlyph('A', 10, 20, 0xFFFFFF);
             boolean ok = img.getWidth() == 10 && img.getHeight() == 20;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
                 + "renderGlyph サイズ (10x20) -> " + img.getWidth() + "x" + img.getHeight());
@@ -397,7 +397,7 @@ public class EditorCanvasTest {
 
         // Test 25: renderGlyph - 'A' の一部ピクセルが点灯している（コンテンツ検証）
         {
-            java.awt.image.BufferedImage img = MiscFixedBold9x18.INSTANCE.renderGlyph('A', 10, 20, 0xFF0000);
+            java.awt.image.BufferedImage img = MiscFixedBold10x20.INSTANCE.renderGlyph('A', 10, 20, 0xFF0000);
             int litCount = 0;
             for (int row = 0; row < 20; row++)
                 for (int col = 0; col < 10; col++)
@@ -453,7 +453,7 @@ public class EditorCanvasTest {
 
         // Test 30: セルサイズ変更後の renderGlyph が新サイズを反映する
         {
-            java.awt.image.BufferedImage img = MiscFixedBold9x18.INSTANCE.renderGlyph('B', 20, 40, 0xFFFFFF);
+            java.awt.image.BufferedImage img = MiscFixedBold10x20.INSTANCE.renderGlyph('B', 20, 40, 0xFFFFFF);
             boolean ok = img.getWidth() == 20 && img.getHeight() == 40;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
                 + "renderGlyph 20x40 サイズ -> " + img.getWidth() + "x" + img.getHeight());
