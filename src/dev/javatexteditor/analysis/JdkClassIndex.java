@@ -1,6 +1,9 @@
 package dev.javatexteditor.analysis;
 
 import java.io.IOException;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReference;
 import java.net.URI;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -9,9 +12,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
@@ -46,14 +51,17 @@ public class JdkClassIndex {
     }
 
     private void buildIndex() {
+        Map<String, Set<String>> exportedPackagesByModule = loadExportedPackagesByModule();
         try {
             FileSystem jrtFs = FileSystems.getFileSystem(URI.create("jrt:/"));
             Path modulesRoot = jrtFs.getPath("/modules");
             try (Stream<Path> paths = Files.walk(modulesRoot)) {
                 paths.filter(p -> p.toString().endsWith(".class"))
                      .forEach(p -> {
-                         String fqn = pathToFqn(p.toString());
-                         if (fqn != null) {
+                         String pathStr = p.toString();
+                         String fqn = pathToFqn(pathStr);
+                         if (fqn != null
+                                 && isExportedPackage(moduleName(pathStr), packageName(fqn), exportedPackagesByModule)) {
                              String simpleName = simpleName(fqn);
                              simpleNameToFqns.computeIfAbsent(simpleName, k -> new ArrayList<>()).add(fqn);
                          }
@@ -63,6 +71,30 @@ public class JdkClassIndex {
             // jrt:/ が使えない環境（JRE のみ等）では空のインデックスのまま
         }
         ready.set(true);
+    }
+
+    /**
+     * 各モジュールが無条件（非qualified）にエクスポートしているパッケージ集合を、
+     * モジュール名をキーとして返す。{@code ModuleFinder.ofSystem()} はランタイムイメージに
+     * 実在する全モジュールの {@code module-info} を返すため、{@code ModuleLayer.boot()} と異なり
+     * 現在のJVM起動時に解決されなかった任意モジュール（例: jdk.hotspot.agent。jrt:/には
+     * クラスファイルが存在するがboot layerには含まれない）も正しく判定できる。
+     */
+    private static Map<String, Set<String>> loadExportedPackagesByModule() {
+        Map<String, Set<String>> result = new HashMap<>();
+        try {
+            for (ModuleReference ref : ModuleFinder.ofSystem().findAll()) {
+                ModuleDescriptor descriptor = ref.descriptor();
+                Set<String> exported = new HashSet<>();
+                for (ModuleDescriptor.Exports e : descriptor.exports()) {
+                    if (!e.isQualified()) exported.add(e.source());
+                }
+                result.put(descriptor.name(), exported);
+            }
+        } catch (RuntimeException e) {
+            // 取得できない環境では空のまま（isExportedPackage は未知モジュール扱いで除外しない）
+        }
+        return result;
     }
 
     /** "/modules/java.base/java/util/List.class" → "java.util.List" */
@@ -81,9 +113,39 @@ public class JdkClassIndex {
         return withoutExt.replace('/', '.');
     }
 
+    /** "/modules/java.base/java/util/List.class" → "java.base" */
+    private static String moduleName(String pathStr) {
+        int modulesIdx = pathStr.indexOf("/modules/");
+        if (modulesIdx < 0) return null;
+        String afterModules = pathStr.substring(modulesIdx + "/modules/".length());
+        int firstSlash = afterModules.indexOf('/');
+        return firstSlash < 0 ? null : afterModules.substring(0, firstSlash);
+    }
+
+    /**
+     * 指定モジュールの指定パッケージが、そのモジュールの外へ無条件にエクスポートされているか
+     * どうかを判定する。{@code com.sun.org.apache.xpath.internal.operations} のような
+     * 非公開の内部パッケージ（java.xmlモジュールでpublicなクラスとして実装されていても、
+     * モジュールがエクスポートしていないため通常のコードからはimportできない）を索引から
+     * 除外するために使用する。qualified export（特定モジュールにのみ公開）は、このエディタが
+     * 生成する一般的なユーザーコード（unnamed module）からは利用できないため対象外とする。
+     */
+    private static boolean isExportedPackage(String moduleName, String pkg, Map<String, Set<String>> exportedPackagesByModule) {
+        if (moduleName == null) return true; // 判定不能な場合は除外しない（安全側）
+        Set<String> exported = exportedPackagesByModule.get(moduleName);
+        if (exported == null) return true; // モジュール情報が取得できない場合は除外しない（安全側）
+        return pkg.isEmpty() || exported.contains(pkg);
+    }
+
     private static String simpleName(String fqn) {
         int dot = fqn.lastIndexOf('.');
         return dot >= 0 ? fqn.substring(dot + 1) : fqn;
+    }
+
+    /** "java.util.List" → "java.util"、パッケージなしの場合は "" */
+    private static String packageName(String fqn) {
+        int dot = fqn.lastIndexOf('.');
+        return dot >= 0 ? fqn.substring(0, dot) : "";
     }
 
     /** インデックス構築が完了しているかどうか。 */
