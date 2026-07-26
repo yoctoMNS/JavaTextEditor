@@ -12,7 +12,7 @@ public class SyntaxHighlighterTest {
         SyntaxHighlighter.LineResult r1 = SyntaxHighlighter.tokenizeLine(l1, SourceLanguage.JAVA, false);
         total++; pass += check("Java: publicはKEYWORD", kindOf(l1, r1.tokens(), "public") == SyntaxKind.KEYWORD);
         total++; pass += check("Java: staticはKEYWORD", kindOf(l1, r1.tokens(), "static") == SyntaxKind.KEYWORD);
-        total++; pass += check("Java: intはTYPE", kindOf(l1, r1.tokens(), "int") == SyntaxKind.TYPE);
+        total++; pass += check("Java: int(基本型)はKEYWORD", kindOf(l1, r1.tokens(), "int") == SyntaxKind.KEYWORD);
         total++; pass += check("Java: 42はNUMBER", kindOf(l1, r1.tokens(), "42") == SyntaxKind.NUMBER);
         total++; pass += check("Java: 行コメントはCOMMENT", kindOf(l1, r1.tokens(), "note") == SyntaxKind.COMMENT);
         total++; pass += check("Java: 行末は複数行コメントを継続しない", !r1.endsInBlockComment());
@@ -22,7 +22,7 @@ public class SyntaxHighlighterTest {
         SyntaxHighlighter.LineResult r2 = SyntaxHighlighter.tokenizeLine(l2, SourceLanguage.JAVA, false);
         total++; pass += check("Java: StringはPascalCaseでTYPE", kindOf(l2, r2.tokens(), "String") == SyntaxKind.TYPE);
         total++; pass += check("Java: 文字列リテラルはSTRING", kindOf(l2, r2.tokens(), "hello") == SyntaxKind.STRING);
-        total++; pass += check("Java: ALL_CAPS識別子はTYPE", kindOf(l2, r2.tokens(), "MAX_COUNT") == SyntaxKind.TYPE);
+        total++; pass += check("Java: ALL_CAPS識別子(定数/マクロ)はKEYWORD", kindOf(l2, r2.tokens(), "MAX_COUNT") == SyntaxKind.KEYWORD);
         total++; pass += check("Java: PascalCaseクラス名はTYPE", kindOf(l2, r2.tokens(), "Foo") == SyntaxKind.TYPE);
         total++; pass += check("Java: 小文字識別子はDEFAULT", kindOf(l2, r2.tokens(), "bar") == SyntaxKind.DEFAULT);
 
@@ -35,7 +35,7 @@ public class SyntaxHighlighterTest {
         String l4 = "still comment */ int y = 1;";
         SyntaxHighlighter.LineResult r4 = SyntaxHighlighter.tokenizeLine(l4, SourceLanguage.JAVA, true);
         total++; pass += check("継続中のブロックコメントの残りはCOMMENT", kindOf(l4, r4.tokens(), "still") == SyntaxKind.COMMENT);
-        total++; pass += check("*/後のintはTYPEに戻る", kindOf(l4, r4.tokens(), "int") == SyntaxKind.TYPE);
+        total++; pass += check("*/後のintはKEYWORDに戻る", kindOf(l4, r4.tokens(), "int") == SyntaxKind.KEYWORD);
         total++; pass += check("閉じたのでブロックコメントは継続しない", !r4.endsInBlockComment());
 
         boolean[] starts = SyntaxHighlighter.computeBlockCommentStarts(
@@ -47,8 +47,8 @@ public class SyntaxHighlighterTest {
         // --- C: 型・キーワード・プリプロセッサ・16進数 ---
         String l5 = "unsigned char c = 0x1F; if (c) return;";
         SyntaxHighlighter.LineResult r5 = SyntaxHighlighter.tokenizeLine(l5, SourceLanguage.C, false);
-        total++; pass += check("C: unsignedはTYPE", kindOf(l5, r5.tokens(), "unsigned") == SyntaxKind.TYPE);
-        total++; pass += check("C: charはTYPE", kindOf(l5, r5.tokens(), "char") == SyntaxKind.TYPE);
+        total++; pass += check("C: unsigned(基本型)はKEYWORD", kindOf(l5, r5.tokens(), "unsigned") == SyntaxKind.KEYWORD);
+        total++; pass += check("C: char(基本型)はKEYWORD", kindOf(l5, r5.tokens(), "char") == SyntaxKind.KEYWORD);
         total++; pass += check("C: ifはKEYWORD", kindOf(l5, r5.tokens(), "if") == SyntaxKind.KEYWORD);
         total++; pass += check("C: returnはKEYWORD", kindOf(l5, r5.tokens(), "return") == SyntaxKind.KEYWORD);
         total++; pass += check("C: 0x1Fは16進数としてNUMBER", kindOf(l5, r5.tokens(), "0x1F") == SyntaxKind.NUMBER);
@@ -57,6 +57,12 @@ public class SyntaxHighlighterTest {
             "#include <stdio.h>", SourceLanguage.C, false);
         total++; pass += check("C: #includeはプリプロセッサ行全体がPREPROCESSOR",
             r6.tokens().size() == 1 && r6.tokens().get(0).kind() == SyntaxKind.PREPROCESSOR);
+
+        // --- C: bool(基本型)とSDLK_LSHIFT(ALL_CAPSマクロ定数)はいずれもKEYWORD ---
+        String l9 = "bool ok = SDLK_LSHIFT;";
+        SyntaxHighlighter.LineResult r9 = SyntaxHighlighter.tokenizeLine(l9, SourceLanguage.C, false);
+        total++; pass += check("C: bool(基本型)はKEYWORD", kindOf(l9, r9.tokens(), "bool") == SyntaxKind.KEYWORD);
+        total++; pass += check("C: SDLK_LSHIFT(ALL_CAPS)はKEYWORD", kindOf(l9, r9.tokens(), "SDLK_LSHIFT") == SyntaxKind.KEYWORD);
 
         // --- 記号(SYMBOL)・演算子(OPERATOR) ---
         String l8 = "int x = (a + b) * 2;";

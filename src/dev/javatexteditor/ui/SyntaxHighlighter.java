@@ -195,16 +195,19 @@ public final class SyntaxHighlighter {
     }
 
     private static SyntaxKind classifyIdentifier(String word, SourceLanguage lang) {
+        // 基本型（void/int/char/bool/unsigned等）は「型名（クラス）」ではなくキーワードと
+        // 同じ明るい白色で表示する（ユーザー要望）。ALL_CAPS識別子（マクロ・定数、例:
+        // SDLK_LSHIFT）も同様にKEYWORD扱いとし、TYPE（明るい水色）はPascalCaseの
+        // クラス名（JDK API・自作プロジェクトのクラス）専用の色として予約する。
         if (lang == SourceLanguage.JAVA) {
-            if (JAVA_TYPES.contains(word)) return SyntaxKind.TYPE;
+            if (JAVA_TYPES.contains(word)) return SyntaxKind.KEYWORD;
             if (JAVA_KEYWORDS.contains(word)) return SyntaxKind.KEYWORD;
         } else if (lang == SourceLanguage.C) {
-            if (C_TYPES.contains(word)) return SyntaxKind.TYPE;
+            if (C_TYPES.contains(word)) return SyntaxKind.KEYWORD;
             if (C_KEYWORDS.contains(word)) return SyntaxKind.KEYWORD;
         }
-        if (isAllCapsIdentifier(word) || Character.isUpperCase(word.charAt(0))) {
-            return SyntaxKind.TYPE;
-        }
+        if (isAllCapsIdentifier(word)) return SyntaxKind.KEYWORD;
+        if (Character.isUpperCase(word.charAt(0))) return SyntaxKind.TYPE;
         return SyntaxKind.DEFAULT;
     }
 

@@ -8,10 +8,12 @@ import java.awt.Color;
  * （コントラストが強すぎると目が疲れやすいため、わずかに調整した色を使う）。
  * DARK_MODEの背景は2026-07のユーザー要望により純黒(#000000)に変更済み。
  *
- * syntaxKeyword はキーワード（if/static/return等）の色。DARK_MODEでは通常の文字
- * （foreground）より明るい白色にして強調している。syntaxType はJava API/自作クラス
- * を含む型名の色で、DARK_MODEでは明るい水色にしている。syntaxSymbol は括弧・カンマ・
- * セミコロン等の区切り記号、syntaxOperator は算術/比較/代入等の演算子の色。
+ * syntaxKeyword はキーワード（if/static/return等）に加え、void/int/char/unsigned/bool
+ * 等の基本型・ALL_CAPS識別子（マクロ・定数）も含む色。DARK_MODEでは純白(#FFFFFF)にして
+ * 強調している。syntaxType はPascalCaseのクラス名（JDK API/自作プロジェクトのクラス）
+ * 専用の色で、DARK_MODEでは明るい水色にしている（基本型・定数とは意図的に区別する）。
+ * syntaxSymbol は括弧・カンマ・セミコロン等の区切り記号、syntaxOperator は算術/比較/
+ * 代入等の演算子の色。
  */
 public enum Theme {
     LIGHT_MODE(
@@ -31,9 +33,9 @@ public enum Theme {
         new Color(0x00, 0x00, 0x00),  // 純黒背景
         new Color(0xB8, 0xB8, 0xB8),  // 通常の文字（少し明るい灰色）
         new Color(0x66, 0x66, 0x66),
-        new Color(0xF2, 0xF2, 0xF2),  // キーワード（明るい白色）
-        new Color(0x7F, 0xE0, 0xFF),  // 型名（Java API/自作クラス含む・明るい水色）
-        new Color(0xB5, 0xCE, 0x6B),  // 文字列（黄緑）
+        new Color(0xFF, 0xFF, 0xFF),  // キーワード・基本型（純白）
+        new Color(0x7F, 0xE0, 0xFF),  // 型名（Java API/自作クラスのみ・明るい水色）
+        new Color(0xC7, 0x5C, 0x8A),  // 文字列（暗いピンク）
         new Color(0xB0, 0x50, 0x50),  // コメント（赤系）
         new Color(0x9A, 0x7E, 0xD6),  // 数値（紫）
         new Color(0xC0, 0x60, 0xC8),  // プリプロセッサ/マクロ（マゼンタ）
