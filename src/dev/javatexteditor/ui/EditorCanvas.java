@@ -19,6 +19,7 @@ import java.text.AttributedString;
 import java.text.CharacterIterator;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,6 +45,14 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private boolean visualLineMode = false;
     private boolean visualBlockMode = false;
     private Theme theme = Theme.LIGHT_MODE;
+    // 構文ハイライト（SyntaxHighlighter参照）。言語はModalEditor.syncCanvas()経由でセットされる。
+    private SourceLanguage language = SourceLanguage.NONE;
+    private static final boolean[] EMPTY_BOOLEAN_ARRAY = new boolean[0];
+    // 行 i がブロックコメントの内側から始まるかの事前計算結果。setText()でlines参照または
+    // languageが変わった時だけ再計算する（Phase 2のcanvasTextCacheと同じ参照一致による失効判定）。
+    private boolean[] blockCommentStartsAt = EMPTY_BOOLEAN_ARRAY;
+    private String[] blockCommentLinesOwner = null;
+    private SourceLanguage blockCommentLangOwner = null;
     private int scrollRow = 0;
     private int scrollCol = 0;              // 横スクロール（セル単位）
     // :wrap / :nowrap（画面端での折り返し表示）。true時は横スクロール(scrollCol)を使わず、
@@ -449,6 +458,27 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public void setText(String text, String[] lines) {
         this.text = text;
         this.cachedLines = lines;
+        if (language != SourceLanguage.NONE) {
+            if (lines != blockCommentLinesOwner || language != blockCommentLangOwner) {
+                blockCommentStartsAt = SyntaxHighlighter.computeBlockCommentStarts(lines, language);
+                blockCommentLinesOwner = lines;
+                blockCommentLangOwner = language;
+            }
+        } else {
+            blockCommentStartsAt = EMPTY_BOOLEAN_ARRAY;
+            blockCommentLinesOwner = null;
+            blockCommentLangOwner = null;
+        }
+        repaint();
+    }
+
+    /**
+     * 構文ハイライト対象の言語を切り替える。ModalEditor.syncCanvas() が現在の
+     * currentFilePath から SourceLanguage.detect() で判定した値を、setText() より
+     * 前に呼ぶ想定（setText() 内のブロックコメント状態キャッシュが言語切替を検知できるように）。
+     */
+    public void setLanguage(SourceLanguage language) {
+        this.language = (language != null) ? language : SourceLanguage.NONE;
         repaint();
     }
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
@@ -997,8 +1027,9 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                 WrapRow wr = wrapPlan.get(screenRow);
                 String seg = lines[wr.docRow()].substring(wr.segStart(), wr.segEnd());
                 int y = (screenRow + 1) * lineHeight;
+                List<SyntaxToken> tokens = tokensForSegment(lines, wr.docRow(), wr.segStart(), wr.segEnd());
                 drawLineWithFullWidthSupport(g2, seg, y, charWidth, 0, gutterWidth,
-                    errorLines.contains(wr.docRow()));
+                    errorLines.contains(wr.docRow()), tokens);
             }
             voidScreenRowStart = wrapPlan.size();
         } else {
@@ -1006,8 +1037,9 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             for (int row = scrollRow; row < lastRow; row++) {
                 int screenRow = row - scrollRow;
                 int y = (screenRow + 1) * lineHeight;
+                List<SyntaxToken> tokens = tokensForRow(lines, row);
                 drawLineWithFullWidthSupport(g2, lines[row], y, charWidth, scrollOffsetX, gutterWidth,
-                    errorLines.contains(row));
+                    errorLines.contains(row), tokens);
             }
             voidScreenRowStart = Math.max(0, lastRow - scrollRow);
         }
@@ -1225,24 +1257,40 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * y はベースライン（セル底辺）の Y 座標。
      */
     private void drawLineWithFullWidthSupport(Graphics2D g2, String line, int y,
-            int charWidth, int scrollOffsetX, int gutterWidth, boolean isErrorLine) {
+            int charWidth, int scrollOffsetX, int gutterWidth, boolean isErrorLine,
+            List<SyntaxToken> tokens) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
         int swingBaselineY = y - bitmapFont.descentPixels(cellH);
+        int tokenIdx = 0;
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
             int widthMult = charCellWidth(codePoint);
             int charPixelWidth = charWidth * widthMult;
             if (x + charPixelWidth > 0 && x < getWidth()) {
+                Color color = theme.foreground;
+                if (!isErrorLine && tokens != null && !tokens.isEmpty()) {
+                    while (tokenIdx < tokens.size() - 1 && tokens.get(tokenIdx).end() <= i) tokenIdx++;
+                    SyntaxToken tok = tokens.get(tokenIdx);
+                    if (i >= tok.start() && i < tok.end()) {
+                        color = syntaxColor(tok.kind());
+                    }
+                }
                 if (bitmapFont.isSupported(codePoint)) {
                     // errorLines 指定行のみ ERROR_COLOR の別キャッシュ（uiGlyphCache）で描画する。
-                    // 通常行は本文専用キャッシュ（glyphCacheFg、テーマ色固定）のまま高速に保つ。
-                    BufferedImage glyph = isErrorLine
-                        ? getUiGlyph(codePoint, cellW, cellH, ERROR_COLOR)
-                        : getGlyphFg(codePoint);
+                    // 通常行・DEFAULT色は本文専用キャッシュ（glyphCacheFg、テーマ色固定）のまま
+                    // 高速に保ち、それ以外の構文色は汎用キャッシュ（uiGlyphCache）を使う。
+                    BufferedImage glyph;
+                    if (isErrorLine) {
+                        glyph = getUiGlyph(codePoint, cellW, cellH, ERROR_COLOR);
+                    } else if (color == theme.foreground) {
+                        glyph = getGlyphFg(codePoint);
+                    } else {
+                        glyph = getUiGlyph(codePoint, cellW, cellH, color);
+                    }
                     g2.drawImage(glyph, x, y - cellTopOffset, null);
                 } else {
-                    g2.setColor(isErrorLine ? ERROR_COLOR : theme.foreground);
+                    g2.setColor(isErrorLine ? ERROR_COLOR : color);
                     g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
                 }
             }
@@ -1250,6 +1298,38 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             i += Character.charCount(codePoint);
             if (x >= getWidth()) break;
         }
+    }
+
+    private Color syntaxColor(SyntaxKind kind) {
+        return switch (kind) {
+            case COMMENT -> theme.syntaxComment;
+            case STRING -> theme.syntaxString;
+            case TYPE -> theme.syntaxType;
+            case NUMBER -> theme.syntaxNumber;
+            case PREPROCESSOR -> theme.syntaxPreprocessor;
+            case KEYWORD -> theme.syntaxKeyword;
+            default -> theme.foreground;
+        };
+    }
+
+    /** 行rowのトークン列を計算する。language==NONEの場合はハイライトなし(null)。 */
+    private List<SyntaxToken> tokensForRow(String[] lines, int row) {
+        if (language == SourceLanguage.NONE) return null;
+        boolean startsInBlockComment = (row >= 0 && row < blockCommentStartsAt.length) && blockCommentStartsAt[row];
+        return SyntaxHighlighter.tokenizeLine(lines[row], language, startsInBlockComment).tokens();
+    }
+
+    /** wrap時、docRowの全体トークンを[segStart,segEnd)に切り出しセグメント相対座標へ変換する。 */
+    private List<SyntaxToken> tokensForSegment(String[] lines, int docRow, int segStart, int segEnd) {
+        List<SyntaxToken> full = tokensForRow(lines, docRow);
+        if (full == null) return null;
+        List<SyntaxToken> clipped = new ArrayList<>(full.size());
+        for (SyntaxToken t : full) {
+            int s = Math.max(t.start(), segStart);
+            int e = Math.min(t.end(), segEnd);
+            if (s < e) clipped.add(new SyntaxToken(s - segStart, e - segStart, t.kind()));
+        }
+        return clipped;
     }
 
     private void drawCursor(Graphics2D g2, String[] lines, int charWidth,

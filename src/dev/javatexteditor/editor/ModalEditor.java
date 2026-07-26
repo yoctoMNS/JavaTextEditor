@@ -4966,6 +4966,7 @@ public class ModalEditor {
     public void syncCanvas() {
         if (canvas != null) {
             refreshCanvasTextCache();
+            canvas.setLanguage(dev.javatexteditor.ui.SourceLanguage.detect(currentFilePath));
             canvas.setText(canvasCachedText, canvasCachedLines);
             canvas.setWrapEnabled(wrapEnabled);
             java.util.Set<Integer> errorLines;
