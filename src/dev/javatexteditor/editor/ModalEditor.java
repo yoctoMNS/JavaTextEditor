@@ -643,6 +643,12 @@ public class ModalEditor {
             return;
         }
 
+        // *compile*/*run* 疑似バッファ: Esc で表示前の元バッファに戻る
+        if (outputBufferActive && keyCode == KeyEvent.VK_ESCAPE) {
+            closeOutputBuffer();
+            return;
+        }
+
         // Esc: NORMALモードでは既定では何も割り当てられていないが、
         // 連続2回押すと検索ハイライトを強制的にクリアする。
         // 他の保留中シーケンス（dd/yy等）が残っていた場合はここで破棄する（Vim同様、Escは保留操作をキャンセルする）。
@@ -5127,6 +5133,38 @@ public class ModalEditor {
     private static final String PSEUDO_COMPILE_PATH = "*compile*";
     private static final String PSEUDO_RUN_PATH = "*run*";
 
+    // *compile*/*run* 疑似バッファ表示前の元バッファへ Esc で戻るための退避状態。
+    // jdk-source疑似バッファ（saved*/inJdkSourceBuffer）と同じ「一時退避→復元」パターン。
+    private UndoablePieceTable outputSavedBuffer = null;
+    private String outputSavedFilePath = null;
+    private int outputSavedCursorRow = 0;
+    private int outputSavedCursorCol = 0;
+    private boolean outputBufferActive = false;
+
+    /** F10/F11開始時に呼ぶ。既に *compile* / *run* 表示中（連続F10等）なら元の退避内容を保持したまま何もしない。 */
+    private void saveBufferBeforeOutput() {
+        if (outputBufferActive) return;
+        outputSavedBuffer = buffer;
+        outputSavedFilePath = currentFilePath;
+        outputSavedCursorRow = cursorRow;
+        outputSavedCursorCol = cursorCol;
+        outputBufferActive = true;
+    }
+
+    /** Esc: *compile* / *run* 疑似バッファから表示前の元バッファへ戻る。 */
+    private void closeOutputBuffer() {
+        if (!outputBufferActive) return;
+        buffer = outputSavedBuffer != null ? outputSavedBuffer : new UndoablePieceTable("");
+        currentFilePath = outputSavedFilePath;
+        cursorRow = outputSavedCursorRow;
+        cursorCol = outputSavedCursorCol;
+        outputBufferActive = false;
+        outputSavedBuffer = null;
+        outputSavedFilePath = null;
+        clearSearchHighlights();
+        statusMessage = "";
+    }
+
     // .classファイルビューア（:nimo コマンド）用の状態。classFileBufferOwner は
     // outputErrorLinesOwner と同じ「参照一致による自動失効」パターン: buffer が別の
     // 疑似バッファ/ファイルに差し替わった時点で参照が一致しなくなり :nimo は自動的に無効化される。
@@ -5158,6 +5196,7 @@ public class ModalEditor {
     }
 
     public void showCompileResult(BuildResult result) {
+        saveBufferBeforeOutput();
         StringBuilder sb = new StringBuilder();
         java.util.Set<Integer> errorRows = new java.util.HashSet<>();
         int row = 0;
@@ -5200,6 +5239,7 @@ public class ModalEditor {
 
     /** F11: 実行結果を *run* 疑似バッファに表示する。showCompileResult と同じ疑似バッファパターン。 */
     public void showRunOutput(String command, String fqcn, String output, int exitCode) {
+        saveBufferBeforeOutput();
         StringBuilder sb = new StringBuilder();
         if (command != null && !command.isEmpty()) {
             sb.append(command).append('\n');
@@ -5224,6 +5264,7 @@ public class ModalEditor {
      * （javac実行中に diagnostic が届くたびリアルタイムで追記していく起点）。
      */
     public void beginCompileOutput() {
+        saveBufferBeforeOutput();
         buffer = new UndoablePieceTable("*compile* 実行中...\n");
         currentFilePath = null;
         grepResults = null;
@@ -5257,6 +5298,7 @@ public class ModalEditor {
      * （コマンド行は実行前から確定しているため、以後 finishRunOutput() まで行数は変わらない）。
      */
     public void beginRunOutput(String command, String fqcn) {
+        saveBufferBeforeOutput();
         StringBuilder sb = new StringBuilder();
         String header0 = (command != null) ? command : "";
         if (!header0.isEmpty()) sb.append(header0).append('\n');
