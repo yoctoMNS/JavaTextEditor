@@ -1003,3 +1003,68 @@ project-root/
 - **性能への配慮（キャッシュ）**: `includedHeaderWords()` はディスク走査（プロジェクト内探索・場合によっては初回のみgccプロセス起動）を伴うため、補完ポップアップ表示中の毎キー入力で無条件に呼ぶと重い（Ctrl+Space/Alt+/ は `recheckCompletion()`/`recheckWordCompletion()` 経由で1文字入力するたびに再クエリされる設計のため）。`cHeaderWords()`（新設）は `currentFilePath + "|" + CIncludeManager.existingIncludes(source)`（＝`#include`行の構成）をキャッシュキーにし、includeの並び・内容が変わらない限り再走査しない。通常のコード編集（`#include`行以外の変更）ではキャッシュキーが変わらないため、実質的にヘッダ変更時とファイル切替時のみ再走査される。
 - **意図的にスコープ外とした点**: `wordIndex` 自体（プロジェクトルート配下の走査）は起動時1回きりのビルドのままで、Cバッファ専用に再構築タイミングを変える等の変更はしていない（既存の「Alt+/ 単語補完の設計決定事項」節の制約をそのまま継承）。ヘッダ側の候補には種別 `kind` を新設せず、既存の `"wd"`（wordIndex由来）をそのまま流用した（UI描画コードの変更を避けるため）。
 - **テスト**: `test/dev/javatexteditor/editor/CWordCompletionTest.java`（新設・4テストメソッド/8アサーション）。Cバッファでは `wordIndex` 側の候補だけで枠が埋まってもJDKクラス名（`kind=="cls"`）が一切出ないこと、`#include` したヘッダ内の関数宣言・マクロ定数がそれぞれ Ctrl+Space・Alt+/ の候補に含まれること、Javaバッファでは従来どおりJDKクラス名が候補に含まれること（回帰なし）を検証。既存の `WordCompletionTest`（8/8）を含む全テストは無修正で引き続き全PASS（ベースラインFAIL＝`ScrollTest`2件・`ModalEditorTest`1件を除く）。
+
+## auto-import が JDK 内部の非公開クラス・`java.lang` を候補にしてしまう不具合の修正（2026-07-26）
+
+「`String` クラスを使うと自動 import が働き、`import` 不要にもかかわらず import を要求してくる。挙句
+`パッケージcom.sun.org.apache.xpath.internal.operationsは表示不可です`（モジュールjava.xmlで宣言され
+ているがエクスポートされていない）と`同じ単純名の型がjava.lang.Stringの単一型インポートによって
+すでに定義されています`という2つのコンパイルエラーが消えなくなる」という報告を受けて調査した。
+
+- **原因**: `JdkClassIndex.buildIndex()` は jrt:/ 配下の `.class` ファイルを単純に全走査するだけで、
+  モジュールがそのパッケージを実際にエクスポートしているか・クラスが `public` かを一切見ていなかった。
+  JDKには単純名が衝突する実装専用クラスが存在する（実機確認: `java.lang.String` の他に
+  `com.sun.org.apache.xpath.internal.operations.String`＝java.xmlモジュール内部のXPath実装クラスが
+  同じ単純名 `String` で存在する。`Method`についても`java.lang.reflect.Method`の他に
+  `com.sun.jdi.Method`・`sun.jvm.hotspot.oops.Method`が同じ単純名で存在する）。`ImportSuggester`は
+  `JdkClassIndex.lookup(simpleName)`の結果をそのままフィルタなしで返すため、`AutoImportHandler`から
+  見ると「Stringの候補が2件」に見え、`ModalEditor.handleAutoImport()`の「候補1件→即挿入、複数件→
+  選択UI」という分岐に乗ってしまう。ユーザーが（あるいは何らかのカスケードエラーで再度自動選択された
+  際に）内部クラス側を挿入してしまうと、javacの「パッケージが非公開」エラーと、`java.lang.String`
+  という暗黙のimportと衝突する「同じ単純名の型が既に定義されている」エラーの2つが連鎖して発生し、
+  一度壊れると`resolveCandidates()`が同じ未解決シンボルを再検出し続けるため消えなくなる
+  （本ファイル既存の「根本原因2」節の`Date`/`List`の曖昧解決バグと同系統の問題）。
+- **修正1（非公開・非公開パッケージの除外、`JdkClassIndex`）**: `buildIndex()`の走査時に
+  `ModuleFinder.ofSystem().findAll()`から全モジュールの`ModuleDescriptor`を一度だけ読み、
+  各モジュールが**無条件（非qualified）にエクスポートしているパッケージ集合**を
+  `Map<String, Set<String>>`（モジュール名→パッケージ集合）として事前計算した
+  （`loadExportedPackagesByModule()`）。走査中の各クラスについて、そのパッケージが
+  対応モジュールの非qualifiedエクスポート集合に含まれない場合は索引に追加しない
+  （`isExportedPackage()`）。qualified export（特定モジュールにのみ公開）は、このエディタが
+  生成する一般的なユーザーコード（unnamed module）からは利用できないため対象外とした。
+  実機確認: `com.sun.org.apache.xpath.internal.operations`はjava.xmlのexportsに一切含まれず
+  （java.xmlは`com.sun.org.apache.xpath.internal`等ごく一部のみqualified exportしているのみ）、
+  `sun.jvm.hotspot.oops`もjdk.hotspot.agentのexportsに含まれない（qualified exportは
+  `sun.jvm.hotspot.debugger.remote`のみ）ため、どちらも正しく索引から除外されることを確認済み。
+  - **`ModuleLayer.boot().findModule()`ではなく`ModuleFinder.ofSystem()`を使う理由**: 実装当初
+    `ModuleLayer.boot()`（現在のJVM起動時に実際に解決されたモジュールのみを含む）で判定しようと
+    したが、`jdk.hotspot.agent`のような「jrt:/にクラスファイルは実在するが、通常の起動では
+    boot layerに含まれないオプションモジュール」は`findModule()`が空を返し、「判定不能なので
+    除外しない（安全側）」のフォールバックに落ちて内部クラスが索引に残ってしまうことを実機確認
+    した。`ModuleFinder.ofSystem()`はboot layerの解決状態に依存せずランタイムイメージ内の
+    全モジュールの`module-info`を静的に読めるため、この問題が起きない。
+  - **索引全体から除外する設計にした理由**: この索引は⑩jdk-api-navigation（K）・Ctrl+Space補完
+    （`CompletionIndex.allSimpleNames()`経由）とも共有されており、どの用途であっても「外部から
+    importできない＝実質参照できない内部実装クラス」を候補に出すことに意味がないため、
+    auto-import専用のフィルタではなく索引レベルで除外した。`java.lang.String`のような
+    「エクスポートされてはいるが単にimport不要」なケースとは性質が異なる（java.lang.String
+    自体は正当な公開APIであり、K・補完では引き続き有効な候補であるべきのため後述の修正2と
+    分離した）。
+- **修正2（`java.lang`パッケージの除外、`ImportSuggester`）**: `java.lang`直下のクラス
+  （`String`/`Math`/`Thread`等）は全てのコンパイル単位に暗黙にimportされるため、import文の
+  候補として提示すること自体が誤り。`ImportSuggester.suggest(String)`/`suggest(String, Path)`の
+  両方に`filterImportable()`を追加し、候補の**パッケージ名が完全一致で`"java.lang"`**のものを
+  除外するようにした（前方一致にすると`java.lang.reflect.Method`のようなimportが必要な
+  サブパッケージまで誤って除外してしまうため、`packageOf(fqn).equals("java.lang")`で判定する）。
+  `JdkClassIndex`自体は変更していない（Ctrl+Space補完・Kキーではjava.lang.String等の一般的な
+  クラス名が引き続き候補・検索対象になるべきのため、ImportSuggesterという「import候補を返す」
+  役割の層だけに閉じた変更にした）。
+- **修正後の実機確認**: `suggest("String")` → `[]`（java.lang.Stringのみだった候補が空になり、
+  そもそも未解決シンボルとして扱われず何も起きなくなる）、`suggest("List")` →
+  `[java.util.List, java.awt.List]`（正当な曖昧候補は従来どおり残る）、`suggest("Method")` →
+  `[java.lang.reflect.Method, com.sun.jdi.Method]`（`sun.jvm.hotspot.oops.Method`のみ除外され、
+  jdk.jdiの`com.sun.jdi.Method`はエクスポート済みの正当な候補として残る）。
+- **テスト**: 既存の`JdkClassIndexTest`（18/18）・`AutoImportHandlerTest`（53/53）は無修正で
+  全PASSを確認（`lookup("String")`が`java.lang.String`を含むことを検証する既存テストは、
+  内部クラスの重複が消えても引き続き成立する）。全体は既存のベースラインFAIL（`ScrollTest`2件・
+  `ModalEditorTest`1件＝本変更前から失敗、仕様判断未決のため修正禁止）を除き全PASS。
