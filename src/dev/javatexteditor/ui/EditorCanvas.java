@@ -1308,6 +1308,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             case NUMBER -> theme.syntaxNumber;
             case PREPROCESSOR -> theme.syntaxPreprocessor;
             case KEYWORD -> theme.syntaxKeyword;
+            case SYMBOL -> theme.syntaxSymbol;
+            case OPERATOR -> theme.syntaxOperator;
             default -> theme.foreground;
         };
     }

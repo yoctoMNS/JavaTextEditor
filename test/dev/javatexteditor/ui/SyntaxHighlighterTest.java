@@ -58,6 +58,16 @@ public class SyntaxHighlighterTest {
         total++; pass += check("C: #includeはプリプロセッサ行全体がPREPROCESSOR",
             r6.tokens().size() == 1 && r6.tokens().get(0).kind() == SyntaxKind.PREPROCESSOR);
 
+        // --- 記号(SYMBOL)・演算子(OPERATOR) ---
+        String l8 = "int x = (a + b) * 2;";
+        SyntaxHighlighter.LineResult r8 = SyntaxHighlighter.tokenizeLine(l8, SourceLanguage.C, false);
+        total++; pass += check("(はSYMBOL", kindOf(l8, r8.tokens(), "(") == SyntaxKind.SYMBOL);
+        total++; pass += check(")はSYMBOL", kindOf(l8, r8.tokens(), ")") == SyntaxKind.SYMBOL);
+        total++; pass += check(";はSYMBOL", kindOf(l8, r8.tokens(), ";") == SyntaxKind.SYMBOL);
+        total++; pass += check("=はOPERATOR", kindOf(l8, r8.tokens(), "=") == SyntaxKind.OPERATOR);
+        total++; pass += check("+はOPERATOR", kindOf(l8, r8.tokens(), "+") == SyntaxKind.OPERATOR);
+        total++; pass += check("*はOPERATOR", kindOf(l8, r8.tokens(), "*") == SyntaxKind.OPERATOR);
+
         // --- 未対応言語は全体をDEFAULT ---
         SyntaxHighlighter.LineResult r7 = SyntaxHighlighter.tokenizeLine(
             "plain text", SourceLanguage.NONE, false);

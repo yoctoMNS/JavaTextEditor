@@ -147,11 +147,23 @@ public final class SyntaxHighlighter {
                 i = j;
                 continue;
             }
-            tokens.add(new SyntaxToken(i, i + 1, SyntaxKind.DEFAULT));
+            tokens.add(new SyntaxToken(i, i + 1, classifyPunctuation(c)));
             i++;
         }
 
         return new LineResult(tokens, false);
+    }
+
+    // 演算子（算術・比較・代入・論理等）。複数文字演算子（==、&&、->等）も1文字ずつ
+    // OPERATOR判定されるため、隣接する同種トークンとして視覚上は問題なくつながる。
+    private static final String OPERATOR_CHARS = "+-*/%=<>!&|^~?";
+    // 区切り記号（括弧・カンマ・セミコロン・ドット等）。
+    private static final String SYMBOL_CHARS = "(){}[];,.:@";
+
+    private static SyntaxKind classifyPunctuation(char c) {
+        if (OPERATOR_CHARS.indexOf(c) >= 0) return SyntaxKind.OPERATOR;
+        if (SYMBOL_CHARS.indexOf(c) >= 0) return SyntaxKind.SYMBOL;
+        return SyntaxKind.DEFAULT;
     }
 
     private static int scanNumber(String line, int start, int n) {
