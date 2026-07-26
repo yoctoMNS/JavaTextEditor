@@ -999,6 +999,7 @@ public class ModalEditor {
                     case "enter.normal" -> {
                         dismissCompletion();
                         finalizeBlockInsertIfActive();
+                        clearLineIfIndentOnly();
                         mode = Mode.NORMAL;
                         clampCursorForNormal();
                         if (onReturnToNormal != null) onReturnToNormal.run();
@@ -1016,6 +1017,7 @@ public class ModalEditor {
                     case "save.from.insert" -> {
                         dismissCompletion();
                         finalizeBlockInsertIfActive();
+                        clearLineIfIndentOnly();
                         mode = Mode.NORMAL;
                         clampCursorForNormal();
                         if (onReturnToNormal != null) onReturnToNormal.run();
@@ -4220,6 +4222,19 @@ public class ModalEditor {
             int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
             int maxCol = isInsert ? lineLen : Math.max(0, lineLen - 1);
             cursorCol = Math.max(0, Math.min(cursorCol + dCol, maxCol));
+        }
+    }
+
+    // INSERT モードから NORMAL モードへ戻る際、カーソル行が自動インデントのスペースのみで
+    // 実際のコードが何も入力されていない場合、そのインデントを全て削除し0文字の空行に戻す。
+    private void clearLineIfIndentOnly() {
+        String[] lines = getLines();
+        if (cursorRow >= lines.length) return;
+        String line = lines[cursorRow];
+        if (!line.isEmpty() && line.isBlank()) {
+            int lineStart = offsetAt(cursorRow, 0);
+            buffer.delete(lineStart, line.length());
+            cursorCol = 0;
         }
     }
 
