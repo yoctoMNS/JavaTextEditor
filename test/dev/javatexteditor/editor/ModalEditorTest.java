@@ -132,7 +132,7 @@ public class ModalEditorTest {
         testGenerateGetterViaBackslashA();
         testGenerateSetterViaBackslashA();
         testGenerateGetterAndSetterViaBackslashA();
-        testInsertOverrideStubCtrlShiftO();
+        testInsertOverrideStubCtrlCCtrlO();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -1701,11 +1701,11 @@ public class ModalEditorTest {
         check("\\ad: setName() が含まれる", text.contains("public void setName("));
     }
 
-    /** Ctrl+Shift+O: @Override + 改行を挿入し INSERT モードへ入ることを確認する
-     *  （元は organize imports が割り当てられていたが差し替えた。organize imports 自体は
-     *  SPC+i+o / :oi から引き続き利用できる — CompileTriggerCallbackTest 参照）。 */
-    static void testInsertOverrideStubCtrlShiftO() {
-        System.out.println("--- @Override 挿入（Ctrl+Shift+O） ---");
+    /** Ctrl+C → Ctrl+O: @Override + 改行を挿入し INSERT モードへ入ることを確認する
+     *  （元は Ctrl+Shift+O が割り当てられていたが、Emacs風の2打鍵プレフィックスへ差し替えた。
+     *  organize imports 自体は SPC+i+o / :oi から引き続き利用できる — CompileTriggerCallbackTest 参照）。 */
+    static void testInsertOverrideStubCtrlCCtrlO() {
+        System.out.println("--- @Override 挿入（Ctrl+C, Ctrl+O） ---");
         // 2行目はインデントだけの空行（"    "）。カーソルをその行末（インデント直後、col=4）に
         // 置くのが「メソッドを書く直前」の実際の使い方（testAutoIndentPreserve 等、既存の
         // 自動インデントテストと同じ「行末にカーソルを置いてから挿入操作を行う」慣例に揃えた。
@@ -1713,13 +1713,13 @@ public class ModalEditorTest {
         String src = "public class Foo {\n    \n    void bar() {}\n}\n";
         ModalEditor ed = new ModalEditor(src);
         ed.setCursor(1, 4);
-        ed.processKey(KeyEvent.VK_O, KeyEvent.CHAR_UNDEFINED,
-                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_C, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_O, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
         String[] lines = ed.getText().split("\n", -1);
-        check("Ctrl+Shift+O: 2行目が \"    @Override\" になる", "    @Override".equals(lines[1]));
-        check("Ctrl+Shift+O: 3行目のインデントのみの空行が残る", "    ".equals(lines[2]));
-        check("Ctrl+Shift+O: 4行目に元のメソッド行がそのまま残る", lines[3].equals("    void bar() {}"));
-        check("Ctrl+Shift+O: INSERT モードへ遷移する", ed.isInsertMode());
+        check("Ctrl+C,Ctrl+O: 2行目が \"    @Override\" になる", "    @Override".equals(lines[1]));
+        check("Ctrl+C,Ctrl+O: 3行目のインデントのみの空行が残る", "    ".equals(lines[2]));
+        check("Ctrl+C,Ctrl+O: 4行目に元のメソッド行がそのまま残る", lines[3].equals("    void bar() {}"));
+        check("Ctrl+C,Ctrl+O: INSERT モードへ遷移する", ed.isInsertMode());
     }
 
     static void testParseFieldInt() {

@@ -471,7 +471,7 @@ NORMAL モードには、画面単位・行単位のスクロール専用キー�
   Space g s   同様に setter を自動生成
   Space g d   getter と setter を両方生成
   Space i o     未使用の import 文を一括削除する（:oi コマンドも同じ）
-  Ctrl+Shift+O  カーソル位置に @Override + 改行を挿入する
+  Ctrl+C, Ctrl+O  カーソル位置に @Override + 改行を挿入する（Ctrl+Cの後にCtrl+O）
   :main java / :main javac   java / javac コマンドの実際の起動点
               （launcher のソースコード）へジャンプする
   F10         作業ディレクトリ配下のJavaプロジェクト全体をコンパイルする

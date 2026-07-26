@@ -91,7 +91,7 @@ public class RobotKeyInputTest {
         testInsertTabSkipClosingPair();   // Tab で閉じカッコをスキップ
         testSaveFromInsert();             // Ctrl+] INSERT→NORMAL
         testOrganizeImportsSpcIo();       // SPC+i+o で未使用 import 削除
-        testCtrlShiftOInsertsOverrideStub(); // Ctrl+Shift+O で @Override + 改行を挿入
+        testCtrlCCtrlOInsertsOverrideStub(); // Ctrl+C, Ctrl+O で @Override + 改行を挿入
         testOrganizeImportsCommandOi();   // :oi コマンドで未使用 import 削除
         testRemoveImportCommand();        // :remove-import <fqn> で特定 import 削除
         testDiagJumpNextRobot();          // [g で次のエラー行へジャンプ
@@ -913,12 +913,13 @@ public class RobotKeyInputTest {
     }
 
     /**
-     * Ctrl+Shift+O: @Override + 改行を挿入し INSERT モードへ入る（NORMAL/INSERT いずれからも）。
-     * 元々 Eclipse 互換の import 整理が割り当てられていたが、ユーザー確認の上でこの機能に
-     * 差し替えた（import 整理自体は SPC+i+o / :oi から引き続き利用できる。上記テスト参照）。
+     * Ctrl+C → Ctrl+O: @Override + 改行を挿入し INSERT モードへ入る（NORMAL/INSERT いずれからも）。
+     * 元々 Ctrl+Shift+O が割り当てられていたが、ユーザー確認の上で Emacs 風の2打鍵プレフィックス
+     * （Ctrl+C を押してから Ctrl+O）へ変更した（import 整理自体は SPC+i+o / :oi から
+     * 引き続き利用できる。上記テスト参照）。
      */
-    static void testCtrlShiftOInsertsOverrideStub() throws Exception {
-        System.out.println("\n--- Ctrl+Shift+O (NORMAL): @Override 挿入 ---");
+    static void testCtrlCCtrlOInsertsOverrideStub() throws Exception {
+        System.out.println("\n--- Ctrl+C, Ctrl+O (NORMAL): @Override 挿入 ---");
         // 2行目は既にインデントだけの空行（"    "）: カーソルをその行末（インデント直後）に
         // 置いた状態が「メソッドを書く直前」の実際の使い方に相当する（自動インデントの既存テストと
         // 同じ慣例。カーソル列0のまま挿入するとインデントが二重になる既知の落とし穴を避けている）。
@@ -926,24 +927,28 @@ public class RobotKeyInputTest {
         resetEditorTo(src);
         editor.setCursor(1, 4);
 
-        pressCtrlShift(KeyEvent.VK_O);
+        pressCtrl(KeyEvent.VK_C);
+        Thread.sleep(SETTLE_MS);
+        pressCtrl(KeyEvent.VK_O);
         Thread.sleep(SETTLE_MS);
 
         String[] lines = editor.getText().split("\n", -1);
-        check("Ctrl+Shift+O(NORMAL): 2行目が \"    @Override\" になる", "    @Override", lines[1]);
-        check("Ctrl+Shift+O(NORMAL): INSERT モードへ遷移する", true, editor.isInsertMode());
+        check("Ctrl+C,Ctrl+O(NORMAL): 2行目が \"    @Override\" になる", "    @Override", lines[1]);
+        check("Ctrl+C,Ctrl+O(NORMAL): INSERT モードへ遷移する", true, editor.isInsertMode());
 
-        System.out.println("\n--- Ctrl+Shift+O (INSERT): @Override 挿入 ---");
+        System.out.println("\n--- Ctrl+C, Ctrl+O (INSERT): @Override 挿入 ---");
         String src2 = "class Y {\n    \n    void bar() {}\n}\n";
         resetEditorTo(src2);
         editor.setCursor(1, 4);
         pressChar('i'); // INSERT モードへ（列位置は維持される）
         Thread.sleep(SETTLE_MS);
-        pressCtrlShift(KeyEvent.VK_O);
+        pressCtrl(KeyEvent.VK_C);
+        Thread.sleep(SETTLE_MS);
+        pressCtrl(KeyEvent.VK_O);
         Thread.sleep(SETTLE_MS);
         String[] lines2 = editor.getText().split("\n", -1);
-        check("Ctrl+Shift+O(INSERT): 2行目が \"    @Override\" になる", "    @Override", lines2[1]);
-        check("Ctrl+Shift+O(INSERT): INSERT モード維持", true, editor.isInsertMode());
+        check("Ctrl+C,Ctrl+O(INSERT): 2行目が \"    @Override\" になる", "    @Override", lines2[1]);
+        check("Ctrl+C,Ctrl+O(INSERT): INSERT モード維持", true, editor.isInsertMode());
     }
 
     /**

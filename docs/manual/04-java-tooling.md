@@ -83,7 +83,8 @@ INSERT→NORMAL復帰時にコンパイルエラーを解析し、未解決の�
 | `:remove-import <fqn>` | 指定したFQNのimport行を1件削除（例: `:remove-import java.util.List`） |
 
 > **注意**: `Ctrl+Shift+O` は以前 organize imports に割り当てられていましたが、現在は
-> 「カーソル位置に `@Override` + 改行を挿入する」機能（`insert.override`）に変更されています。
+> 「カーソル位置に `@Override` + 改行を挿入する」機能（`insert.override`）が
+> `Ctrl+C` に続けて `Ctrl+O`（Emacs風の2打鍵プレフィックス）に割り当てられています。
 > import 整理は `Space+i+o` または `:oi` を使ってください。
 
 ## マルチファイルリファクタリング（`:rename`）
