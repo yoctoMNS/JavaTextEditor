@@ -135,6 +135,11 @@ public class ModalEditor {
     private static YankType yankType = YankType.CHAR;
     private enum CaseOp { UPPER, LOWER, TOGGLE }
     private String pendingSequence = ""; // yy / dd / SPC+g+g 等の多打鍵シーケンス管理
+    // @Override 挿入の Emacs 風プレフィックス（Ctrl+C を押してから Ctrl+O）。
+    // Ctrl+C 単独では何も起きず、続けて Ctrl+O を押すと insertOverrideStub() が発火する。
+    // 既存の pendingSequence（NORMALモードの processNormalKey 内でのみ処理される）は
+    // INSERTモードをカバーしないため、モード非依存に processKey() 冒頭で扱う専用フィールドにした。
+    private boolean ctrlCOverridePending = false;
     // vim-macro-recording: q{register}記録 / @{register}再生。
     // yankRegister（ヤンクバッファ）とは独立したマクロ専用レジスタストレージ。
     private record RecordedKey(int keyCode, char keyChar, int modifiers) {}
@@ -518,20 +523,37 @@ public class ModalEditor {
         if (macroRecording && macroReplayDepth == 0 && !isMacroStopKey) {
             macroRecordBuffer.add(new RecordedKey(keyCode, keyChar, modifiers));
         }
-        switch (mode) {
-            case INSERT       -> processInsertKey(keyCode, keyChar, modifiers);
-            case COMMAND      -> processCommandKey(keyCode, keyChar);
-            case NORMAL       -> processNormalKey(keyCode, keyChar, modifiers);
-            case VISUAL       -> processVisualKey(keyCode, keyChar, modifiers);
-            case VISUAL_LINE  -> processVisualLineKey(keyCode, keyChar, modifiers);
-            case VISUAL_BLOCK -> processVisualBlockKey(keyCode, keyChar, modifiers);
-            case SEARCH        -> processSearchKey(keyCode, keyChar);
-            case FILESEARCH    -> processFileSearchKey(keyCode, keyChar);
-            case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
-            case IMPORT_SELECT -> processImportSelectKey(keyCode, keyChar, modifiers);
-            case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
-            case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
-            case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
+        boolean ctrlDownForOverride = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
+        boolean overrideChordEligible = (mode == Mode.NORMAL || mode == Mode.INSERT);
+        if (overrideChordEligible && ctrlCOverridePending) {
+            ctrlCOverridePending = false;
+            statusMessage = "";
+            if (ctrlDownForOverride && keyCode == KeyEvent.VK_O) {
+                insertOverrideStub();
+            } else if (mode == Mode.NORMAL) {
+                processNormalKey(keyCode, keyChar, modifiers);
+            } else {
+                processInsertKey(keyCode, keyChar, modifiers);
+            }
+        } else if (overrideChordEligible && ctrlDownForOverride && keyCode == KeyEvent.VK_C) {
+            ctrlCOverridePending = true;
+            statusMessage = "C-c-";
+        } else {
+            switch (mode) {
+                case INSERT       -> processInsertKey(keyCode, keyChar, modifiers);
+                case COMMAND      -> processCommandKey(keyCode, keyChar);
+                case NORMAL       -> processNormalKey(keyCode, keyChar, modifiers);
+                case VISUAL       -> processVisualKey(keyCode, keyChar, modifiers);
+                case VISUAL_LINE  -> processVisualLineKey(keyCode, keyChar, modifiers);
+                case VISUAL_BLOCK -> processVisualBlockKey(keyCode, keyChar, modifiers);
+                case SEARCH        -> processSearchKey(keyCode, keyChar);
+                case FILESEARCH    -> processFileSearchKey(keyCode, keyChar);
+                case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
+                case IMPORT_SELECT -> processImportSelectKey(keyCode, keyChar, modifiers);
+                case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
+                case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
+                case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
+            }
         }
         syncCanvas();
         long currentVersion = buffer.getVersion();
@@ -1406,11 +1428,12 @@ public class ModalEditor {
     }
 
     /**
-     * Ctrl+Shift+O: "@Override" + 改行を現在行のインデントに揃えて挿入し、
-     * オーバーライドするメソッドのシグネチャだけをその場で書けるように準備する。
+     * Ctrl+C, Ctrl+O（Emacs風の2打鍵プレフィックス）: "@Override" + 改行を現在行のインデントに
+     * 揃えて挿入し、オーバーライドするメソッドのシグネチャだけをその場で書けるように準備する。
      * NORMAL/INSERT いずれから呼ばれても INSERT モードへ入る（続けてシグネチャを打鍵させるため）。
-     * このキーには元々 organizeImports() が割り当てられていたが、ユーザー確認の上で差し替えた。
-     * organizeImports() 自体は SPC+i+o / :oi / :organize-imports から引き続き呼べるため変更していない。
+     * このキーには元々 organizeImports()、次いで Ctrl+Shift+O が割り当てられていたが、
+     * ユーザー確認の上でこの2打鍵方式へ差し替えた。organizeImports() 自体は
+     * SPC+i+o / :oi / :organize-imports から引き続き呼べるため変更していない。
      */
     private void insertOverrideStub() {
         String[] lines = getLines();

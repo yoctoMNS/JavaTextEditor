@@ -10,8 +10,9 @@ import java.nio.file.Path;
  * Main.setupCompileAnalysis はこの契約（INSERT→NORMAL 遷移で onReturnToNormal、
  * :w 成功で onSave、SPC+i+o で onOrganizeImports が発火すること）に依存しているが、
  * Main 自体は GUI・static 依存でテスト不能なため、依存される側の契約をここで固定する。
- * Ctrl+Shift+O は2026-07に organize imports から @Override 挿入（insert.override）へ
- * 割り当てを差し替えたため、onOrganizeImports のトリガーではなくなった（下記テスト参照）。
+ * @Override 挿入（insert.override）のキーは2026-07に organize imports から差し替えられ、
+ * さらに Ctrl+Shift+O から Ctrl+C, Ctrl+O の2打鍵プレフィックスへ変更されたため、
+ * Ctrl+Shift+O は onOrganizeImports のトリガーではなくなった（下記テスト参照）。
  * mainメソッド形式のテストハーネス（JUnit不使用）。EditorCanvas は生成しない。
  */
 public class CompileTriggerCallbackTest {
@@ -24,7 +25,7 @@ public class CompileTriggerCallbackTest {
         testOnSaveFiresOnSuccessfulWrite();
         testOnSaveNotFiredWithoutFileName();
         testOnOrganizeImportsFiresOnLeaderIO();
-        testCtrlShiftOInsertsOverrideStub();
+        testCtrlCCtrlOInsertsOverrideStub();
         testOnBufferChangedFiresOnNormalModeDeleteLine();
         testOnBufferChangedNotFiredOnPureCursorMovement();
         testOnBufferChangedNotFiredDuringInsertTyping();
@@ -109,17 +110,18 @@ public class CompileTriggerCallbackTest {
         check("SPC+i+o で onOrganizeImports が1回発火する", counter[0] == 1);
     }
 
-    /** NORMAL モードの Ctrl+Shift+O は @Override + 改行を挿入し INSERT モードへ入る。
-     *  organize imports からこの機能へ割り当てを差し替えた際の回帰テスト。 */
-    static void testCtrlShiftOInsertsOverrideStub() {
-        System.out.println("[Ctrl+Shift+O: @Override 挿入]");
+    /** NORMAL モードの Ctrl+C → Ctrl+O は @Override + 改行を挿入し INSERT モードへ入る。
+     *  organize imports からこの機能へ割り当てを差し替え、さらに Ctrl+Shift+O から
+     *  Ctrl+C, Ctrl+O の2打鍵プレフィックスへ変更した際の回帰テスト。 */
+    static void testCtrlCCtrlOInsertsOverrideStub() {
+        System.out.println("[Ctrl+C, Ctrl+O: @Override 挿入]");
         // 2行目はインデントだけの空行（"    "）。カーソルをその行末（col=4、インデント直後）に
         // 置くのが実際の使い方（列0のまま挿入するとインデントが二重になるため意図的にこの位置にした）。
         ModalEditor ed = new ModalEditor("class A {\n    \n    int x;\n}\n");
         ed.setCursor(1, 4);
 
-        ed.processKey(KeyEvent.VK_O, KeyEvent.CHAR_UNDEFINED,
-                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_C, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_O, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
 
         check("@Override がカーソル行に挿入される", ed.getText().contains("@Override"));
         check("挿入後は INSERT モードへ入る", ed.isInsertMode());

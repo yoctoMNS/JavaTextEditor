@@ -50,7 +50,7 @@
 | `guu` `gUU` `g~~` | 現在行を小文字化/大文字化/大文字小文字反転（[モーダル編集](02-modal-editing.md)） |
 | `Space+g+g` `Space+g+s` `Space+g+d` | Getter/Setter生成（[Java開発支援](04-java-tooling.md)） |
 | `Space+i+o` | import整理（Java）/ `#include`整理（C）（[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
-| `Ctrl+Shift+O` | カーソル位置に `@Override` + 改行を挿入（[Java開発支援](04-java-tooling.md)） |
+| `Ctrl+C` → `Ctrl+O` | カーソル位置に `@Override` + 改行を挿入（[Java開発支援](04-java-tooling.md)） |
 | `[g` `[d` | 次/前のエラー・警告行へ（Java/C 共通。[Java](04-java-tooling.md) / [C](11-c-tooling.md)） |
 
 ### モード遷移・検索・ナビゲーション
@@ -88,7 +88,7 @@
 | `Ctrl+]` `Ctrl+[` | 保存してNORMALへ |
 | `Ctrl+Space` | マージ補完（[コード補完](05-completion.md)） |
 | `Alt+/` | 単語補完（[コード補完](05-completion.md)） |
-| `Ctrl+Shift+O` | カーソル位置に `@Override` + 改行を挿入 |
+| `Ctrl+C` → `Ctrl+O` | カーソル位置に `@Override` + 改行を挿入 |
 
 ## COMMANDモード
 
