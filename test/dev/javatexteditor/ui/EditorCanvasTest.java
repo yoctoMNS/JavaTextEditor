@@ -32,7 +32,7 @@ public class EditorCanvasTest {
             BufferedImage img = render(canvas, 400, 300);
             // 行0の内側(y=5)を見る（理由はLIGHT_MODE背景色テストのコメント参照）
             int pixel = img.getRGB(350, 5);
-            pass += checkColor("DARK_MODE背景色", 0x1A, 0x1A, 0x1A, pixel);
+            pass += checkColor("DARK_MODE背景色", 0x00, 0x00, 0x00, pixel);
         }
 
         // Test 3: NORMALモードのカーソルブロックが前景色で描画されているか

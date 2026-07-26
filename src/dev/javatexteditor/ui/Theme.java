@@ -4,13 +4,16 @@ import java.awt.Color;
 
 /**
  * テーマごとの配色定義。
- * 純粋な黒(#000000)・純粋な白(#FFFFFF)を使わない理由:
- * コントラストが強すぎると目が疲れやすいため、わずかに調整した色を使う。
+ * LIGHT_MODEは純粋な黒(#000000)・純粋な白(#FFFFFF)を使わない
+ * （コントラストが強すぎると目が疲れやすいため、わずかに調整した色を使う）。
+ * DARK_MODEの背景は2026-07のユーザー要望により純黒(#000000)に変更済み。
  *
- * syntaxKeyword はキーワード（if/static/return等）の色。ダークモードの参考画像では
- * キーワードは通常の識別子と同じ地の色（本文フォントが元々Boldのため強調は不要）で
- * 描画されていたため、値は foreground と同じにしている（SyntaxKind自体は将来の
- * テーマ拡張のために区別して保持する）。
+ * syntaxKeyword はキーワード（if/static/return等）に加え、void/int/char/unsigned/bool
+ * 等の基本型・ALL_CAPS識別子（マクロ・定数）も含む色。DARK_MODEでは純白(#FFFFFF)にして
+ * 強調している。syntaxType はPascalCaseのクラス名（JDK API/自作プロジェクトのクラス）
+ * 専用の色で、DARK_MODEでは明るい水色にしている（基本型・定数とは意図的に区別する）。
+ * syntaxSymbol は括弧・カンマ・セミコロン等の区切り記号、syntaxOperator は算術/比較/
+ * 代入等の演算子の色。
  */
 public enum Theme {
     LIGHT_MODE(
@@ -22,18 +25,22 @@ public enum Theme {
         new Color(0xA3, 0x15, 0x15),  // 文字列（暗い赤）
         new Color(0x3F, 0x7F, 0x5F),  // コメント（緑）
         new Color(0x17, 0x50, 0xEB),  // 数値（青）
-        new Color(0xAF, 0x00, 0xDB)   // プリプロセッサ/マクロ（紫）
+        new Color(0xAF, 0x00, 0xDB),  // プリプロセッサ/マクロ（紫）
+        new Color(0x2E, 0x8B, 0x57),  // 記号（括弧・カンマ・セミコロン等、緑）
+        new Color(0x00, 0x6E, 0x8A)   // 演算子（暗めの水色）
     ),
     DARK_MODE(
-        new Color(0x1A, 0x1A, 0x1A),  // 黒背景（純黒より少し柔らかい）
-        new Color(0xD4, 0xD4, 0xD4),  // 薄いグレー寄りの白文字
+        new Color(0x00, 0x00, 0x00),  // 純黒背景
+        new Color(0xB8, 0xB8, 0xB8),  // 通常の文字（少し明るい灰色）
         new Color(0x66, 0x66, 0x66),
-        new Color(0xD4, 0xD4, 0xD4),  // キーワード（foregroundと同色）
-        new Color(0x6E, 0xC0, 0xC8),  // 型名（シアン系）
-        new Color(0xB5, 0xCE, 0x6B),  // 文字列（黄緑）
+        new Color(0xFF, 0xFF, 0xFF),  // キーワード・基本型（純白）
+        new Color(0x7F, 0xE0, 0xFF),  // 型名（Java API/自作クラスのみ・明るい水色）
+        new Color(0xC7, 0x5C, 0x8A),  // 文字列（暗いピンク）
         new Color(0xB0, 0x50, 0x50),  // コメント（赤系）
         new Color(0x9A, 0x7E, 0xD6),  // 数値（紫）
-        new Color(0xC0, 0x60, 0xC8)   // プリプロセッサ/マクロ（マゼンタ）
+        new Color(0xC0, 0x60, 0xC8),  // プリプロセッサ/マクロ（マゼンタ）
+        new Color(0x6A, 0xE6, 0x6A),  // 記号（括弧・カンマ・セミコロン等、明るい緑）
+        new Color(0x3F, 0x9B, 0xB0)   // 演算子（少し暗い水色。型名の明るい水色より暗くする）
     );
 
     public final Color background;
@@ -45,10 +52,13 @@ public enum Theme {
     public final Color syntaxComment;
     public final Color syntaxNumber;
     public final Color syntaxPreprocessor;
+    public final Color syntaxSymbol;
+    public final Color syntaxOperator;
 
     Theme(Color background, Color foreground, Color accent,
           Color syntaxKeyword, Color syntaxType, Color syntaxString,
-          Color syntaxComment, Color syntaxNumber, Color syntaxPreprocessor) {
+          Color syntaxComment, Color syntaxNumber, Color syntaxPreprocessor,
+          Color syntaxSymbol, Color syntaxOperator) {
         this.background = background;
         this.foreground = foreground;
         this.accent = accent;
@@ -58,5 +68,7 @@ public enum Theme {
         this.syntaxComment = syntaxComment;
         this.syntaxNumber = syntaxNumber;
         this.syntaxPreprocessor = syntaxPreprocessor;
+        this.syntaxSymbol = syntaxSymbol;
+        this.syntaxOperator = syntaxOperator;
     }
 }

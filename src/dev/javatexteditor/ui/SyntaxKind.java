@@ -8,5 +8,7 @@ public enum SyntaxKind {
     STRING,
     COMMENT,
     NUMBER,
-    PREPROCESSOR
+    PREPROCESSOR,
+    SYMBOL,
+    OPERATOR
 }

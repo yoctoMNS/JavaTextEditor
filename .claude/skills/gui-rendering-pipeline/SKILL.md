@@ -436,3 +436,25 @@ int b = pixel & 0xFF;
 - **デフォルトテーマをDARK_MODEに変更**: `Main.createLeaf()`の`canvas.setTheme(Theme.LIGHT_MODE)`を`Theme.DARK_MODE`に変更した。`EditorCanvas.theme`フィールド自体の初期値（`Theme.LIGHT_MODE`）は変更していない（既存テストの多くが`setTheme()`を明示的に呼んでおり依存していないため実害はないが、フィールドデフォルト自体を変える理由もなく、実際のアプリ起動経路である`Main.java`側だけを変更する方が変更範囲が最小になるため）。
 - **意図的にスコープ外とした点**: Javaのtext block（`"""..."""`）は複数行文字列だが、`tokenizeLine()`は単一の`"`ペアとしてしか扱わないため、text block内部は通常の文字列走査ロジックの延長で（多くの場合）STRING扱いにならず誤判定しうる（既知の限界。ブロックコメントほど頻出しないため今回は対応しなかった）。エスケープを跨いだ文字列内の`//`/`/*`（文字列リテラル内のコメント様の文字列）は、文字列トークンを`"`〜`"`で1つのトークンとして先に確定させてから走査を再開するため誤判定しない。
 - **テスト**: 新規`test/dev/javatexteditor/ui/SyntaxHighlighterTest.java`（キーワード/型/文字列/コメント（行・複数行）/数値/プリプロセッサ/PascalCase・ALL_CAPS識別子の分類、`computeBlockCommentStarts`の複数行ブロックコメント追跡を検証）。既存の`EditorCanvasTest`（51/51）・全体テストスイートは無修正で回帰なし（既知のベースラインFAIL＝`ScrollTest`2件・`ModalEditorTest`1件のみ、本変更前から存在）。
+
+## 構文ハイライト配色の調整（背景を純黒に・記号/演算子の分離、2026-07-26追記）
+
+上記「Java/C構文ハイライトの新規実装」の直後、実機での見た目確認を受けてユーザーから3点の追加調整依頼があり対応した。
+
+- **DARK_MODEの背景を純黒(#000000)に変更**: `Theme.DARK_MODE.background`を`0x1A1A1A`から`0x00,0x00,0x00`に変更した。zz末尾超過領域の白黒塗り（本ファイル前出の節参照）は元々DARK_MODE時`Color.BLACK`固定だったため、これで通常領域と末尾超過領域の黒が完全に一致するようになった（副作用として視覚的な違和感が解消された）。
+- **通常の文字色とキーワード色を分離**: 従来`syntaxKeyword`は`foreground`と同値だったが、「予約語は明るい白色に」という要望を受けて`foreground`（通常の文字、少し明るい灰色 `0xB8B8B8`）より明るい`0xF2F2F2`に変更した。
+- **型名（`syntaxType`）を明るい水色に変更**: `0x6EC0C8`→`0x7FE0FF`。JDK/自作クラス問わず`SyntaxKind.TYPE`（PascalCase識別子・ALL_CAPS識別子・プリミティブ型キーワード）に一律適用される既存の分類ロジックはそのまま流用（クラスの由来がJDKか自プロジェクトかを区別する処理は行っていない。既存の`gr`/`:grep`等と同じヒューリスティックの範囲）。
+- **`SyntaxKind`に`SYMBOL`（記号）・`OPERATOR`（演算子）を追加**: 従来、識別子・文字列・コメント・数値・プリプロセッサ以外の文字（括弧・カンマ・セミコロン・算術演算子等）はすべて`DEFAULT`（`foreground`と同色）で一括りにしていたが、「記号は明るい緑、演算子は少し暗い水色に」という要望を受けて分離した。`SyntaxHighlighter.classifyPunctuation(char)`が`OPERATOR_CHARS`（`+-*/%=<>!&|^~?`）・`SYMBOL_CHARS`（`(){}[];,.:@`）の2つの文字集合で判定する。複数文字演算子（`==`・`&&`・`->`等）も1文字ずつOPERATOR判定されるだけで、視覚的には隣接する同色トークンとして連続して見えるため、複数文字トークンとして特別扱いする実装はしていない（既存の1文字単位のDEFAULTトークン生成をそのまま演算子/記号判定に置き換えただけ）。
+- **配色一覧（DARK_MODE最終形）**: 背景=純黒、通常文字=少し明るい灰色(`0xB8B8B8`)、キーワード=明るい白(`0xF2F2F2`)、型名=明るい水色(`0x7FE0FF`)、文字列=黄緑、コメント=赤系、数値=紫、プリプロセッサ/マクロ=マゼンタ、記号=明るい緑(`0x6AE66A`)、演算子=少し暗い水色(`0x3F9BB0`、型名の明るい水色よりわずかに暗く彩度を落として区別)。
+- **LIGHT_MODE側**も同様に`syntaxSymbol`（緑系）・`syntaxOperator`（暗めの水色）フィールドを追加したが、ユーザーからの参考画像・指定はダークモードのみのため、一般的なIDE配色から独自に選定した値（ユーザー確認なし、優先度は低い）。
+- **テスト**: `SyntaxHighlighterTest`に6テスト追加（計37テスト）。`(`/`)`/`;`がSYMBOL、`=`/`+`/`*`がOPERATORに分類されることを検証。`EditorCanvasTest`の「DARK_MODE背景色」テストの期待値を`0x1A1A1A`→`0x00,0x00,0x00`に更新（既存のzz末尾超過領域テストは元々`Color.BLACK`固定を検証していたため変更不要だった）。全体テストスイートは既知のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件）のみで回帰なし。
+
+## 基本型・ALL_CAPS識別子をTYPE(水色)からKEYWORD(白)へ再分類、文字列を暗いピンクに変更（2026-07-26 続報）
+
+前節の配色を実機画像で評価したユーザーから3点の追加修正依頼があった。
+
+- **`void`/`unsigned`/`int`/`char`/`bool`等の基本型と`SDLK_LSHIFT`のようなALL_CAPS識別子（マクロ・定数）を`SyntaxKind.TYPE`（水色）から`KEYWORD`（白）へ再分類**した。`SyntaxHighlighter.classifyIdentifier()`の判定順序を変更し、`JAVA_TYPES`/`C_TYPES`（従来はTYPE）を`KEYWORD`にマッピングし、`isAllCapsIdentifier()`も`KEYWORD`を返すようにした。これにより`SyntaxKind.TYPE`（明るい水色）は**PascalCaseの識別子（JDK API・自作プロジェクトのクラス名）専用**の色として意味が確定した。「基本型やマクロ定数はクラスではないので水色にすべきではない」というユーザーの指摘に基づく訂正。
+- **`syntaxKeyword`のDARK_MODE値を`#F2F2F2`→`#FFFFFF`（純白）に変更**した。
+- **`syntaxString`のDARK_MODE値を`#B5CE6B`（黄緑）→`#C75C8A`（暗いピンク）に変更**した。文字列と文字リテラル（`'` `'`も同じ`STRING`トークン種別を共有）の双方に反映される。
+- **テストの評価方法についてもユーザーから明示的な指示があった**: 今後このエディタの構文ハイライトを目視確認する際は、単純な1関数のCサンプルだけでなく、**Javaのクラス・メンバ変数・メソッド・複雑な制御構文（for/if-else/switch式/try-catch-finally/while等）を含むサンプル**でレンダリングし、スクリーンショットとしてユーザーに提示すること。次にこの機能を触る開発者は、変更のたびに`EditorCanvas`をヘッドレスで`BufferedImage`にレンダリングして`SendUserFile`等で画像を見せる、という本SKILL冒頭の「見た目の検証もテストハーネスで行う」方針をそのまま踏襲すればよい（専用の自動テストクラスは作っていない。目視確認用の使い捨てコードのため）。
+- **テスト**: `SyntaxHighlighterTest`の既存アサーション（`int`/`unsigned`/`char`/`MAX_COUNT`等が`TYPE`であることを検証していた6箇所）を`KEYWORD`への期待値変更に合わせて更新し、新たに`bool`（基本型）・`SDLK_LSHIFT`（ALL_CAPSマクロ定数）が両方とも`KEYWORD`になることを検証するテストを追加した（計39テスト、全PASS）。全体テストスイートは既知のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件）のみで回帰なし。
