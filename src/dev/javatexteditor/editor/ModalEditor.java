@@ -5453,6 +5453,33 @@ public class ModalEditor {
     }
 
     /**
+     * import 文の自動挿入でバッファに行が追加/削除された直後に呼ぶ。現在表示中の診断
+     * （ガター/波下線）の行番号は挿入前のソースを基準に計算されているため、挿入によって
+     * ずれた行数だけ一括で補正しないと、下線の表示位置と実際のカーソル/エラー行が食い違う。
+     * import はコード本体より前（先頭寄り）にのみ挿入されるため、既存の診断は例外なく
+     * 挿入位置より後ろにあり、一律シフトで正しく補正できる。
+     */
+    private void shiftDiagnosticsAfterImportEdit(String before, String after) {
+        List<CompileDiagnostic> current = (canvas != null) ? canvas.getDiagnostics() : localDiagnostics;
+        if (current.isEmpty()) return;
+        int delta = countLines(after) - countLines(before);
+        if (delta == 0) return;
+        List<CompileDiagnostic> shifted = current.stream()
+            .map(d -> new CompileDiagnostic(
+                Math.max(0, d.lineNumber() + delta), d.column(), d.message(), d.kind()))
+            .toList();
+        setDiagnostics(shifted);
+    }
+
+    private static int countLines(String text) {
+        int count = 1;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') count++;
+        }
+        return count;
+    }
+
+    /**
      * コンパイル診断から未解決シンボルを検出し、import の自動挿入または選択を行う。
      * 候補が1件の場合は即座に挿入。複数の場合は選択待ちモードへ。
      * Must be called on the EDT.
@@ -5473,6 +5500,7 @@ public class ModalEditor {
         // 候補が1件のみのシンボルをまず自動挿入
         importAppliedCount = 0;
         List<Map.Entry<String, List<String>>> multi = new ArrayList<>();
+        String beforeAutoApply = buffer.getText();
         for (Map.Entry<String, List<String>> e : entries) {
             if (e.getValue().size() == 1) {
                 autoImportHandler.applyImport(e.getValue().get(0), buffer);
@@ -5480,6 +5508,9 @@ public class ModalEditor {
             } else {
                 multi.add(e);
             }
+        }
+        if (importAppliedCount > 0) {
+            shiftDiagnosticsAfterImportEdit(beforeAutoApply, buffer.getText());
         }
 
         if (!multi.isEmpty()) {
@@ -5577,11 +5608,13 @@ public class ModalEditor {
     private void exitImportSelect(boolean apply) {
         if (apply && importSelectIdx < importSelectFqns.size()) {
             String fqn = importSelectFqns.get(importSelectIdx);
+            String beforeApply = buffer.getText();
             if (pendingImportApply != null) {
                 pendingImportApply.accept(fqn);
             } else if (autoImportHandler != null) {
                 autoImportHandler.applyImport(fqn, buffer);
             }
+            shiftDiagnosticsAfterImportEdit(beforeApply, buffer.getText());
             importAppliedCount++;
         }
         mode = Mode.NORMAL;
@@ -6436,6 +6469,11 @@ public class ModalEditor {
      */
     private List<CompileDiagnostic> currentDiagnostics() {
         return canvas != null ? canvas.getDiagnostics() : localDiagnostics;
+    }
+
+    /** テスト用: 現在表示中の診断リストを返す（canvas なし環境では localDiagnostics）。 */
+    public List<CompileDiagnostic> getLocalDiagnosticsForTest() {
+        return currentDiagnostics();
     }
 
     private void jumpToNextDiagnostic() {

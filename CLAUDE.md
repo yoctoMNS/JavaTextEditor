@@ -1068,3 +1068,35 @@ project-root/
   全PASSを確認（`lookup("String")`が`java.lang.String`を含むことを検証する既存テストは、
   内部クラスの重複が消えても引き続き成立する）。全体は既存のベースラインFAIL（`ScrollTest`2件・
   `ModalEditorTest`1件＝本変更前から失敗、仕様判断未決のため修正禁止）を除き全PASS。
+
+## auto-import 挿入直後、波下線（診断）の表示位置が実際のエラー行とずれる不具合の修正（2026-07-26）
+
+- **症状**: auto-importで`import`文が自動挿入されると、既に画面に表示されていたエラー行の
+  波下線・ガター（E/Wマーカー）が、挿入前のソースを基準にした古い行番号のまま取り残され、
+  実際にエラーが存在する行（importの挿入で下にずれた後の行）とはズレた位置に表示され続けていた。
+- **原因**: `Main.runCompileAnalysis()`は、バックグラウンドで得たコンパイル診断`diags`
+  （挿入前のソースを基準に行番号を計算済み）を`canvas.setDiagnostics(diags)`で先に画面へ
+  反映してから`editor.handleAutoImport(diags)`を呼んでいた。`handleAutoImport()`内部では
+  `AutoImportHandler.applyImport()`が`import`文をバッファへ挿入する（`insertAndReorganize()`が
+  package文の直後などコード本体より前に行を追加する）ため、挿入位置より後ろにある全ての行が
+  下にずれる。しかし表示済みの`diags`はこの挿入を一切知らず、古い行番号のまま
+  `EditorCanvas`にキャッシュされ続けていた（IMPORT_SELECTモードで複数候補から選択して
+  挿入する経路＝`exitImportSelect()`でも同様の問題があった）。
+- **修正**: `ModalEditor`に`shiftDiagnosticsAfterImportEdit(before, after)`（新設・private）を
+  追加した。現在表示中の診断（`canvas.getDiagnostics()`または`localDiagnostics`）の行番号を、
+  import挿入前後のテキストの行数差（`countLines(after) - countLines(before)`）だけ一律で
+  シフトし直し、`setDiagnostics()`で再反映する。import文は常にコード本体より前（先頭寄り）
+  にのみ挿入されるため、既存の診断は例外なく挿入位置より後ろにあり、一律シフトで正しく
+  補正できるという前提を利用した。`handleAutoImport()`の単一候補自動挿入パスと、
+  `exitImportSelect()`の複数候補選択確定パスの両方に、バッファ変更の前後で
+  `shiftDiagnosticsAfterImportEdit()`を呼ぶよう追加した。
+- **意図的にスコープ外とした点**: import削除（`removeImport`/`removeUnusedImports`）・
+  Ctrl+Shift+Oの`@Override`挿入（`insertOverrideStub()`）など、他のバッファ変更経路は
+  診断シフトの対象にしていない。いずれも保存直後にコンパイル解析が再トリガーされ
+  診断そのものが作り直される経路のため、古い診断が画面に残り続けるという実害がなく、
+  今回の不具合（auto-import挿入直後、再解析が完了する前の一瞬〜数百msの間だけ表示される
+  古い診断がズレる）とは性質が異なると判断した。
+- **テスト**: `test/dev/javatexteditor/editor/AutoImportDiagnosticShiftTest.java`（新設・
+  3テストメソッド/7アサーション）。単一候補自動挿入・複数候補選択（IMPORT_SELECT経由）の
+  両方で、import挿入前に表示していた診断の行番号が、挿入後の実際のエラー行と一致するよう
+  補正されることを検証。挿入対象がない場合（候補ゼロ）は診断行が変化しないことも確認。
