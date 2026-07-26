@@ -217,6 +217,31 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
 - **テスト**: `test/dev/javatexteditor/editor/DeleteToEndOfLineTest.java`（新設・10テスト）。行途中/
   行頭からの削除・行末でのno-op・ヤンクレジスタへの反映・他行への非影響・NORMALモード維持・undoを検証。
 
+## INSERT→NORMAL遷移時、自動インデントのみで何も入力しなかった行を空行に戻す（2026-07-26 追加）
+
+- **要望**: 自動インデント機能（Enter時に前行のインデントを継承する・`{`後に追加インデントする、上記
+  `testAutoIndentPreserve`/`testAutoIndentAfterOpenBrace`参照）により生成された行が、スペースのみ
+  （実際のコードが1文字も入力されていない）のまま INSERT モードを抜けた場合、そのインデントを
+  全て削除し0文字の空行に戻すようにした。
+- **実装**: `clearLineIfIndentOnly()`（新設・private）を追加し、`"enter.normal"`（Esc相当）・
+  `"save.from.insert"`（INSERTから直接保存、Ctrl+[/Ctrl+]）の両アクションで `mode = Mode.NORMAL` へ
+  遷移する**前**（カーソル行がまだ有効なINSERT時点のカーソル位置を指している間）に呼ぶ。
+  `line.isBlank() && !line.isEmpty()`（空白文字のみで構成され、かつ0文字ではない）の場合のみ
+  `buffer.delete(lineStart, line.length())` で行内容を削除し `cursorCol = 0` にする。既に0文字の行
+  （何もインデントされていない）や、1文字でも実際の文字が入力された行は対象外。
+- **`clampCursorForNormal()`より前に呼ぶ必要がある**（呼び出し順を間違えると、削除前の行の長さを
+  基準にクランプしてしまい、削除後に列がずれる）。
+- **undo単位**: 既存の `r`（1文字置換）・`toggleCaseUnderCursor()`と同じ「delete主体の1操作」として
+  扱われる（このケースはinsertを伴わないため単純に1 undo単位）。インデント挿入自体（Enter時の
+  `insertNewlineWithIndent()`）とは別のundo単位のまま（Enter→インデントのみ入力→Esc、で`u`を
+  2回押すと「クリア」→「改行直後の状態」の順に戻る）。
+- **意図的にスコープ外とした点**: `"insert.newline"`（Enterキー自体）や INSERT モード中の他の編集
+  アクションでは判定しない（あくまで「INSERT モードを抜ける瞬間」に一度だけ判定する設計）。
+  タブ文字混じりのインデント（スペース以外の空白文字）も `String.isBlank()` の定義どおり対象に含む。
+- **テスト**: `ModalEditorTest.testAutoIndentClearedOnEscWithNoInput()`（Enter後インデントのみでEsc
+  →空行になる）・`testAutoIndentKeptWhenCodeTyped()`（1文字でも入力すればEsc後も保持される、回帰なし
+  確認）。
+
 ## テスト（完了条件）
 
 - 変更後は `./scripts/build.sh && ./scripts/test.sh` で全テスト PASS を確認する。

@@ -96,6 +96,8 @@ public class ModalEditorTest {
         testAutoIndentNoIndent();
         testAutoIndentPreserve();
         testAutoIndentAfterOpenBrace();
+        testAutoIndentClearedOnEscWithNoInput();
+        testAutoIndentKeptWhenCodeTyped();
         testCloseBraceDedent();
         testCloseBraceNoChange();
         testSwapLineDown();
@@ -1435,6 +1437,31 @@ public class ModalEditorTest {
         String[] lines = ed.getText().split("\n", -1);
         check("{ 後の行が4スペース", lines[1].equals("    "));
         check("col=4", ed.getCursorCol() == 4);
+    }
+
+    static void testAutoIndentClearedOnEscWithNoInput() {
+        System.out.println("--- 自動インデント: 何も入力せずESCした行は空行になる ---");
+        ModalEditor ed = new ModalEditor("public void foo() {", null, null);
+        pressKey(ed, '$'); pressKey(ed, 'a');
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        String[] linesAfterEnter = ed.getText().split("\n", -1);
+        check("Enter直後は4スペースインデント", linesAfterEnter[1].equals("    "));
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        String[] lines = ed.getText().split("\n", -1);
+        check("ESC後は0文字の空行", lines[1].equals(""));
+        check("col=0", ed.getCursorCol() == 0);
+        check("NORMALモード", ed.isNormalMode());
+    }
+
+    static void testAutoIndentKeptWhenCodeTyped() {
+        System.out.println("--- 自動インデント: 実際に入力した行はESCしても保持される ---");
+        ModalEditor ed = new ModalEditor("public void foo() {", null, null);
+        pressKey(ed, '$'); pressKey(ed, 'a');
+        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        ed.processKey(0, 'x', 0);
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        String[] lines = ed.getText().split("\n", -1);
+        check("コードを入力した行は保持される", lines[1].equals("    x"));
     }
 
     static void testCloseBraceDedent() {
