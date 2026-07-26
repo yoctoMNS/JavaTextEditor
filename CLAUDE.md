@@ -266,6 +266,15 @@ project-root/
   - **同根の不具合を横展開して修正**: `Main.java`のバックグラウンドスレッド完了コールバック（`SwingUtilities.invokeLater`内）から`processKey()`を経由せず直接呼ばれる他の公開メソッド（`showCompileResult()`・`showRunOutput()`・`enterMainClassPicker()`）も同じ理由で`syncCanvas()`を呼んでいなかったため、同様に末尾へ追加した（`canvas.repaint()`をMain.java側で呼んでいても、`repaint()`は`EditorCanvas`が保持するキャッシュ済みの`text`/`commandLineText`フィールドを再描画するだけで、`syncCanvas()`が行う「`ModalEditor`の`buffer`から`EditorCanvas`へ値をコピーする」処理の代わりにはならない）。
   - **テスト用に`EditorCanvas.getCommandLineText()`を新設**した（既存の`setCommandLineText()`とペアになる読み取り専用アクセサ。他の`get*`/`is*`アクセサと同じ「テスト・外部連携用」の位置づけ）。`ClasspathInputTest`に`testPromptRendersImmediatelyWithoutKeyPress()`を追加し、`enterClasspathInput()`直後（キー入力なし）に`canvas.getCommandLineText()`がプロンプト文言を返すことを回帰テストとして固定した。
 
+## F10/F11/F12（`*compile*`/`*run*`疑似バッファ）でEscを押すと表示前の元バッファに戻る
+
+- **要望**: `*compile*`/`*run*`疑似バッファを表示中にEscキーを押したら、F10/F11/F12を実行する直前に開いていたバッファへ戻れるようにしてほしい。
+- **実装**: jdk-source疑似バッファ（`saved*`/`inJdkSourceBuffer`）と同じ「一時退避→復元」パターンを踏襲した。`outputSavedBuffer`/`outputSavedFilePath`/`outputSavedCursorRow`/`outputSavedCursorCol`/`outputBufferActive`（`ModalEditor`）を新設し、`saveBufferBeforeOutput()`を`beginCompileOutput()`/`beginRunOutput()`（F10/F11/F12の実際のストリーミング開始点）の冒頭で呼ぶ。`outputBufferActive`が既に`true`の場合（F12のcompile→run連続表示、または同じ疑似バッファ表示中の連続F10等）は再保存せず、**最初に退避した内容を保持し続ける**ようにした（F12でEscを押した場合に`*compile*`ではなく本当にF12押下前のバッファへ戻れるようにするため）。
+- **キー処理**: `processNormalKey()`の`inJdkSourceBuffer`のqハンドラと同じ並びに、`outputBufferActive && keyCode == KeyEvent.VK_ESCAPE`の早期分岐を追加した（既存のESC早期分岐＝`pendingSequence`を`"ESC"`にする無条件上書き、より**前**に置く必要がある。後に置くと既存のESC処理に食われて疑似バッファ判定に到達しない）。`closeOutputBuffer()`が復元処理を行い、`closeJdkSourceBuffer()`と同じ構造（`buffer`/`currentFilePath`/`cursorRow`/`cursorCol`を退避値へ戻し、退避フィールドをクリア）にした。
+- **`showCompileResult()`/`showRunOutput()`にも`saveBufferBeforeOutput()`を追加**した。Main.javaからの本番経路は必ず`beginCompileOutput()`/`beginRunOutput()`を先に呼ぶため実質的に到達済みだが、テスト等からこれらを直接呼ぶ場合にも同じEsc復帰が効くようにするための防御的な配置（`outputBufferActive`の二重保存防止ガードがあるため副作用はない）。
+- **意図的にスコープ外とした点**: Ctrl+U/Ctrl+P・SPC+b（BufferPicker）からの`*compile*`/`*run*`アクセス（本ファイル既存節「F10/F11をSPC+bからいつでも再度開けるようにした」参照）とは独立した別経路。Escによる退避復元は「直前に開いていたバッファへの一発復帰」のみを提供し、SPC+bのキャッシュ機構（`lastCompileBufferText`/`lastRunBufferText`）とは連動しない。
+- **テスト**: `test/dev/javatexteditor/editor/BuildOutputCommandTest.java`に3テスト追加（計20テスト）。`*compile*`表示中のEsc・`*run*`表示中のEsc・F12相当（compile→run連続表示）でのEscがそれぞれ元のバッファ内容へ正しく戻ることを検証。
+
 ## `:pr`コマンド（F10/F11/F12用プロジェクトルートの固定）の設計決定事項
 
 - **経緯**: 「実行時にクラスパスを追加すると`:cd`で移動した現在ディレクトリ基準で解決されてしまう。クラスパスはプロジェクトルート基準にしてほしい」という不具合報告から。調査したところ、`ModalEditor`の`projectRoot`フィールド（＝`getProjectRoot()`）は実体としては`:cd`の作業ディレクトリそのもの（`WD_MANAGER`リスナーが`setProjectRoot()`で同期）であり、grep/telescope/FILER/`:e`/`:w`/auto-import/シンボル解決/F10/F11/F12のすべてがこの単一の値を共有していた。つまり「プロジェクトルート」と「`:cd`作業ディレクトリ」が同一だったのが原因。

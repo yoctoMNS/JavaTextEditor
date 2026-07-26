@@ -22,6 +22,9 @@ public class BuildOutputCommandTest {
         testRunBufferReachableViaSpcB();
         testSpcBOmitsPseudoBuffersBeforeTheyExist();
         testCompileBufferReopenPreservesContentAfterNavigatingAway();
+        testEscReturnsToBufferBeforeCompileOutput();
+        testEscReturnsToBufferBeforeRunOutput();
+        testEscAfterCompileThenRunReturnsToOriginalBuffer();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -101,6 +104,36 @@ public class BuildOutputCommandTest {
         openSpcB(ed);
         selectEntry(ed, "*compile*");
         check("*compile*の内容がキャッシュから正しく復元される", ed.getText().equals(compileText));
+    }
+
+    static void testEscReturnsToBufferBeforeCompileOutput() {
+        System.out.println("[Esc: *compile*表示前の元バッファに戻る]");
+        ModalEditor ed = new ModalEditor("original text");
+        BuildResult result = new BuildResult(true, 1, List.of(), null, "javac -d bin Hello.java");
+        ed.showCompileResult(result);
+        check("画面は*compile*に差し替わっている", ed.getText().contains("*compile*"));
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        check("Escで元のバッファ内容に戻る", ed.getText().equals("original text"));
+    }
+
+    static void testEscReturnsToBufferBeforeRunOutput() {
+        System.out.println("[Esc: *run*表示前の元バッファに戻る]");
+        ModalEditor ed = new ModalEditor("original text");
+        ed.showRunOutput("java -cp bin Hello", "Hello", "hi\n", 0);
+        check("画面は*run*に差し替わっている", ed.getText().contains("*run*"));
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        check("Escで元のバッファ内容に戻る", ed.getText().equals("original text"));
+    }
+
+    static void testEscAfterCompileThenRunReturnsToOriginalBuffer() {
+        System.out.println("[Esc: F12相当（compile→run連続表示）でも最初の元バッファに戻る]");
+        ModalEditor ed = new ModalEditor("original text");
+        BuildResult result = new BuildResult(true, 1, List.of(), null, "javac -d bin Hello.java");
+        ed.showCompileResult(result);
+        ed.showRunOutput("java -cp bin Hello", "Hello", "hi\n", 0);
+        check("画面は*run*に差し替わっている", ed.getText().contains("*run*"));
+        ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
+        check("Escで最初の元バッファ内容に戻る（*compile*ではない）", ed.getText().equals("original text"));
     }
 
     // ユーティリティ
