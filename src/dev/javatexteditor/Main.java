@@ -748,7 +748,7 @@ public class Main {
     private static Leaf createLeaf(String text, String path, int cellW, int cellH) {
         EditorCanvas canvas = new EditorCanvas();
         canvas.setInitialCellSize(cellW, cellH);
-        canvas.setTheme(Theme.LIGHT_MODE);
+        canvas.setTheme(Theme.DARK_MODE);
         ModalEditor editor = new ModalEditor(text, path, canvas);
         setupCompileAnalysis(editor, canvas);
         // IME（日本語入力等）が確定した文字列を、KEY_TYPEDの1文字コミットと同じ経路で挿入する。
