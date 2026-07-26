@@ -11,7 +11,7 @@ import java.awt.Color;
  * syntaxKeyword はキーワード（if/static/return等）に加え、void/int/char/unsigned/bool
  * 等の基本型・ALL_CAPS識別子（マクロ・定数）も含む色。DARK_MODEでは純白(#FFFFFF)にして
  * 強調している。syntaxType はPascalCaseのクラス名（JDK API/自作プロジェクトのクラス）
- * 専用の色で、DARK_MODEでは明るい水色にしている（基本型・定数とは意図的に区別する）。
+ * 専用の色で、DARK_MODEでは薄い黄色にしている（基本型・定数とは意図的に区別する）。
  * syntaxSymbol は括弧・カンマ・セミコロン等の区切り記号、syntaxOperator は算術/比較/
  * 代入等の演算子の色。
  */
@@ -34,7 +34,7 @@ public enum Theme {
         new Color(0xB8, 0xB8, 0xB8),  // 通常の文字（少し明るい灰色）
         new Color(0x66, 0x66, 0x66),
         new Color(0xFF, 0xFF, 0xFF),  // キーワード・基本型（純白）
-        new Color(0x7F, 0xE0, 0xFF),  // 型名（Java API/自作クラスのみ・明るい水色）
+        new Color(0xF0, 0xE6, 0x8C),  // 型名（Java API/自作クラスのみ・薄い黄色）
         new Color(0xC7, 0x5C, 0x8A),  // 文字列（暗いピンク）
         new Color(0xB0, 0x50, 0x50),  // コメント（赤系）
         new Color(0x9A, 0x7E, 0xD6),  // 数値（紫）

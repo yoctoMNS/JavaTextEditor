@@ -458,3 +458,76 @@ int b = pixel & 0xFF;
 - **`syntaxString`のDARK_MODE値を`#B5CE6B`（黄緑）→`#C75C8A`（暗いピンク）に変更**した。文字列と文字リテラル（`'` `'`も同じ`STRING`トークン種別を共有）の双方に反映される。
 - **テストの評価方法についてもユーザーから明示的な指示があった**: 今後このエディタの構文ハイライトを目視確認する際は、単純な1関数のCサンプルだけでなく、**Javaのクラス・メンバ変数・メソッド・複雑な制御構文（for/if-else/switch式/try-catch-finally/while等）を含むサンプル**でレンダリングし、スクリーンショットとしてユーザーに提示すること。次にこの機能を触る開発者は、変更のたびに`EditorCanvas`をヘッドレスで`BufferedImage`にレンダリングして`SendUserFile`等で画像を見せる、という本SKILL冒頭の「見た目の検証もテストハーネスで行う」方針をそのまま踏襲すればよい（専用の自動テストクラスは作っていない。目視確認用の使い捨てコードのため）。
 - **テスト**: `SyntaxHighlighterTest`の既存アサーション（`int`/`unsigned`/`char`/`MAX_COUNT`等が`TYPE`であることを検証していた6箇所）を`KEYWORD`への期待値変更に合わせて更新し、新たに`bool`（基本型）・`SDLK_LSHIFT`（ALL_CAPSマクロ定数）が両方とも`KEYWORD`になることを検証するテストを追加した（計39テスト、全PASS）。全体テストスイートは既知のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件）のみで回帰なし。
+
+## クラス名(TYPE)を薄い黄色に変更(2026-07-26)
+
+- `Theme.DARK_MODE.syntaxType`を明るい水色(`#7FE0FF`)から薄い黄色(`#F0E68C`)に変更した。`SyntaxKind.TYPE`はPascalCaseの識別子（JDK API・自作プロジェクトのクラス名）専用の色という意味は前節の変更から変わっていない。分類ロジック（`SyntaxHighlighter.classifyIdentifier()`）は変更していないため、テスト（`SyntaxHighlighterTest`）の期待値にも変更はない。
+
+## 構文ハイライトの色・分類変更ワークフロー（今後の変更依頼への対応手順）
+
+構文ハイライトの配色・分類は今後も「もっとこの種類の要素をこの色に」「この識別子はこう分類してほしい」といった細かい修正依頼が繰り返し来ることが分かっている（本節までに4回の配色修正が発生済み）。次に同種の依頼が来た際、毎回ゼロから調査せずに済むよう、変更箇所・テスト・目視確認の一連の手順をここに固定する。
+
+### 1. 色を変更する（`Theme.java`）
+
+`src/dev/javatexteditor/ui/Theme.java`の`DARK_MODE`/`LIGHT_MODE`の各`Color`引数を編集する。フィールドの意味は以下の対応（`SyntaxKind` enumと1対1）:
+
+| フィールド | 対応する`SyntaxKind` | 現在の役割 |
+|---|---|---|
+| `syntaxKeyword` | `KEYWORD` | 予約語（if/static/return等）に加え、基本型（void/int/char/unsigned/bool等）とALL_CAPS識別子（マクロ・定数、例: `SDLK_LSHIFT`）も含む |
+| `syntaxType` | `TYPE` | PascalCaseの識別子（JDK APIクラス・自作プロジェクトのクラス名）専用 |
+| `syntaxString` | `STRING` | 文字列リテラル(`"..."`)・文字リテラル(`'...'`)の両方 |
+| `syntaxComment` | `COMMENT` | 行コメント(`//`)・ブロックコメント(`/* */`、複数行対応) |
+| `syntaxNumber` | `NUMBER` | 数値（10進数・16進数・小数・指数・サフィックス） |
+| `syntaxPreprocessor` | `PREPROCESSOR` | Cのプリプロセッサ行（`#include`等、行頭が`#`）全体 |
+| `syntaxSymbol` | `SYMBOL` | 括弧・カンマ・セミコロン・ドット等の区切り記号 |
+| `syntaxOperator` | `OPERATOR` | 算術・比較・代入・論理演算子 |
+| `foreground` | `DEFAULT` | 上記いずれにも該当しない通常の文字（変数名・関数名等の小文字識別子、空白） |
+
+「〇〇はもっとこういう色に」という依頼は、まずこの表でどの`SyntaxKind`に該当するかを特定し、該当する`Theme`定数の該当行だけを書き換えれば済む。新しい色の意図（例:「暗いピンク」「薄い黄色」）は各`Theme`定数直前のコメントにも反映し、クラス先頭のJavadocコメントの説明文も古い記述のまま残さず更新すること（本ファイル内の複数の変更節がいずれもこの2箇所を更新している）。
+
+### 2. 分類ルールを変更する（`SyntaxHighlighter.java`）
+
+「この識別子は今と違う`SyntaxKind`にしてほしい」（色の変更ではなく分類自体の変更）の場合は`src/dev/javatexteditor/ui/SyntaxHighlighter.java`を編集する。
+
+- キーワード集合・型集合を増減する: `JAVA_KEYWORDS`/`JAVA_TYPES`/`C_KEYWORDS`/`C_TYPES`（`Set.of(...)`）に単語を足し引きする。
+- 識別子の見た目に基づく分類ルール（PascalCase→TYPE、ALL_CAPS→KEYWORD等）を変える: `classifyIdentifier(String word, SourceLanguage lang)`の判定順序・条件式を編集する（現在の順序: 型集合/キーワード集合の完全一致 → ALL_CAPS → 先頭大文字(PascalCase) → それ以外はDEFAULT）。
+- 記号・演算子の文字集合を変える: `classifyPunctuation(char c)`が参照する`OPERATOR_CHARS`/`SYMBOL_CHARS`の文字列定数を編集する。
+- 新しい構文要素（アノテーション`@Foo`専用の色、ジェネリクスの型引数だけ別色にする等）を追加したい場合は、`SyntaxKind`（enum）に新しい定数を追加し、`Theme`に対応する`syntaxXxx`フィールドを追加し、`EditorCanvas.syntaxColor(SyntaxKind)`のswitch式に分岐を1行追加する、という3ファイルの機械的な追随が必要（実装済みの`SYMBOL`/`OPERATOR`追加時と同じ手順）。
+
+### 3. 自動テストを更新・実行する
+
+分類ルール（`SyntaxKind`の対応）を変えた場合は`test/dev/javatexteditor/ui/SyntaxHighlighterTest.java`の該当する`kindOf(...)`アサーションの期待値も必ず追随させること（色だけの変更ならこのテストは無修正でよい）。手順:
+
+```bash
+./scripts/build.sh
+javac -cp build -d build test/dev/javatexteditor/ui/SyntaxHighlighterTest.java
+java -cp build dev.javatexteditor.ui.SyntaxHighlighterTest   # 全件PASSを確認
+./scripts/test.sh                                             # 全体の回帰がないか確認
+```
+
+`./scripts/test.sh`の最終行が`=== Summary: 84 class(es) passed, 2 class(es) failed ===`（本ファイル作成時点のベースライン。クラス数は今後の機能追加で増える）になり、FAILしているのが既知のベースライン（`ScrollTest`の`halfPageUp`系2件・`ModalEditorTest`1件、いずれも構文ハイライトと無関係で仕様判断待ちのため修正禁止。本ファイル冒頭「軽量性リファクタリング計画」節末尾・CLAUDE.md「既知の未接続・二重定義」6.参照）だけであることを確認する。これ以外のクラスがFAILしていたら今回の変更が原因の回帰。
+
+### 4. 目視確認・スクリーンショット提出
+
+色は数値だけでは実際の見た目・コントラストが分からないため、**色や分類を変更するたびに必ず実際にレンダリングしてユーザーに画像で確認してもらう**こと。単純な1関数のCサンプルだけでは検証が偏る（クラス名・定数・複雑な制御構文が登場しないため）ため、Javaのクラス・フィールド・メソッド・複雑な制御構文（for/if-else/switch式/try-catch-finally/while等）を含むサンプルも必ず含める（2026-07のユーザー指示）。
+
+このための専用ツールとして`test/dev/javatexteditor/ui/SyntaxHighlightPreview.java`を用意している（`VisualPreview.java`と同じ「`*Test.java`ではないため`test.sh`から自動実行されない、ヘッドレスで`BufferedImage`にレンダリングしてPNG保存する手動デモ」という位置づけ）。Java用サンプル（`OrderProcessor`クラス。クラス・フィールド・メソッド・for/if-else/switch式/try-catch-finally/whileを含む）とC用サンプル（`RenderSignal`関数。コメント・プリプロセッサ・基本型・ALL_CAPSマクロを含む）を、LIGHT_MODE/DARK_MODEの両方でレンダリングし、`build/preview_syntax_{java,c}_{dark,light}.png`の計4枚を生成する。
+
+手順:
+
+```bash
+./scripts/build.sh
+javac -cp build -d build test/dev/javatexteditor/ui/SyntaxHighlightPreview.java
+java -cp build dev.javatexteditor.ui.SyntaxHighlightPreview
+```
+
+生成された`build/preview_syntax_java_dark.png`等を`SendUserFile`ツールでユーザーに送付する（`status: "normal"`、`caption`に今回の変更点を一言添える）。ダークモードがデフォルトテーマのため、依頼内容がダークモード限定でなければ`preview_syntax_java_dark.png`を優先的に見せ、必要に応じて他の3枚も添える。
+
+### まとめ: 変更依頼を受けたときの標準手順
+
+1. 依頼内容が「色の変更」か「分類の変更」かを判断する（上記1.と2.の表を参照）。
+2. `Theme.java`（色）または`SyntaxHighlighter.java`（分類）を編集する。両方のコメント・クラス先頭Javadocも更新する。
+3. 分類を変えた場合は`SyntaxHighlighterTest`を追随させる。
+4. `./scripts/build.sh` → `SyntaxHighlighterTest`実行 → `./scripts/test.sh`で全体回帰がないことを確認する。
+5. `SyntaxHighlightPreview`を実行してPNGを再生成し、`SendUserFile`でユーザーに提示する。
+6. 本SKILL.mdに変更内容と理由を追記する（この節自体は今後変更不要。個々の変更履歴は新しい節として積み増していく）。
