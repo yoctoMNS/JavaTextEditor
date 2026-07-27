@@ -2556,6 +2556,8 @@ public class ModalEditor {
             wrapEnabled = false;
         } else if (cmd.startsWith("font ")) {
             applyFontCommand(cmd.substring(5).trim());
+        } else if (cmd.startsWith("fs ")) {
+            applyFontSizeCommand(cmd.substring(3).trim());
         } else if (cmd.startsWith("color ")) {
             applyColorCommand(cmd.substring(6).trim());
         } else if (cmd.equals("pwd")) {
@@ -2617,6 +2619,35 @@ public class ModalEditor {
         } else {
             statusMessage = "E: usage :font 0 (Misc Fixed) | :font 1 (IBM Plex Mono)";
         }
+    }
+
+    /**
+     * :fs <倍率> — 現在のフォントセルサイズ(px)を指定倍率へ変更する（小数点以下四捨五入）。
+     * 例: 9x15の状態で ":fs 2" → 18x30、":fs 1.25" → 11x19（9*1.25=11.25→11・15*1.25=18.75→19）。
+     * Ctrl+Shift+矢印と同じ canvas.setInitialCellSize() 経由で反映する（範囲は同じ 5〜40 / 8〜80 にクランプされる）。
+     * canvas を持たないテスト環境では no-op としエラーメッセージのみ表示する。
+     */
+    private void applyFontSizeCommand(String arg) {
+        if (canvas == null) {
+            statusMessage = "E: no canvas";
+            return;
+        }
+        double multiplier;
+        try {
+            multiplier = Double.parseDouble(arg);
+        } catch (NumberFormatException e) {
+            statusMessage = "E: usage :fs <multiplier> (e.g. :fs 2, :fs 1.5)";
+            return;
+        }
+        if (multiplier <= 0) {
+            statusMessage = "E: usage :fs <multiplier> (e.g. :fs 2, :fs 1.5)";
+            return;
+        }
+        int newW = (int) Math.round(canvas.getCellW() * multiplier);
+        int newH = (int) Math.round(canvas.getCellH() * multiplier);
+        canvas.setInitialCellSize(newW, newH);
+        canvas.repaint();
+        statusMessage = "font size: " + canvas.getCellW() + " x " + canvas.getCellH();
     }
 
     /**
