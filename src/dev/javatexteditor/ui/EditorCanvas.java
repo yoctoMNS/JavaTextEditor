@@ -107,7 +107,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private boolean sizeOverlayVisible = false;
     private final Timer sizeOverlayHideTimer = new Timer(3000, e -> {
         sizeOverlayVisible = false;
-        repaint();
+        requestRepaint();
     });
 
     // 半角ASCIIは既定でX11 misc-fixed Bold 9x15（実機xtermの `ps` 出力から特定した本物の
@@ -307,7 +307,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /** INSERT→NORMAL遷移時など、変換中の未確定文字列の表示を消す。 */
     public void clearImeComposition() {
         this.composedText = "";
-        repaint();
+        requestRepaint();
     }
 
     @Override
@@ -341,7 +341,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         if (committed.length() > 0 && imeCommitHandler != null) {
             imeCommitHandler.accept(committed.toString());
         }
-        repaint();
+        requestRepaint();
     }
 
     @Override
@@ -461,7 +461,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             blockCommentLinesOwner = null;
             blockCommentLangOwner = null;
         }
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -471,18 +471,18 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     public void setLanguage(SourceLanguage language) {
         this.language = (language != null) ? language : SourceLanguage.NONE;
-        repaint();
+        requestRepaint();
     }
-    public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
-    public void setCursorPositionLabel(String label) { this.cursorPositionLabel = label; repaint(); }
-    public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
+    public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; requestRepaint(); }
+    public void setCursorPositionLabel(String label) { this.cursorPositionLabel = label; requestRepaint(); }
+    public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; requestRepaint(); }
     public void setTheme(Theme theme) {
         // syncCanvas() は1キー入力ごとに呼ばれるため、値が変化していない場合は
         // グリフキャッシュを無駄に破棄しない（setFontChoice()と同じガード方式）。
         if (this.theme == theme) return;
         this.theme = theme;
         invalidateGlyphCache();
-        repaint();
+        requestRepaint();
     }
     public Theme getTheme() { return theme; }
 
@@ -494,28 +494,28 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             ? IbmPlexMonoFont.INSTANCE
             : MiscFixedBold9x15.INSTANCE;
         invalidateGlyphCache();
-        repaint();
+        requestRepaint();
     }
     public FontChoice getFontChoice() { return fontChoice; }
-    public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
+    public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); requestRepaint(); }
     public int getScrollRow() { return scrollRow; }
-    public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); repaint(); }
+    public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); requestRepaint(); }
     public int getScrollCol() { return scrollCol; }
-    public void setWrapEnabled(boolean wrapEnabled) { this.wrapEnabled = wrapEnabled; repaint(); }
+    public void setWrapEnabled(boolean wrapEnabled) { this.wrapEnabled = wrapEnabled; requestRepaint(); }
     public boolean isWrapEnabled() { return wrapEnabled; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
-    public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
+    public void setCommandLineText(String text) { this.commandLineText = text; requestRepaint(); }
     public String getCommandLineText() { return commandLineText; }
     public String getCursorPositionLabel() { return cursorPositionLabel; }
-    public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
-    public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
-    public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; repaint(); }
+    public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; requestRepaint(); }
+    public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; requestRepaint(); }
+    public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; requestRepaint(); }
     public void setSelection(int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
         this.selAnchorRow = anchorRow;
         this.selAnchorCol = anchorCol;
         this.selCursorRow = cursorRow;
         this.selCursorCol = cursorCol;
-        repaint();
+        requestRepaint();
     }
     /**
      * 選択範囲の描画状態をまとめて差し替える。
@@ -525,6 +525,42 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * {@code setSelection}/{@code clearSelection} を順に呼ぶ場合と違って、
      * 途中の辻褄の合わない状態が生じない。新しい呼び出しはこちらを使うこと。
      */
+    // -------------------------------------------------------------------------
+    // 再描画のまとめ
+    // -------------------------------------------------------------------------
+
+    /** batchUpdate() 実行中は 0 より大きい。個々の setter はこの間 再描画を予約しない。 */
+    private int updateBatchDepth = 0;
+
+    /**
+     * 複数の状態をまとめて更新し、最後に1度だけ再描画を予約する。
+     *
+     * <p>{@code ModalEditor.syncCanvas()} は1キー入力ごとに10個ほどの setter を呼ぶが、
+     * setter が個別に {@code repaint()} を呼ぶと同じ回数だけ再描画が予約される。
+     * Swing は次の描画までに予約をまとめるため表示結果は変わらないものの、
+     * 「1回の更新は1回の再描画」という意図をコード上で表せないため、まとめる口を用意した。
+     *
+     * <p>入れ子で呼んでも安全で、一番外側を抜けたときに1度だけ予約する。
+     */
+    public void batchUpdate(Runnable updates) {
+        updateBatchDepth++;
+        try {
+            updates.run();
+        } finally {
+            updateBatchDepth--;
+        }
+        if (updateBatchDepth == 0) {
+            repaint();
+        }
+    }
+
+    /** setter から呼ぶ再描画の予約。まとめ更新中は予約せず、まとめ終わりに1度だけ行う。 */
+    private void requestRepaint() {
+        if (updateBatchDepth == 0) {
+            repaint();
+        }
+    }
+
     public void setSelectionView(SelectionView view) {
         SelectionView v = (view != null) ? view : SelectionView.none();
         this.visualMode      = v.isActive();
@@ -534,14 +570,14 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         this.selAnchorCol = v.anchorCol();
         this.selCursorRow = v.cursorRow();
         this.selCursorCol = v.cursorCol();
-        repaint();
+        requestRepaint();
     }
 
     public void clearSelection() {
         this.selAnchorRow = -1;
         this.visualLineMode = false;
         this.visualBlockMode = false;
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -551,7 +587,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /** 補完ポップアップの描画状態をまとめて差し替える。 */
     public void setCompletionView(CompletionView view) {
         this.completion = (view != null) ? view : CompletionView.hidden();
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -568,7 +604,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /** 候補一覧オーバーレイの描画状態をまとめて差し替える。 */
     public void setTelescopeView(TelescopeView view) {
         this.telescope = (view != null) ? view : TelescopeView.hidden();
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -584,7 +620,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     public void setSearchHighlights(List<int[]> highlights) {
         this.searchHighlights = (highlights != null) ? List.copyOf(highlights) : List.of();
-        repaint();
+        requestRepaint();
     }
 
     public List<int[]> getSearchHighlights() { return searchHighlights; }
@@ -599,7 +635,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         showSizeOverlay();
-        repaint();
+        requestRepaint();
     }
 
     /** 文字セル高さを delta px 変更する（範囲: 8〜80）。両ペインから呼ばれる。 */
@@ -608,7 +644,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         invalidateGlyphCache();
         cachedLineHeight = cellH;
         showSizeOverlay();
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -716,7 +752,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /** スプラッシュ画面の表示/非表示を切り替える。 */
     public void setShowSplash(boolean show) {
         this.showSplash = show;
-        repaint();
+        requestRepaint();
     }
 
     public boolean isShowSplash() { return showSplash; }
@@ -727,7 +763,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     public void setErrorLines(Set<Integer> errorLines) {
         this.errorLines = (errorLines != null) ? Set.copyOf(errorLines) : Set.of();
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -744,7 +780,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                     (incoming == DiagnosticKind.ERROR) ? DiagnosticKind.ERROR : existing);
         }
         this.diagByLine = Map.copyOf(map);
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -774,10 +810,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         int visibleRows = computeVisibleRows(cachedLineHeight);
         if (cursorRow < scrollRow) {
             scrollRow = cursorRow;
-            repaint();
+            requestRepaint();
         } else if (cursorRow >= scrollRow + visibleRows) {
             scrollRow = Math.max(0, cursorRow - visibleRows + 1);
-            repaint();
+            requestRepaint();
         }
     }
 
@@ -794,13 +830,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         int visibleRows = computeVisibleRows(cachedLineHeight);
         if (cursorRow < scrollRow) {
             scrollRow = cursorRow;
-            repaint();
+            requestRepaint();
             return;
         }
         if (cursorRow - scrollRow > WRAP_SCROLL_SCAN_LIMIT) {
             // 近似: 正確な折返し計算はせず、カーソル行がおおよそ画面内に収まる位置へ寄せる
             scrollRow = Math.max(0, cursorRow - visibleRows + 1);
-            repaint();
+            requestRepaint();
             return;
         }
         int visibleCols = computeVisibleColsForWrap();
@@ -814,7 +850,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             scrollRow++;
             changed = true;
         }
-        if (changed) repaint();
+        if (changed) requestRepaint();
     }
 
     /**
@@ -827,17 +863,17 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public void ensureCursorColVisible(int col, String line) {
         if (wrapEnabled) {
             // wrap有効時は横スクロールを行わない（長い行は折返して表示するため）
-            if (scrollCol != 0) { scrollCol = 0; repaint(); }
+            if (scrollCol != 0) { scrollCol = 0; requestRepaint(); }
             return;
         }
         int cursorCells = cellsForCol(line, col);
         int visibleCols = computeVisibleCols();
         if (cursorCells < scrollCol) {
             scrollCol = cursorCells;
-            repaint();
+            requestRepaint();
         } else if (visibleCols > 0 && cursorCells >= scrollCol + visibleCols) {
             scrollCol = cursorCells - visibleCols + 1;
-            repaint();
+            requestRepaint();
         }
     }
 

@@ -5028,83 +5028,86 @@ public class ModalEditor {
     }
 
     public void syncCanvas() {
-        if (canvas != null) {
-            refreshCanvasTextCache();
-            canvas.setLanguage(dev.javatexteditor.ui.SourceLanguage.detect(currentFilePath));
-            canvas.setText(canvasCachedText, canvasCachedLines);
-            canvas.setWrapEnabled(wrapEnabled);
-            // :font/:color コマンドで変更された値を反映する。値が変化していない場合は
-            // EditorCanvas.setTheme()/setFontChoice() 側のガードによりグリフキャッシュの
-            // 破棄は起きないため、1キー入力ごとに呼んでも問題ない。
-            canvas.setTheme(theme);
-            canvas.setFontChoice(fontChoice);
-            java.util.Set<Integer> errorLines;
-            if (outputErrorLinesOwner == buffer) {
-                errorLines = outputErrorLines;
-            } else {
-                errorLines = java.util.Set.of();
-            }
-            canvas.setErrorLines(errorLines);
-            canvas.setCursor(cursorRow, cursorCol);
-            canvas.setInsertMode(mode == Mode.INSERT);
-
-            canvas.setSelectionView(currentSelectionView());
-
-            canvas.ensureCursorVisible(cursorRow);
-            String[] lines = canvasCachedLines;
-            String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
-            canvas.ensureCursorColVisible(cursorCol, curLine);
-
-            // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
-            // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、
-            // 画面幅を2倍で扱う uiTextWidth 等の全角対応ロジックとは無関係）。
-            // canvasCachedLines を再利用し、buffer.getText() の再構築を増やさない。
-            // syncCanvas() はキー入力1回につき1度だけ呼ばれるため、ここで計算しキャッシュしておく。
-            // EditorCanvas側（30fpsのanimTimerでrepaintされるdrawStatusLine）では再計算しない設計。
-            int totalChars = 0;
-            for (int i = 0; i < cursorRow && i < lines.length; i++) {
-                totalChars += lines[i].length() + 1; // +1 は改行文字
-            }
-            totalChars += Math.min(cursorCol, curLine.length()) + 1;
-            canvas.setCursorPositionLabel("(" + (cursorRow + 1) + ":" + totalChars + ")");
-            if (mode == Mode.COMMAND) {
-                canvas.setCommandLineText(":" + commandBuffer.toString());
-            } else if (mode == Mode.SEARCH) {
-                canvas.setCommandLineText("/" + searchBuffer.toString());
-            } else if (mode == Mode.FILESEARCH) {
-                String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
-                canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
-            } else if (mode == Mode.TELESCOPE && telescopePicker != null) {
-                canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
-            } else if (mode == Mode.CLASSPATH_INPUT) {
-                canvas.setCommandLineText(classpathInputLabel
-                    + " classpath (カンマ区切り, Enter=確定, Esc=スキップ): "
-                    + classpathInputBuffer.toString());
-            } else if (!statusMessage.isEmpty()) {
-                canvas.setCommandLineText(statusMessage);
-            } else {
-                canvas.setCommandLineText(null);
-            }
-
-            // TELESCOPE/FILER は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
-            // オーバーレイは使わない。IMPORT_SELECT のみ従来どおりオーバーレイを使う。
-            if (mode == Mode.IMPORT_SELECT) {
-                // import 候補選択モーダル: TelescopeItem リストとして表示する
-                List<TelescopeItem> items = new ArrayList<>();
-                for (String fqn : importSelectFqns) {
-                    items.add(new TelescopeItem(fqn, null, 0, 0));
+        if (canvas == null) return;
+        // 1キー入力ぶんの状態更新をまとめ、再描画の予約を1度だけにする
+        canvas.batchUpdate(() -> {
+                refreshCanvasTextCache();
+                canvas.setLanguage(dev.javatexteditor.ui.SourceLanguage.detect(currentFilePath));
+                canvas.setText(canvasCachedText, canvasCachedLines);
+                canvas.setWrapEnabled(wrapEnabled);
+                // :font/:color コマンドで変更された値を反映する。値が変化していない場合は
+                // EditorCanvas.setTheme()/setFontChoice() 側のガードによりグリフキャッシュの
+                // 破棄は起きないため、1キー入力ごとに呼んでも問題ない。
+                canvas.setTheme(theme);
+                canvas.setFontChoice(fontChoice);
+                java.util.Set<Integer> errorLines;
+                if (outputErrorLinesOwner == buffer) {
+                    errorLines = outputErrorLines;
+                } else {
+                    errorLines = java.util.Set.of();
                 }
-                int sym = pendingImportIdx + 1;
-                int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
-                String title = "Import: " + importSelectSymbol
-                    + "  [" + sym + "/" + total + "]";
-                canvas.setTelescopeView(new TelescopeView(
-                    true, title, "", items, importSelectIdx, ""));
-            } else {
-                canvas.setTelescopeView(TelescopeView.hidden());
-            }
-        }
+                canvas.setErrorLines(errorLines);
+                canvas.setCursor(cursorRow, cursorCol);
+                canvas.setInsertMode(mode == Mode.INSERT);
+
+                canvas.setSelectionView(currentSelectionView());
+
+                canvas.ensureCursorVisible(cursorRow);
+                String[] lines = canvasCachedLines;
+                String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
+                canvas.ensureCursorColVisible(cursorCol, curLine);
+
+                // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
+                // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、
+                // 画面幅を2倍で扱う uiTextWidth 等の全角対応ロジックとは無関係）。
+                // canvasCachedLines を再利用し、buffer.getText() の再構築を増やさない。
+                // syncCanvas() はキー入力1回につき1度だけ呼ばれるため、ここで計算しキャッシュしておく。
+                // EditorCanvas側（30fpsのanimTimerでrepaintされるdrawStatusLine）では再計算しない設計。
+                int totalChars = 0;
+                for (int i = 0; i < cursorRow && i < lines.length; i++) {
+                    totalChars += lines[i].length() + 1; // +1 は改行文字
+                }
+                totalChars += Math.min(cursorCol, curLine.length()) + 1;
+                canvas.setCursorPositionLabel("(" + (cursorRow + 1) + ":" + totalChars + ")");
+                if (mode == Mode.COMMAND) {
+                    canvas.setCommandLineText(":" + commandBuffer.toString());
+                } else if (mode == Mode.SEARCH) {
+                    canvas.setCommandLineText("/" + searchBuffer.toString());
+                } else if (mode == Mode.FILESEARCH) {
+                    String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
+                    canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
+                } else if (mode == Mode.TELESCOPE && telescopePicker != null) {
+                    canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
+                } else if (mode == Mode.CLASSPATH_INPUT) {
+                    canvas.setCommandLineText(classpathInputLabel
+                        + " classpath (カンマ区切り, Enter=確定, Esc=スキップ): "
+                        + classpathInputBuffer.toString());
+                } else if (!statusMessage.isEmpty()) {
+                    canvas.setCommandLineText(statusMessage);
+                } else {
+                    canvas.setCommandLineText(null);
+                }
+
+                // TELESCOPE/FILER は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
+                // オーバーレイは使わない。IMPORT_SELECT のみ従来どおりオーバーレイを使う。
+                if (mode == Mode.IMPORT_SELECT) {
+                    // import 候補選択モーダル: TelescopeItem リストとして表示する
+                    List<TelescopeItem> items = new ArrayList<>();
+                    for (String fqn : importSelectFqns) {
+                        items.add(new TelescopeItem(fqn, null, 0, 0));
+                    }
+                    int sym = pendingImportIdx + 1;
+                    int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
+                    String title = "Import: " + importSelectSymbol
+                        + "  [" + sym + "/" + total + "]";
+                    canvas.setTelescopeView(new TelescopeView(
+                        true, title, "", items, importSelectIdx, ""));
+                } else {
+                    canvas.setTelescopeView(TelescopeView.hidden());
+                }
+        });
     }
+
 
     // -------------------------------------------------------------------------
     // パブリックアクセサ（テスト・外部連携用）
