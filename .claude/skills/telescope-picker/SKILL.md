@@ -190,8 +190,8 @@ TELESCOPE
   - **`*cd候補*` 疑似バッファ**（`cdSelectionActive`）は変更不要だった。実体が通常の NORMAL モード
     バッファであるため、`j`/`k` を含む既存の NORMAL モードカーソル移動がそのまま使える
     （Enter/`q` のみ疑似バッファ用に割り込み処理している）。
-  - **BufferPicker の `Shift+D`（バッファ削除）キーとは衝突しない**: `j`/`k` を割り当てていないため
-    この節の変更と無関係（`Shift+D` については後述の「BufferPicker のバッファ削除（Shift+D）」節参照）。
+  - **BufferPicker の `Ctrl+D`（バッファ削除）キーとは衝突しない**: `j`/`k` を割り当てていないため
+    この節の変更と無関係（`Ctrl+D` については後述の「BufferPicker のバッファ削除（Ctrl+D）」節参照）。
 
 ### FuzzyMatcher の実装
 
@@ -247,19 +247,19 @@ BufferPicker は `Main.java` 側から `List<Leaf>` を `ModalEditor` に渡す�
 
 ---
 
-## BufferPicker のバッファ削除（`Shift+D`）（2026-07-27）
+## BufferPicker のバッファ削除（`Ctrl+D`）（2026-07-27）
 
 「SPC+b でバッファ一覧を開いた際、カーソル位置のバッファを閉じたい（`Main.BUFFER_REGISTRY` から
 除外したい。ファイル自体を削除するわけではない）」という要望に基づく。
 
-- **キーは小文字 `d` ではなく大文字 `D`（Shift+D）にした**: BufferPicker は telescope の他ピッカー
+- **キーは文字キー（`d`/`D`）ではなく `Ctrl+D` にした**: BufferPicker は telescope の他ピッカー
   同様「自由入力クエリでその場フィルタ」する画面（`processTelescopeKey()` の通常文字入力分岐、
-  `keyChar >= ' '` かつ非Ctrl修飾）であるため、小文字 `d` を専用アクションに割り当てると `d` を
-  含むファイル名（例: `Editor.java`・`dev`パッケージ配下のファイル群）をクエリで絞り込めなくなる。
-  大文字 `D` に割り当てることで、通常のフィルタ入力（小文字中心）を妨げずに専用アクションを
-  用意できる。判定は `keyChar == 'D' && !ctrlDown && telescopePicker instanceof BufferPicker`
-  で、`processTelescopeKey()` 内の通常文字入力分岐より前に置く必要がある（他の pending シーケンス
-  判定と同じ「専用キーは汎用分岐より前」という既存パターン）。
+  `keyChar >= ' '` かつ非Ctrl修飾）であるため、文字キーを専用アクションに割り当てると、その文字を
+  含むファイル名をクエリで絞り込めなくなる。当初は大文字 `D`（Shift+D）に割り当てたが、これも
+  「`D` を含むファイル名を検索できなくなる」という同種の問題を再発させるだけだったため、
+  Ctrl+N/Ctrl+P（候補移動）と同じ「修飾キー＋keyCode」方式の `Ctrl+D` に変更した。判定は
+  `ctrlDown && keyCode == KeyEvent.VK_D && telescopePicker instanceof BufferPicker` で、
+  `processTelescopeKey()` 内の通常文字入力分岐より前（Ctrl+N/Ctrl+P の直後）に置く。
 - **実装自体は新規ではなく既存の `onBufferDelete` コールバック経路（`ModalEditor.setOnBufferDelete()`
   → `Main.unregisterBuffer()` → `Main.BUFFER_REGISTRY.removeIf(...)`）を使う**。この経路は本機能の
   実装以前から存在していたが、キーバインドが小文字 `d` のままテスト・ドキュメントが無い状態だった
@@ -275,6 +275,6 @@ BufferPicker は `Main.java` 側から `List<Leaf>` を `ModalEditor` に渡す�
   する（`refreshTelescope()` は `telescopeSelectedIdx = 0` にリセットするため、削除直後は常に
   一覧の先頭へ選択が戻る。複数連続削除時にインデックスがずれる問題を避けるための単純な設計）。
 - **テスト**: `test/dev/javatexteditor/telescope/TelescopeTest.java` に
-  `testBufferPickerShiftDDeletesSelectedEntry`・`testBufferPickerLowercaseDFiltersInsteadOfDeleting`
-  を追加。Shift+D で `onBufferDelete` が呼ばれ一覧から消えること、小文字 `d` は削除せずクエリ
-  フィルタとして機能すること（含む名前が絞り込まれること）を検証。
+  `testBufferPickerCtrlDDeletesSelectedEntry`・`testBufferPickerLetterDFiltersInsteadOfDeleting`
+  を追加。Ctrl+D で `onBufferDelete` が呼ばれ一覧から消えること、文字キーの `d`/`D` はいずれも
+  削除せずクエリフィルタとして機能すること（両方ともクエリに追記されること）を検証。
