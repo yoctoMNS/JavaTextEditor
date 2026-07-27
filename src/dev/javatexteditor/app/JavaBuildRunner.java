@@ -4,7 +4,6 @@ import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.projectbuild.BuildResult;
 import dev.javatexteditor.projectbuild.MainClassFinder;
 import dev.javatexteditor.projectbuild.ProjectBuilder;
-import dev.javatexteditor.ui.EditorCanvas;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -21,12 +20,13 @@ import javax.swing.SwingUtilities;
  * <p><b>{@link RunningProcessHolder} は {@link CBuildRunner} と共有すること。</b>
  * 理由は当該クラスの Javadoc を参照。
  *
- * <p><b>{@code canvas} 引数について（MAIN_DECOMPOSITION_PLAN.md 段階2 の「気づき」）</b>:
- * 本クラスの各メソッドが受け取る {@code EditorCanvas canvas} は、
- * 切り出し前から一度も使われていない（引数として引き回されているだけで
- * {@code canvas.} の呼び出しが1件も無い）。段階2は「振る舞いを変えない」ことを
- * 条件としており、引数の削除は新しいAPIの設計判断にあたるため、
- * ここではそのまま残してある。削除の可否は別途判断する。
+ * <p><b>{@code EditorCanvas canvas} 引数を削除した経緯（MAIN_DECOMPOSITION_PLAN.md R-7）</b>:
+ * 切り出し前は全メソッドが {@code canvas} を受け取っていたが、
+ * このビルド・実行系では一度も使われていなかった（引数として引き回されるだけで
+ * {@code canvas.} の呼び出しが1件も無かった）。段階2では「振る舞いを変えない」ことを
+ * 優先していったん残し、段階3の完了後に削除した。
+ * 進捗表示・出力はすべて {@code ModalEditor} の疑似バッファ経由で行われるため、
+ * ここから {@code EditorCanvas} を触る必要はない。再び追加しないこと。
  */
 public final class JavaBuildRunner {
 
@@ -56,31 +56,31 @@ public final class JavaBuildRunner {
      * F10: 追加クラスパス（複数ディレクトリ、カンマ区切り）を尋ねてからプロジェクト全体を
      * コンパイルし、*compile* 疑似バッファに結果を表示する。Escなら追加クラスパスなしで続行する。
      */
-    public void triggerCompile(ModalEditor editor, EditorCanvas canvas) {
+    public void triggerCompile(ModalEditor editor) {
         editor.enterClasspathInput("F10",
-            extraClasspath -> doCompile(editor, canvas, extraClasspath, null));
+            extraClasspath -> doCompile(editor, extraClasspath, null));
     }
 
     /** F11: bin/ に .class がなければ拒否し、あれば追加クラスパスを尋ねて main クラスを解決・実行する。 */
-    public void triggerRun(ModalEditor editor, EditorCanvas canvas) {
+    public void triggerRun(ModalEditor editor) {
         Path projectRoot = editor.getBuildRoot();
         if (!builder.hasCompiledClasses(projectRoot)) {
             editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
             return;
         }
         editor.enterClasspathInput("F11",
-            extraClasspath -> resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath));
+            extraClasspath -> resolveAndRunMainClass(editor, projectRoot, extraClasspath));
     }
 
     /**
      * F12: 追加クラスパスを尋ねてからコンパイルし、成功した場合のみ同じ追加クラスパスで
      * main クラスを解決して実行する。
      */
-    public void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
+    public void triggerCompileAndRun(ModalEditor editor) {
         editor.enterClasspathInput("F12", extraClasspath -> {
             Path projectRoot = editor.getBuildRoot();
-            doCompile(editor, canvas, extraClasspath, result -> {
-                if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath);
+            doCompile(editor, extraClasspath, result -> {
+                if (result.success()) resolveAndRunMainClass(editor, projectRoot, extraClasspath);
             });
         });
     }
@@ -90,16 +90,16 @@ public final class JavaBuildRunner {
      * 追加クラスパスは {@link #pendingRunExtraClasspath} に持ち越したものを
      * <b>呼び出し時点で</b>読み出す（切り出し前も同じく、コールバック実行時に読んでいた）。
      */
-    public void runSelectedMainClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot,
+    public void runSelectedMainClass(ModalEditor editor, Path projectRoot,
             String fqcn) {
-        runJavaClass(editor, canvas, projectRoot, fqcn, pendingRunExtraClasspath);
+        runJavaClass(editor, projectRoot, fqcn, pendingRunExtraClasspath);
     }
 
     /**
      * F10/F12共通のコンパイル実行部。onDone は完了後にEDT上で呼ばれる（null可）。
      * javacが診断を報告するたび *compile* 疑似バッファへリアルタイムに追記する。
      */
-    private void doCompile(ModalEditor editor, EditorCanvas canvas, List<Path> extraClasspath,
+    private void doCompile(ModalEditor editor, List<Path> extraClasspath,
             java.util.function.Consumer<BuildResult> onDone) {
         editor.beginCompileOutput();
         editor.syncCanvas();
@@ -125,7 +125,7 @@ public final class JavaBuildRunner {
      * {@link #runSelectedMainClass} に届く）。
      */
     private void resolveAndRunMainClass(
-            ModalEditor editor, EditorCanvas canvas, Path projectRoot, List<Path> extraClasspath) {
+            ModalEditor editor, Path projectRoot, List<Path> extraClasspath) {
         editor.setStatusMessage("mainクラスを検索中...");
         Thread.ofVirtual().start(() -> {
             List<String> mainClasses = mainClassFinder.findMainClasses(projectRoot);
@@ -133,7 +133,7 @@ public final class JavaBuildRunner {
                 if (mainClasses.isEmpty()) {
                     editor.setStatusMessage("run: mainメソッドを持つクラスが見つかりません");
                 } else if (mainClasses.size() == 1) {
-                    runJavaClass(editor, canvas, projectRoot, mainClasses.get(0), extraClasspath);
+                    runJavaClass(editor, projectRoot, mainClasses.get(0), extraClasspath);
                 } else {
                     pendingRunExtraClasspath = extraClasspath;
                     editor.enterMainClassPicker(mainClasses);
@@ -148,7 +148,7 @@ public final class JavaBuildRunner {
      * 標準出力/標準エラーは別々のスレッドで読み取り、*run* 疑似バッファへ1行ずつリアルタイムに
      * 追記する（標準エラー由来の行は赤字表示。EditorCanvas.setErrorLines参照）。
      */
-    private void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn,
+    private void runJavaClass(ModalEditor editor, Path projectRoot, String fqcn,
             List<Path> extraClasspath) {
         running.terminateIfAlive();
         Path binDir = builder.binDirFor(projectRoot);

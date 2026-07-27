@@ -89,7 +89,7 @@ public final class LiveDiagnostics {
                 editor.setStatusMessage("import 整理中...");
                 runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗", compileGeneration);
             } else if (isCBuffer(editor)) {
-                organizeCIncludes(editor, canvas);
+                organizeCIncludes(editor);
             } else {
                 editor.setStatusMessage("E: Java/Cファイルではありません");
             }
@@ -213,7 +213,7 @@ public final class LiveDiagnostics {
      * <p>{@code canvas} は切り出し前から未使用のまま引き回されている
      * （MAIN_DECOMPOSITION_PLAN.md §8 R-7）。
      */
-    private void organizeCIncludes(ModalEditor editor, EditorCanvas canvas) {
+    private void organizeCIncludes(ModalEditor editor) {
         List<String> headers = dev.javatexteditor.analysis.CIncludeManager
             .missingHeadersForSource(editor.getText());
         if (headers.isEmpty()) {

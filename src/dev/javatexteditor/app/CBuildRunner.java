@@ -3,7 +3,6 @@ package dev.javatexteditor.app;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.projectbuild.BuildResult;
 import dev.javatexteditor.projectbuild.CProjectBuilder;
-import dev.javatexteditor.ui.EditorCanvas;
 import java.io.IOException;
 import java.nio.file.Path;
 import javax.swing.SwingUtilities;
@@ -20,8 +19,8 @@ import javax.swing.SwingUtilities;
  * <p><b>{@link RunningProcessHolder} は {@link JavaBuildRunner} と共有すること。</b>
  * 理由は当該クラスの Javadoc を参照。
  *
- * <p><b>{@code canvas} 引数について</b>: 切り出し前から未使用のまま引き回されている。
- * 詳細は {@link JavaBuildRunner} の Javadoc を参照。
+ * <p><b>{@code EditorCanvas canvas} 引数は削除済み</b>（MAIN_DECOMPOSITION_PLAN.md R-7）。
+ * 経緯は {@link JavaBuildRunner} の Javadoc を参照。再び追加しないこと。
  */
 public final class CBuildRunner {
 
@@ -34,29 +33,29 @@ public final class CBuildRunner {
     }
 
     /** F10（C）: projectRoot 配下の全 .c を gcc で1実行ファイルにコンパイルし *compile* に表示する。 */
-    public void triggerCompile(ModalEditor editor, EditorCanvas canvas) {
-        doCompile(editor, canvas, null);
+    public void triggerCompile(ModalEditor editor) {
+        doCompile(editor, null);
     }
 
     /** F11（C）: 実行ファイルが無ければ拒否し、あれば実行する。 */
-    public void triggerRun(ModalEditor editor, EditorCanvas canvas) {
+    public void triggerRun(ModalEditor editor) {
         Path projectRoot = editor.getBuildRoot();
         if (!builder.hasExecutable(projectRoot)) {
             editor.setStatusMessage("run: 実行ファイルがありません。先にF10でコンパイルしてください");
             return;
         }
-        runCExecutable(editor, canvas, projectRoot);
+        runCExecutable(editor, projectRoot);
     }
 
     /** F12（C）: コンパイル→成功時のみ実行。 */
-    public void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
-        doCompile(editor, canvas, result -> {
-            if (result.success()) runCExecutable(editor, canvas, editor.getBuildRoot());
+    public void triggerCompileAndRun(ModalEditor editor) {
+        doCompile(editor, result -> {
+            if (result.success()) runCExecutable(editor, editor.getBuildRoot());
         });
     }
 
     /** F10/F12（C）共通のコンパイル実行部。diagnostic をリアルタイムに *compile* へ追記する。 */
-    private void doCompile(ModalEditor editor, EditorCanvas canvas,
+    private void doCompile(ModalEditor editor,
             java.util.function.Consumer<BuildResult> onDone) {
         editor.beginCompileOutput();
         editor.syncCanvas();
@@ -80,7 +79,7 @@ public final class CBuildRunner {
      * F11（C）: コンパイル済みの実行ファイルを別プロセスとして起動し、標準出力/標準エラーを
      * *run* 疑似バッファへリアルタイム表示する（JavaBuildRunner の runJavaClass の C 版）。
      */
-    private void runCExecutable(ModalEditor editor, EditorCanvas canvas, Path projectRoot) {
+    private void runCExecutable(ModalEditor editor, Path projectRoot) {
         running.terminateIfAlive();
         Path executable = builder.executableFor(projectRoot);
         String command = executable.toString();

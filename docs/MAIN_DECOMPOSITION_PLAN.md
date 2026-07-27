@@ -800,7 +800,7 @@ CLAUDE.md の「学習目的のシンプルさ」に反する。**コンスト�
 | R-4 | パッケージ境界を機械的に検査する仕組み | 自作テストハーネスで `import` を走査する案。モジュラーモノリス提案の一部 |
 | R-5 | 既知の失敗3件の仕様確定 | ユーザー判断が必要 |
 | R-6 | `Main` に対するテストの新設 | 現在ゼロ（§1.4）。段階7後、`EditorApplication` は GUI 依存のままだが `StartupArgs` は純粋ロジックとしてテスト可能になる |
-| R-7 | `JavaBuildRunner` / `CBuildRunner` の `EditorCanvas canvas` 引数を削除する | 段階2 で判明。切り出し前から一度も使われていない死んだ引数（`canvas.` の呼び出しが0件）。段階2の検証ハーネスで `null` を渡しても F10/F11 が完走することを実証済み。削除は新APIの設計判断にあたるため §7.4 に従い保留した。**削除しても振る舞いは変わらない**（コンパイラが未使用を保証） |
+| ~~R-7~~ | ~~`JavaBuildRunner` / `CBuildRunner` の `EditorCanvas canvas` 引数を削除する~~ | **✅ 2026-07-27 完了**（段階3の直後にユーザー指示で実施）。削除したのは `JavaBuildRunner` の7メソッド・`CBuildRunner` の5メソッド・`LiveDiagnostics.organizeCIncludes` の計13メソッド。`LiveDiagnostics` の `install`/`runCompileAnalysis`/`runCAnalysis` は `canvas.switchToHalfWidth()`・`canvas.setDiagnostics()` を実際に使っているため**残した**。両バージョンから `canvas` トークンを機械的に除去して突き合わせ、4ファイルとも完全一致＝削除されたのが引数だけであることを証明済み |
 | R-8 | 共有プロセス参照を `volatile` にする | 段階2 で判明。旧 `Main.runningProcess` は `volatile` でなく、EDT（`terminateIfAlive`）とバックグラウンド仮想スレッド（`set`）から可視性の保証なく読み書きされていた。`RunningProcessHolder` でも純粋な移動を優先して付けていない。付けても壊れず潜在的な競合が消えるが、振る舞いの変更にあたるため保留 |
 
 ---

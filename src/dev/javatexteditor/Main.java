@@ -227,13 +227,12 @@ public class Main {
                                 || e.getKeyCode() == KeyEvent.VK_F11
                                 || e.getKeyCode() == KeyEvent.VK_F12) {
                             dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
-                            EditorCanvas canvasBuild = active[0].canvas();
                             if (edBuild.isNormalMode()) {
                                 boolean c = LiveDiagnostics.isCBuffer(edBuild);
                                 switch (e.getKeyCode()) {
-                                    case KeyEvent.VK_F10 -> { if (c) C_BUILD_RUNNER.triggerCompile(edBuild, canvasBuild); else JAVA_BUILD_RUNNER.triggerCompile(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F11 -> { if (c) C_BUILD_RUNNER.triggerRun(edBuild, canvasBuild); else JAVA_BUILD_RUNNER.triggerRun(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F12 -> { if (c) C_BUILD_RUNNER.triggerCompileAndRun(edBuild, canvasBuild); else JAVA_BUILD_RUNNER.triggerCompileAndRun(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F10 -> { if (c) C_BUILD_RUNNER.triggerCompile(edBuild); else JAVA_BUILD_RUNNER.triggerCompile(edBuild); }
+                                    case KeyEvent.VK_F11 -> { if (c) C_BUILD_RUNNER.triggerRun(edBuild); else JAVA_BUILD_RUNNER.triggerRun(edBuild); }
+                                    case KeyEvent.VK_F12 -> { if (c) C_BUILD_RUNNER.triggerCompileAndRun(edBuild); else JAVA_BUILD_RUNNER.triggerCompileAndRun(edBuild); }
                                 }
                             }
                             pressedHandled[0] = true;
@@ -557,7 +556,7 @@ public class Main {
         editor.setOnFileOpened(BUFFER_REGISTRY::register);
         editor.setOnBufferDelete(BUFFER_REGISTRY::unregister);
         editor.setOnRunMainClassSelected(
-            fqcn -> JAVA_BUILD_RUNNER.runSelectedMainClass(editor, canvas, editor.getBuildRoot(), fqcn));
+            fqcn -> JAVA_BUILD_RUNNER.runSelectedMainClass(editor, editor.getBuildRoot(), fqcn));
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }
