@@ -1542,9 +1542,61 @@ COMMAND / SEARCH / DIAGNOSTICS / LIGHT+WRAP の9シナリオを描画してピ�
 
 ### 次に着手すべき候補
 
-**`Main`（1,282行）** — `PaneTree` / `GlobalKeyDispatcher` / `BuildRunner`(F10–12) /
-`IndexBootstrap` へ分けられる。ただし GUI 配線（`KeyboardFocusManager` のグローバル
-ディスパッチャ、`JSplitPane` のツリー構築、子プロセス起動）は自動テストできない既知のギャップが
-あるため、**純粋ロジックを先に抜くこと**。`EditorCanvas` 側に残る改善余地としては、
-`paintContent()` から17個の draw 系メソッドへの分岐の整理があるが、
-描画順序の入れ替えは上記ピクセル比較で検出できるので、着手するならその手段を再利用すること。
+~~**`Main`（1,282行）**~~ → **✅ 第8弾で純粋ロジック部分を完了**（下記参照）。
+`EditorCanvas` 側に残る改善余地としては `paintContent()` から17個の draw 系メソッドへの
+分岐の整理があるが、描画順序の入れ替えは上記ピクセル比較で検出できるので、
+着手するならその手段を再利用すること。
+
+## Main リファクタリング 第8弾（2026-07-27）— 純粋ロジックの切り出し
+
+第7弾末尾の指針「GUI 配線は自動テストできないため、**純粋ロジックを先に抜くこと**」に従い、
+`Main`（1,282行）から Swing に依存しない3つの塊だけを抜いた。
+`Main` は 1,282行 → 1,189行。
+
+### 抽出した3クラス（すべて新規テスト付き）
+
+| クラス | 内容 | テスト |
+|---|---|---|
+| `PaneTree` | 画面分割のツリー構造（`PaneNode`/`Leaf`/`Split`）と `allLeaves`/`splitLeaf`/`removeLeaf` | `PaneTreeTest`（14） |
+| `ui.DisplayMetrics` | 起動時の拡大率・フォントセル・ウィンドウサイズの算出 | `DisplayMetricsTest`（10） |
+| `BufferRegistry` | 開いたファイルの一覧（SPC+b / Ctrl+U / Ctrl+P の巡回対象） | `BufferRegistryTest`（8） |
+
+**`PaneTree` の抽出が最も価値が大きい**: 分割・ペインクローズのロジックは
+「GUI 依存だからテストできない」と見なされ**これまでテストが1件も無かった**が、
+実際には `JSplitPane` を組み立てるのは `Main.buildComponent()` の役目であり、
+ツリー操作自体は Swing に一切依存しない純粋ロジックだった。
+操作はどれもリーフの中身を見ず参照の同一性だけで対象を探すため、
+`new Leaf(null, null)` を並べるだけで構造を検証できる。
+
+`DisplayMetrics` も同様に「画面情報を調べる処理」（`Main` に残した）と
+「そこから倍率とサイズを計算する処理」（切り出した）が混ざっていたため、
+分けることで実ディスプレイなしに検証できるようになった。
+
+### 意図的に統合しなかったもの（重要）
+
+**拡張子による言語判定が3種類あるが、これらは統合してはならない。**
+一見重複に見えるが、対象とする拡張子の集合が用途ごとに異なる。
+
+| 判定 | 対象拡張子 | 用途 |
+|---|---|---|
+| `Main.isCBuffer` | `.c` `.h` のみ | F10/F11/F12 のCツールチェーン振り分け・C診断 |
+| `ModalEditor.isCFilePath` | `.c` `.h` `.cc` `.cpp` `.cxx` `.hpp` `.hh` `.hxx` | Shift+K の定義ジャンプ |
+| `ui.SourceLanguage.detect` | 上と同じ広い集合 | 構文ハイライト |
+
+統合すると C++ ファイルが C コンパイラへ回される等、挙動が変わる。
+
+### 手を付けなかった箇所
+
+F10/F11/F12 のビルド・実行群（`triggerCompile`/`doCompile`/`runJavaClass`/
+`runCExecutable`/`startRunOutputReader` 等、約230行）は `Main` の static 状態
+（`PROJECT_BUILDER`・`runningProcess`・`pendingRunExtraClasspath`）と EDT ディスパッチに
+深く結びついており、切り出しても子プロセス起動と GUI 反映は自動テストできない
+（既知のギャップ）。純粋ロジックが尽きた時点で止める方針に従い、今回は対象外とした。
+同様に `KeyboardFocusManager` のグローバルディスパッチャ・`refreshCallbacks` の配線も残している。
+
+### 検証
+
+全97テストクラス（新規3クラス含む）を個別JVMで実行し、既存94クラスの結果が
+着手前ベースラインと `diff` で完全一致。既知FAIL は `ScrollTest` 2件・
+`ModalEditorTest` 1件のみで増減なし。
+加えて描画結果のピクセルハッシュ（9シナリオ）が変更前と完全一致することを確認した。
