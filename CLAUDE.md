@@ -1267,8 +1267,9 @@ project-root/
 
 ### 次に着手すべき候補（更新）
 
-第1弾の候補 3.（疑似モード群の共通化）が残っている
-（候補 2. の `executeCommand()` は第3弾、`processNormalKey()` の分割は第4弾で完了）。
+第1弾の候補はすべて完了した（1.＝第2弾、2.＝第3弾、`processNormalKey()` の分割＝第4弾、
+3.＝第5弾）。次の候補は `EditorCanvas`（1,863行・119フィールド・setter 25個）と
+`Main`（1,282行）だが、いずれも公開APIやGUI配線に触れるため影響範囲が広い（第5弾末尾を参照）。
 
 ## ModalEditor 神クラス解体リファクタリング 第3弾（2026-07-27）— :コマンドの表化
 
@@ -1374,3 +1375,60 @@ Phase 完了時にベースラインとの `diff` ゼロを機械的に確認 �
 
 全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
 既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし（いずれも仕様判断未決のため修正禁止）。
+
+## ModalEditor 神クラス解体リファクタリング 第5弾（2026-07-27）— 疑似モード群
+
+第1弾の「次に着手すべき候補」3.（FILER/TELESCOPE/FILESEARCH/IMPORT_SELECT/CLASSPATH_INPUT の
+疑似モード群）を実施した。手順は第1〜4弾と同じ。
+
+### 計画時の仮説は外れた（重要な記録）
+
+第1弾では「5つの `processXxxKey()` はいずれも `KeymapRegistry` をバイパスする同型の構造なので、
+共通のインタフェース（例: `ModalScreen`）へ寄せられる可能性がある」と記録していたが、
+**実際に5つを読み比べたところ、この仮説は成り立たなかった**。実態は次の3種類に分かれる。
+
+| 種別 | 該当 | 形 |
+|---|---|---|
+| 1行入力プロンプト | `processSearchKey` / `processFileSearchKey` / `processClasspathInputKey` | Esc・Backspace・Enter・印字可能文字の4分岐だけ |
+| 一覧選択のみ | `processImportSelectKey` | 自由入力なし。Esc・Enter・上下移動だけ |
+| 入力＋一覧のハイブリッド | `processTelescopeKey` / `processFilerKey` | 打鍵ごとに絞り込み再実行、Ctrl+D 等の固有キーあり |
+
+これらを1つのインタフェースに押し込むと、実装クラスの大半のメソッドが空になるか、
+分岐フラグを持つことになり、かえって読みにくくなる。**共通インタフェース化は見送った。**
+代わりに、種別をまたいで実際に重複していた2つの塊だけを抽出した。
+
+### 実際に抽出したもの
+
+1. **`handleTextPromptKey(keyCode, keyChar, input, onCancel, onCommit)`** — 上表「1行入力プロンプト」の
+   3つは分岐の順序まで一致する完全な重複だった。画面ごとに違うのは「どの入力欄か」
+   「取り消したら何をするか」「確定したら何をするか」の3点だけなので、それだけを引数で受け取る。
+   3箇所にあった Backspace の空チェックが1箇所になった。
+   `\f`/`\g` の bang 処理は `runFileSearch()` として名前を付けて切り出した。
+2. **`isSelectNextKey` / `isSelectPrevKey`（Ctrl+N・Ctrl+P / ↓・↑）と
+   `isVimNextKey` / `isVimPrevKey`（j / k）** — 一覧移動キーの判定が5画面10箇所に重複していた。
+   **あえて2組に分けたのが要点**: `j`/`k` を移動キーに使えるのは自由入力のない画面だけで、
+   telescope や FILER の検索モードでは `j` は文字入力として扱わなければならない
+   （移動に割り当てると "j" を含む名前を検索できなくなる）。
+   分けたことで、どの画面が `j`/`k` を受け付けるかが呼び出し側の
+   `isSelectNextKey(...) || isVimNextKey(...)` という式そのもので読めるようになった。
+   従来はコメントを読まないと区別できなかった。
+
+### 検証
+
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし。
+
+### 次に着手すべき候補
+
+`ModalEditor` 側の大きな重複はこれで一巡した。残るのは別クラスになる。
+
+1. **`EditorCanvas`（1,863行・private フィールド119個・public setter 25個・draw 系メソッド17個）**。
+   `syncCanvas()` が毎キー入力ごとに25個の setter を26回呼ぶ構造で、描画状態の受け渡しを
+   値オブジェクト（`SelectionView`/`CompletionView`/`TelescopeView`/`DiagnosticsView` 等）へ
+   束ねる余地がある。ただし setter は `Main` と `EditorCanvasTest`(51)・`RobotKeyInputTest`・
+   `KeyboardSimulationTest` から使われる**公開API**であり、第1〜5弾で守ってきた
+   「公開シグネチャは変更しない」ルールと正面から衝突する。着手するなら、
+   旧 setter を委譲として残す移行期間を設けるか、ルールの一時的な緩和をユーザーと合意すること。
+2. **`Main`（1,282行）** — `PaneTree` / `GlobalKeyDispatcher` / `BuildRunner`(F10–12) /
+   `IndexBootstrap` へ分けられる。ただし GUI 配線は自動テストできない既知のギャップがあるため、
+   純粋ロジックを先に抜くこと。
