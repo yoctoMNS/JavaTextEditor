@@ -83,20 +83,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private static final Color SEARCH_HIGHLIGHT_COLOR = new Color(0xFF, 0xE0, 0x00, 0x90);
 
     // 入力補完ポップアップ状態
-    private boolean completionActive = false;
-    private List<String> completionLabels = List.of();
-    private List<String> completionKinds  = List.of();
-    private int completionSelectedIdx = 0;
-    private int completionAnchorRow = 0;
-    private int completionAnchorCol = 0;
+    private CompletionView completion = CompletionView.hidden();
 
     // telescope オーバーレイ状態
-    private boolean telescopeActive = false;
-    private String telescopeTitle = "";
-    private String telescopeQuery = "";
-    private List<TelescopeItem> telescopeResults = List.of();
-    private int telescopeSelectedIdx = 0;
-    private String telescopePreview = "";
+    private TelescopeView telescope = TelescopeView.hidden();
 
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
@@ -117,7 +107,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private boolean sizeOverlayVisible = false;
     private final Timer sizeOverlayHideTimer = new Timer(3000, e -> {
         sizeOverlayVisible = false;
-        repaint();
+        requestRepaint();
     });
 
     // 半角ASCIIは既定でX11 misc-fixed Bold 9x15（実機xtermの `ps` 出力から特定した本物の
@@ -317,7 +307,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /** INSERT→NORMAL遷移時など、変換中の未確定文字列の表示を消す。 */
     public void clearImeComposition() {
         this.composedText = "";
-        repaint();
+        requestRepaint();
     }
 
     @Override
@@ -351,7 +341,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         if (committed.length() > 0 && imeCommitHandler != null) {
             imeCommitHandler.accept(committed.toString());
         }
-        repaint();
+        requestRepaint();
     }
 
     @Override
@@ -399,7 +389,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             }
             int lineHeight = cachedLineHeight > 0 ? cachedLineHeight : 16;
             int charWidth  = cachedCharWidth  > 0 ? cachedCharWidth  : 8;
-            int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+            int gutterWidth = gutterWidthFor(charWidth);
             String line = (cursorRow < cachedLines.length) ? cachedLines[cursorRow] : "";
             int screenRow;
             int x;
@@ -471,7 +461,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             blockCommentLinesOwner = null;
             blockCommentLangOwner = null;
         }
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -481,18 +471,18 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     public void setLanguage(SourceLanguage language) {
         this.language = (language != null) ? language : SourceLanguage.NONE;
-        repaint();
+        requestRepaint();
     }
-    public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
-    public void setCursorPositionLabel(String label) { this.cursorPositionLabel = label; repaint(); }
-    public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
+    public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; requestRepaint(); }
+    public void setCursorPositionLabel(String label) { this.cursorPositionLabel = label; requestRepaint(); }
+    public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; requestRepaint(); }
     public void setTheme(Theme theme) {
         // syncCanvas() は1キー入力ごとに呼ばれるため、値が変化していない場合は
         // グリフキャッシュを無駄に破棄しない（setFontChoice()と同じガード方式）。
         if (this.theme == theme) return;
         this.theme = theme;
         invalidateGlyphCache();
-        repaint();
+        requestRepaint();
     }
     public Theme getTheme() { return theme; }
 
@@ -504,65 +494,133 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             ? IbmPlexMonoFont.INSTANCE
             : MiscFixedBold9x15.INSTANCE;
         invalidateGlyphCache();
-        repaint();
+        requestRepaint();
     }
     public FontChoice getFontChoice() { return fontChoice; }
-    public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
+    public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); requestRepaint(); }
     public int getScrollRow() { return scrollRow; }
-    public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); repaint(); }
+    public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); requestRepaint(); }
     public int getScrollCol() { return scrollCol; }
-    public void setWrapEnabled(boolean wrapEnabled) { this.wrapEnabled = wrapEnabled; repaint(); }
+    public void setWrapEnabled(boolean wrapEnabled) { this.wrapEnabled = wrapEnabled; requestRepaint(); }
     public boolean isWrapEnabled() { return wrapEnabled; }
     public int getVisibleRows() { return computeVisibleRows(cachedLineHeight > 0 ? cachedLineHeight : 16); }
-    public void setCommandLineText(String text) { this.commandLineText = text; repaint(); }
+    public void setCommandLineText(String text) { this.commandLineText = text; requestRepaint(); }
     public String getCommandLineText() { return commandLineText; }
     public String getCursorPositionLabel() { return cursorPositionLabel; }
-    public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; repaint(); }
-    public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; repaint(); }
-    public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; repaint(); }
+    public void setVisualMode(boolean visualMode) { this.visualMode = visualMode; requestRepaint(); }
+    public void setVisualLineMode(boolean visualLineMode) { this.visualLineMode = visualLineMode; requestRepaint(); }
+    public void setVisualBlockMode(boolean visualBlockMode) { this.visualBlockMode = visualBlockMode; requestRepaint(); }
     public void setSelection(int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
         this.selAnchorRow = anchorRow;
         this.selAnchorCol = anchorCol;
         this.selCursorRow = cursorRow;
         this.selCursorCol = cursorCol;
-        repaint();
+        requestRepaint();
     }
+    /**
+     * 選択範囲の描画状態をまとめて差し替える。
+     *
+     * <p>種類を表す3つの boolean と4つの座標を必ず一組で設定するため、
+     * 個別の {@code setVisualMode}/{@code setVisualLineMode}/{@code setVisualBlockMode}/
+     * {@code setSelection}/{@code clearSelection} を順に呼ぶ場合と違って、
+     * 途中の辻褄の合わない状態が生じない。新しい呼び出しはこちらを使うこと。
+     */
+    // -------------------------------------------------------------------------
+    // 再描画のまとめ
+    // -------------------------------------------------------------------------
+
+    /** batchUpdate() 実行中は 0 より大きい。個々の setter はこの間 再描画を予約しない。 */
+    private int updateBatchDepth = 0;
+
+    /**
+     * 複数の状態をまとめて更新し、最後に1度だけ再描画を予約する。
+     *
+     * <p>{@code ModalEditor.syncCanvas()} は1キー入力ごとに10個ほどの setter を呼ぶが、
+     * setter が個別に {@code repaint()} を呼ぶと同じ回数だけ再描画が予約される。
+     * Swing は次の描画までに予約をまとめるため表示結果は変わらないものの、
+     * 「1回の更新は1回の再描画」という意図をコード上で表せないため、まとめる口を用意した。
+     *
+     * <p>入れ子で呼んでも安全で、一番外側を抜けたときに1度だけ予約する。
+     */
+    public void batchUpdate(Runnable updates) {
+        updateBatchDepth++;
+        try {
+            updates.run();
+        } finally {
+            updateBatchDepth--;
+        }
+        if (updateBatchDepth == 0) {
+            repaint();
+        }
+    }
+
+    /** setter から呼ぶ再描画の予約。まとめ更新中は予約せず、まとめ終わりに1度だけ行う。 */
+    private void requestRepaint() {
+        if (updateBatchDepth == 0) {
+            repaint();
+        }
+    }
+
+    public void setSelectionView(SelectionView view) {
+        SelectionView v = (view != null) ? view : SelectionView.none();
+        this.visualMode      = v.isActive();
+        this.visualLineMode  = v.isLine();
+        this.visualBlockMode = v.isBlock();
+        this.selAnchorRow = v.anchorRow();
+        this.selAnchorCol = v.anchorCol();
+        this.selCursorRow = v.cursorRow();
+        this.selCursorCol = v.cursorCol();
+        requestRepaint();
+    }
+
     public void clearSelection() {
         this.selAnchorRow = -1;
         this.visualLineMode = false;
         this.visualBlockMode = false;
-        repaint();
+        requestRepaint();
     }
 
     /**
      * 入力補完ポップアップの状態をセットする。
      * labels / kinds は CompletionItem のリストから変換して渡す。
      */
-    public void setCompletionState(boolean active, List<String> labels, List<String> kinds,
-                                   int selectedIdx, int anchorRow, int anchorCol) {
-        this.completionActive       = active;
-        this.completionLabels       = (labels != null) ? List.copyOf(labels)  : List.of();
-        this.completionKinds        = (kinds  != null) ? List.copyOf(kinds)   : List.of();
-        this.completionSelectedIdx  = selectedIdx;
-        this.completionAnchorRow    = anchorRow;
-        this.completionAnchorCol    = anchorCol;
-        repaint();
+    /** 補完ポップアップの描画状態をまとめて差し替える。 */
+    public void setCompletionView(CompletionView view) {
+        this.completion = (view != null) ? view : CompletionView.hidden();
+        requestRepaint();
     }
 
+    /**
+     * 補完ポップアップの状態をセットする。
+     *
+     * <p>移行期間中の委譲。新しい呼び出しは {@link #setCompletionView(CompletionView)} を使うこと。
+     * 既存の呼び出し側との互換のために残してある。
+     */
+    public void setCompletionState(boolean active, List<String> labels, List<String> kinds,
+                                   int selectedIdx, int anchorRow, int anchorCol) {
+        setCompletionView(new CompletionView(active, labels, kinds, selectedIdx, anchorRow, anchorCol));
+    }
+
+    /** 候補一覧オーバーレイの描画状態をまとめて差し替える。 */
+    public void setTelescopeView(TelescopeView view) {
+        this.telescope = (view != null) ? view : TelescopeView.hidden();
+        requestRepaint();
+    }
+
+    /**
+     * 候補一覧オーバーレイの状態をセットする。
+     *
+     * <p>移行期間中の委譲。新しい呼び出しは {@link #setTelescopeView(TelescopeView)} を使うこと。
+     * 既存の呼び出し側との互換のために残してある。
+     */
     public void setTelescopeState(boolean active, String title, String query,
             List<TelescopeItem> results, int selectedIdx, String preview) {
-        this.telescopeActive    = active;
-        this.telescopeTitle     = title != null ? title : "";
-        this.telescopeQuery     = query != null ? query : "";
-        this.telescopeResults   = results != null ? results : List.of();
-        this.telescopeSelectedIdx = selectedIdx;
-        this.telescopePreview   = preview != null ? preview : "";
-        repaint();
+        setTelescopeView(new TelescopeView(active, title, query, results, selectedIdx, preview));
     }
 
     public void setSearchHighlights(List<int[]> highlights) {
         this.searchHighlights = (highlights != null) ? List.copyOf(highlights) : List.of();
-        repaint();
+        requestRepaint();
     }
 
     public List<int[]> getSearchHighlights() { return searchHighlights; }
@@ -577,7 +635,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         showSizeOverlay();
-        repaint();
+        requestRepaint();
     }
 
     /** 文字セル高さを delta px 変更する（範囲: 8〜80）。両ペインから呼ばれる。 */
@@ -586,7 +644,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         invalidateGlyphCache();
         cachedLineHeight = cellH;
         showSizeOverlay();
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -694,7 +752,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /** スプラッシュ画面の表示/非表示を切り替える。 */
     public void setShowSplash(boolean show) {
         this.showSplash = show;
-        repaint();
+        requestRepaint();
     }
 
     public boolean isShowSplash() { return showSplash; }
@@ -705,7 +763,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     public void setErrorLines(Set<Integer> errorLines) {
         this.errorLines = (errorLines != null) ? Set.copyOf(errorLines) : Set.of();
-        repaint();
+        requestRepaint();
     }
 
     /**
@@ -722,7 +780,19 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                     (incoming == DiagnosticKind.ERROR) ? DiagnosticKind.ERROR : existing);
         }
         this.diagByLine = Map.copyOf(map);
-        repaint();
+        requestRepaint();
+    }
+
+    /**
+     * 行番号ガター（診断マーカー E/W を出す左端の余白）の幅を返す。
+     *
+     * <p>診断が1件も無いときはガター自体を出さないので幅0。
+     * ある場合はマーカー1文字ぶんとその右の余白で2セル分を確保する。
+     * 描画の複数箇所（本文・カーソル・折り返し計算）が同じ値を使う必要があるため、
+     * この計算はここ1箇所に置く。
+     */
+    private int gutterWidthFor(int charWidth) {
+        return diagnostics.isEmpty() ? 0 : 2 * charWidth;
     }
 
     /** 現在保持している診断リストを返す（テスト用）。 */
@@ -740,10 +810,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         int visibleRows = computeVisibleRows(cachedLineHeight);
         if (cursorRow < scrollRow) {
             scrollRow = cursorRow;
-            repaint();
+            requestRepaint();
         } else if (cursorRow >= scrollRow + visibleRows) {
             scrollRow = Math.max(0, cursorRow - visibleRows + 1);
-            repaint();
+            requestRepaint();
         }
     }
 
@@ -760,13 +830,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         int visibleRows = computeVisibleRows(cachedLineHeight);
         if (cursorRow < scrollRow) {
             scrollRow = cursorRow;
-            repaint();
+            requestRepaint();
             return;
         }
         if (cursorRow - scrollRow > WRAP_SCROLL_SCAN_LIMIT) {
             // 近似: 正確な折返し計算はせず、カーソル行がおおよそ画面内に収まる位置へ寄せる
             scrollRow = Math.max(0, cursorRow - visibleRows + 1);
-            repaint();
+            requestRepaint();
             return;
         }
         int visibleCols = computeVisibleColsForWrap();
@@ -780,7 +850,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             scrollRow++;
             changed = true;
         }
-        if (changed) repaint();
+        if (changed) requestRepaint();
     }
 
     /**
@@ -793,17 +863,17 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public void ensureCursorColVisible(int col, String line) {
         if (wrapEnabled) {
             // wrap有効時は横スクロールを行わない（長い行は折返して表示するため）
-            if (scrollCol != 0) { scrollCol = 0; repaint(); }
+            if (scrollCol != 0) { scrollCol = 0; requestRepaint(); }
             return;
         }
         int cursorCells = cellsForCol(line, col);
         int visibleCols = computeVisibleCols();
         if (cursorCells < scrollCol) {
             scrollCol = cursorCells;
-            repaint();
+            requestRepaint();
         } else if (visibleCols > 0 && cursorCells >= scrollCol + visibleCols) {
             scrollCol = cursorCells - visibleCols + 1;
-            repaint();
+            requestRepaint();
         }
     }
 
@@ -838,7 +908,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private int computeVisibleColsForWrap() {
         int charWidth = (cachedCharWidth > 0) ? cachedCharWidth : cellW;
         if (charWidth <= 0) return 80;
-        int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+        int gutterWidth = gutterWidthFor(charWidth);
         return Math.max(1, (getWidth() - gutterWidth) / charWidth);
     }
 
@@ -996,14 +1066,14 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.setFont(getSwingFont());
 
         // ガター幅: 診断がある場合のみ "E " / "W " / "  " 2文字分を確保
-        int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+        int gutterWidth = gutterWidthFor(charWidth);
         int scrollOffsetX = wrapEnabled ? 0 : scrollCol * charWidth;
 
         // 再描画範囲がステータス行の帯に収まっている場合（歩行アニメーションのティック）は、
         // 本文（数十万行規模になりうる）の再描画を丸ごとスキップし、ステータス行だけ塗り直す。
         Rectangle clip = g2.getClipBounds();
-        boolean statusLineOnly = clip != null && !showSplash && !telescopeActive
-            && !(completionActive && !completionLabels.isEmpty())
+        boolean statusLineOnly = clip != null && !showSplash && !telescope.active()
+            && !completion.hasVisibleItems()
             && clip.y >= getHeight() - lineHeight - 8;
         if (statusLineOnly) {
             g2.setColor(theme.background);
@@ -1092,12 +1162,12 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         drawStatusLine(g2, lineHeight);
 
         // 7. telescope オーバーレイ（最前面に描画）
-        if (telescopeActive) {
+        if (telescope.active()) {
             drawTelescopeOverlay(g2, lineHeight);
         }
 
         // 8. 入力補完ポップアップ（telescope より前面）
-        if (completionActive && !completionLabels.isEmpty()) {
+        if (completion.hasVisibleItems()) {
             drawCompletionPopup(g2, charWidth, lineHeight, gutterWidth);
         }
 
@@ -1148,7 +1218,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         // プロンプト行
         g2.setColor(theme.accent);
         g2.fillRect(ox, oy, overlayW, fh + pad * 2);
-        String promptText = telescopeTitle + "  > " + telescopeQuery + "_";
+        String promptText = telescope.promptLine() + "_";
         drawUiText(g2, promptText, ox + pad, oy + fh + pad, cw, fh, theme.background);
 
         int bodyY = oy + fh + pad * 2 + 1;
@@ -1162,27 +1232,27 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         // Results ペイン
         int maxResultRows = bodyH / fh;
-        int visStart = Math.max(0, telescopeSelectedIdx - maxResultRows + 1);
-        if (telescopeSelectedIdx < visStart) visStart = telescopeSelectedIdx;
+        int visStart = Math.max(0, telescope.selectedIdx() - maxResultRows + 1);
+        if (telescope.selectedIdx() < visStart) visStart = telescope.selectedIdx();
 
-        for (int i = visStart; i < telescopeResults.size() && (i - visStart) < maxResultRows; i++) {
-            TelescopeItem item = telescopeResults.get(i);
+        for (int i = visStart; i < telescope.results().size() && (i - visStart) < maxResultRows; i++) {
+            TelescopeItem item = telescope.results().get(i);
             int ry = bodyY + (i - visStart + 1) * fh;
             Color rowColor;
-            if (i == telescopeSelectedIdx) {
+            if (i == telescope.selectedIdx()) {
                 g2.setColor(theme.accent);
                 g2.fillRect(ox + 1, ry - fh, resultsW - 2, fh);
                 rowColor = theme.background;
             } else {
                 rowColor = theme.foreground;
             }
-            String label = (i == telescopeSelectedIdx ? "> " : "  ") + item.display();
+            String label = (i == telescope.selectedIdx() ? "> " : "  ") + item.display();
             String clipped = clipToUiWidth(label, cw, resultsW - pad * 2);
             drawUiText(g2, clipped, ox + pad, ry, cw, fh, rowColor);
         }
 
         // Preview ペイン
-        String[] previewLines = telescopePreview.split("\n", -1);
+        String[] previewLines = telescope.preview().split("\n", -1);
         int previewW = overlayW - resultsW;
         int py = bodyY + fh;
         for (int i = 0; i < previewLines.length && (py - bodyY) < bodyH; i++) {
@@ -1197,7 +1267,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * テキスト本体より前面・telescope より後面に描画される。
      */
     private void drawCompletionPopup(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
-        if (completionLabels.isEmpty()) return;
+        if (completion.labels().isEmpty()) return;
 
         int cw = cellW;
         int fh = lineHeight;
@@ -1206,29 +1276,29 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         // 最長ラベル幅を計算してポップアップ幅を決定
         int maxLabelW = 0;
-        for (String label : completionLabels) {
+        for (String label : completion.labels()) {
             maxLabelW = Math.max(maxLabelW, uiTextWidth(label, cw));
         }
         int popupW = kindW + maxLabelW + pad * 3;
-        int popupH = completionLabels.size() * fh + pad * 2;
+        int popupH = completion.labels().size() * fh + pad * 2;
 
         // カーソル行の文字列でセルオフセットを計算（全角対応）
         String[] lines = cachedLines;
         int anchorScreenRow;
         int popupX;
         if (wrapEnabled) {
-            int[] pos = wrapScreenPosition(lines, completionAnchorRow, completionAnchorCol, charWidth, gutterWidth);
+            int[] pos = wrapScreenPosition(lines, completion.anchorRow(), completion.anchorCol(), charWidth, gutterWidth);
             if (pos != null) {
                 anchorScreenRow = pos[0];
                 popupX = pos[1];
             } else {
-                anchorScreenRow = completionAnchorRow - scrollRow;
+                anchorScreenRow = completion.anchorRow() - scrollRow;
                 popupX = gutterWidth;
             }
         } else {
-            String anchorLine = (completionAnchorRow < lines.length) ? lines[completionAnchorRow] : "";
-            int cellOffset = cellsForCol(anchorLine, completionAnchorCol);
-            anchorScreenRow = completionAnchorRow - scrollRow;
+            String anchorLine = (completion.anchorRow() < lines.length) ? lines[completion.anchorRow()] : "";
+            int cellOffset = cellsForCol(anchorLine, completion.anchorCol());
+            anchorScreenRow = completion.anchorRow() - scrollRow;
             popupX = gutterWidth + cellOffset * charWidth - scrollCol * charWidth;
         }
         int popupY = (anchorScreenRow + 1) * lineHeight; // カーソル行の下
@@ -1253,21 +1323,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.drawRect(popupX, popupY, popupW, popupH);
 
         // 各候補を描画
-        for (int i = 0; i < completionLabels.size(); i++) {
+        for (int i = 0; i < completion.labels().size(); i++) {
             int iy = popupY + pad + (i + 1) * fh;
             int rowTop = popupY + pad + i * fh;
-            String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
+            String kind = completion.kindAt(i);
 
-            if (i == completionSelectedIdx) {
+            if (i == completion.selectedIdx()) {
                 g2.setColor(theme.accent);
                 g2.fillRect(popupX + 1, rowTop, popupW - 2, fh);
                 // kind ラベル（選択行）
                 drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.background);
-                drawUiText(g2, completionLabels.get(i), popupX + pad + kindW, iy, cw, fh, theme.background);
+                drawUiText(g2, completion.labels().get(i), popupX + pad + kindW, iy, cw, fh, theme.background);
             } else {
                 // kind ラベルをアクセント色で
                 drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.accent);
-                drawUiText(g2, completionLabels.get(i), popupX + pad + kindW, iy, cw, fh, theme.foreground);
+                drawUiText(g2, completion.labels().get(i), popupX + pad + kindW, iy, cw, fh, theme.foreground);
             }
         }
     }

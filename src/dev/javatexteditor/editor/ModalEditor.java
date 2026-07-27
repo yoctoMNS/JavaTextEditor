@@ -36,21 +36,14 @@ import dev.javatexteditor.telescope.MainClassPicker;
 import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
+import dev.javatexteditor.ui.CompletionView;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
+import dev.javatexteditor.ui.SelectionView;
+import dev.javatexteditor.ui.TelescopeView;
 import dev.javatexteditor.ui.Theme;
-import java.awt.Image;
-import java.awt.Toolkit;
-import java.awt.datatransfer.Clipboard;
-import java.awt.datatransfer.DataFlavor;
-import java.awt.datatransfer.StringSelection;
-import java.awt.datatransfer.Transferable;
-import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.KeyEvent;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -145,14 +138,7 @@ public class ModalEditor {
     private boolean ctrlCOverridePending = false;
     // vim-macro-recording: q{register}記録 / @{register}再生。
     // yankRegister（ヤンクバッファ）とは独立したマクロ専用レジスタストレージ。
-    private record RecordedKey(int keyCode, char keyChar, int modifiers) {}
-    private boolean macroRecording = false;
-    private char macroRecordingRegister;
-    private final List<RecordedKey> macroRecordBuffer = new ArrayList<>();
-    private final Map<Character, List<RecordedKey>> macroRegisters = new HashMap<>();
-    private char lastPlayedMacroRegister = '\0'; // @@ 用
-    private int macroReplayDepth = 0; // 再生中の再帰の深さ（記録の二重展開防止・無限再帰ガード）
-    private static final int MACRO_MAX_REPLAY_DEPTH = 1000;
+    private final MacroRecorder macros = new MacroRecorder(this::processKey);
     // Visual '>'/'<' 用の count 前置き入力（例: "3>" は shiftwidth*3）。数字キー以外が来たら破棄する。
     private String visualCountBuffer = "";
     // NORMAL の r（1文字置換）専用の count 前置き入力（例: "3r"）。汎用の "3j" 等のカウント付き
@@ -209,6 +195,10 @@ public class ModalEditor {
     // auto-import 完了時に「N件挿入済み」を表示するための挿入カウンタ
     private int importAppliedCount = 0;
     // project-wide-search: grep 結果バッファ
+    /** OSのシステムクリップボードとの読み書き（Ctrl+Shift+C / Ctrl+Shift+V）。 */
+    private final SystemClipboardAccess systemClipboard = new SystemClipboardAccess();
+    /** COMMAND モードのコマンド名 → 処理の対応表（buildCommandRegistry() で組み立てる）。 */
+    private final CommandRegistry commands = buildCommandRegistry();
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
     private Path grepBaseDir = null; // grepResults の各 filePath() が相対的な起点ディレクトリ
@@ -281,10 +271,8 @@ public class ModalEditor {
     // Vim方式の共有バッファ: テキストのスナップショットではなく UndoablePieceTable の参照そのものを
     // 退避・復元する。文字列経由で復元すると（他ペインと共有していた場合でも）新規インスタンスに
     // なってしまい共有が切れるため。
-    private UndoablePieceTable telescopeSavedBuffer = null;
-    private String telescopeSavedFilePath = null;
-    private int telescopeSavedCursorRow = 0;
-    private int telescopeSavedCursorCol = 0;
+    /** telescope 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash telescopeStash = new PseudoBufferStash();
     // telescope 起動時にたまたま grep/file-search 結果バッファの上にいた場合、その一覧も退避して復元する
     // （telescope が buffer を上書きするため、退避しないと Esc キャンセル後に Enter ジャンプが効かなくなる）。
     private List<SearchResult> telescopeSavedGrepResults = null;
@@ -304,19 +292,15 @@ public class ModalEditor {
     private List<String> cdCandidates = List.of(); // 候補ディレクトリ名（末尾 "/" は含まない）
     private String cdCandidateParentPart = ""; // 補完対象パスのうち末尾ディレクトリ名より前の部分（区切り文字含む）
     private boolean cdSelectionActive = false; // true の間は *cd候補* 疑似バッファを表示中
-    private UndoablePieceTable cdSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
-    private String cdSavedFilePath = null;
-    private int cdSavedCursorRow = 0;
-    private int cdSavedCursorCol = 0;
+    /** *cd候補* 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash cdStash = new PseudoBufferStash();
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
     // :e タブ補完状態（:cd と同じく一時退避→復元パターン）
     private List<String> edCandidates = List.of(); // 候補ファイル/ディレクトリ名（末尾 "/" はディレクトリのみ）
     private String edCandidateParentPart = "";
     private boolean edSelectionActive = false;
-    private UndoablePieceTable edSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
-    private String edSavedFilePath = null;
-    private int edSavedCursorRow = 0;
-    private int edSavedCursorCol = 0;
+    /** *e候補* 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash edStash = new PseudoBufferStash();
     private String edSavedCommandText = "";
     // filer モード状態（\f/\g/telescope と同じ疑似バッファ表示。saved* は元バッファの一時退避）
     private List<DirEntry> filerEntries = List.of();
@@ -324,10 +308,8 @@ public class ModalEditor {
     private int filerSelectedIdx = 0;
     private boolean filerSearchMode = false;
     private final StringBuilder filerQuery = new StringBuilder();
-    private UndoablePieceTable filerSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
-    private String filerSavedFilePath = null;
-    private int filerSavedCursorRow = 0;
-    private int filerSavedCursorCol = 0;
+    /** FILER 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash filerStash = new PseudoBufferStash();
     // Mode.BINARY 状態（:b コマンドで任意のバッファと相互トグルする hexdump 編集モード）。
     // buffer 自体が「唯一の真実」（hexdumpテキストを直接1文字ずつ上書き編集する）ため、
     // 別途バイト配列をキャッシュしない。binaryByteCount のみバイト総数として保持し、
@@ -340,10 +322,8 @@ public class ModalEditor {
     private boolean binaryNibblePending = false; // true = 直前に高位4bitを入力済み、次の1桁で低位4bitを確定
 
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
-    private UndoablePieceTable savedBuffer = null; // 元バッファの参照（共有バッファを保つため）
-    private String savedFilePath = null;         // 元バッファのファイルパス（null可）
-    private int savedCursorRow = 0;
-    private int savedCursorCol = 0;
+    /** jdk-source 疑似バッファ表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash jdkSourceStash = new PseudoBufferStash();
     private boolean inJdkSourceBuffer = false;   // true のとき q で元に戻る
     // true = 現在の jdk-source 疑似バッファは C/C++ ネイティブソース（.c/.cpp/.h やJNIスニペット）。
     // false = Java ソース（クラス本体）。K の native シンボル探索(A)を誤って
@@ -357,32 +337,24 @@ public class ModalEditor {
     // 壊れないが、こちらは編集中の実.mdファイルそのものをレンダリング後のテキストで上書きして
     // しまう実害があるため。markdownViewOwner は「この buffer インスタンスが :view 用に作られた
     // ものか」を参照一致で判定するための目印（binaryModeOwner/classFileBufferOwnerと同じ設計）。
-    private UndoablePieceTable markdownViewSavedBuffer = null;
-    private String markdownViewSavedFilePath = null;
-    private int markdownViewSavedCursorRow = 0;
-    private int markdownViewSavedCursorCol = 0;
+    /** Markdown 閲覧ビュー表示中に隠れている元のソース編集状態。 */
+    private final PseudoBufferStash markdownViewStash = new PseudoBufferStash();
     private UndoablePieceTable markdownViewOwner = null;
 
     // 入力補完状態（INSERT モード内で管理）
     private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
-    private boolean completionActive = false;
-    private java.util.List<dev.javatexteditor.analysis.CompletionItem> completionItems = java.util.List.of();
-    private int completionSelectedIdx = 0;
-    private String completionPrefix = "";
+    private final CompletionPopupState completion = new CompletionPopupState();
     // 単語補完（Alt+/）: 作業ディレクトリ配下の全単語・クラス名・変数名等から補完する。
     // Ctrl+N は INSERT モードで Emacs 式「カーソル下移動」に割り当て済み（keymap-conflict-resolution
     // スキル参照）のため、単語補完のトリガーは Alt+/ を使う。
     private dev.javatexteditor.analysis.WordIndex wordIndex = null;
-    private boolean completionIsWordMode = false; // true の間は recheckCompletion() が wordIndex を使う
     // Cバッファの入力補完（Ctrl+Space/Alt+/）向け: #include しているヘッダの識別子キャッシュ。
     // #include 行の構成（cHeaderWordsCacheKey）が変わらない限り再走査しない
     // （includedHeaderWords() はディスク走査を伴うため、通常のタイピングのたびに毎回呼ぶと重い）。
     private String cHeaderWordsCacheKey = null;
     private java.util.Set<String> cHeaderWordsCache = java.util.Set.of();
     // バッファ履歴（Ctrl+U で前へ・Ctrl+P で次へ）
-    private record BufferSnapshot(String text, String filePath, int row, int col) {}
-    private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
-    private int historyIdx = -1; // -1 = 未初期化（最初の pushBuffer で初期化）
+    private final BufferHistory history = new BufferHistory();
     // Shift+K で定義ジャンプする直前の位置（Shift+J で一つ前に戻るため）
     private BufferSnapshot lastJumpOrigin = null;
 
@@ -408,8 +380,7 @@ public class ModalEditor {
     }
 
     private void initHistory() {
-        bufferHistory.add(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
-        historyIdx = 0;
+        history.initializeWith(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
         lastNotifiedBufferVersion = buffer.getVersion();
     }
 
@@ -542,9 +513,9 @@ public class ModalEditor {
         // vim-macro-recording: 記録中は生キーをそのまま記録する。
         // 記録終了キー（NORMALモードでのq）自体と、マクロ再生中に内部生成されるキー
         // （macroReplayDepth>0）は記録対象から除外する（詳細はSkillのreference参照）。
-        boolean isMacroStopKey = macroRecording && mode == Mode.NORMAL && keyChar == 'q';
-        if (macroRecording && macroReplayDepth == 0 && !isMacroStopKey) {
-            macroRecordBuffer.add(new RecordedKey(keyCode, keyChar, modifiers));
+        boolean isMacroStopKey = macros.isRecording() && mode == Mode.NORMAL && keyChar == 'q';
+        if (!isMacroStopKey) {
+            macros.captureIfRecording(keyCode, keyChar, modifiers);
         }
         boolean ctrlDownForOverride = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
         boolean overrideChordEligible = (mode == Mode.NORMAL || mode == Mode.INSERT);
@@ -591,7 +562,23 @@ public class ModalEditor {
     // NORMALモード処理
     // -------------------------------------------------------------------------
 
-    private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+    /**
+     * 通常のキー処理より先に横取りしなければならないキーを処理する。
+     *
+     * <p>ここに並ぶのはいずれも「いま画面に何が出ているか」で意味が決まるキーである。
+     * 疑似バッファ（jdk-source・{@code *cd候補*}・{@code *e候補*}・{@code *grep*}・
+     * ファイル名検索結果・{@code *compile*}/{@code *run*}）を閉じたり、その行へジャンプしたりする
+     * Enter / q / Esc と、バッファ切り替えの Ctrl+U / Ctrl+P、そしてマクロ記録終了の q。
+     *
+     * <p><b>並び順には意味がある。</b>とくにマクロ記録終了の q は、多打鍵シーケンス
+     * （{@code pendingSequence}）の途中状態に関わらず最優先で効く必要があり、
+     * {@code *compile*}/{@code *run*} の Esc は「保留シーケンスを破棄する」通常の Esc 処理より
+     * 前になければならない。並べ替える場合は vim-macro-recording スキルと
+     * CLAUDE.md の該当節を確認すること。
+     *
+     * @return 横取りして処理したら true（呼び出し側は直ちに return する）
+     */
+    private boolean handleNormalModeInterrupt(int keyCode, char keyChar, int modifiers) {
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
 
         // Ctrl+U: :bprev相当 / Ctrl+P: :bnext相当。
@@ -603,75 +590,321 @@ public class ModalEditor {
         if (ctrlDown && keyCode == KeyEvent.VK_U) {
             if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
                 switchToRelativeBuffer(-1);
-            } else if (historyIdx > 0) {
-                restoreBuffer(historyIdx - 1);
+            } else if (history.hasPrevious()) {
+                restoreBuffer(history.previousIndex());
             } else {
                 statusMessage = "これ以上前のバッファはありません";
             }
-            return;
+            return true;
         }
         if (ctrlDown && keyCode == KeyEvent.VK_P) {
             if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
                 switchToRelativeBuffer(+1);
-            } else if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
-                restoreBuffer(historyIdx + 1);
+            } else if (history.hasNext()) {
+                restoreBuffer(history.nextIndex());
             } else {
                 statusMessage = "これ以上次のバッファはありません";
             }
-            return;
+            return true;
         }
 
         // jdk-source 疑似バッファ: q で元バッファに戻る
         if (inJdkSourceBuffer && keyChar == 'q') {
             closeJdkSourceBuffer();
-            return;
+            return true;
         }
 
         // *cd候補* 疑似バッファ: Enter で選択、q でキャンセルして元バッファへ戻る
         if (cdSelectionActive && keyCode == KeyEvent.VK_ENTER) {
             applySelectedCdCandidate();
-            return;
+            return true;
         }
         if (cdSelectionActive && keyChar == 'q') {
             cancelCdSelection();
-            return;
+            return true;
         }
 
         // *e候補* 疑似バッファ: Enter で選択、q でキャンセルして元バッファへ戻る
         if (edSelectionActive && keyCode == KeyEvent.VK_ENTER) {
             applySelectedEditCandidate();
-            return;
+            return true;
         }
         if (edSelectionActive && keyChar == 'q') {
             cancelEditSelection();
-            return;
+            return true;
         }
 
         // grep 結果バッファ: Enter でその行の結果ファイルへジャンプ
         if (grepResults != null && keyCode == KeyEvent.VK_ENTER) {
             jumpToGrepResult();
-            return;
+            return true;
         }
 
         // ファイル名検索結果バッファ: Enter でそのファイルを開く
         if (fileNameResults != null && keyCode == KeyEvent.VK_ENTER) {
             jumpToFileNameResult();
-            return;
+            return true;
         }
 
         // マクロ記録中の q: 多打鍵シーケンス（pendingSequence）の途中状態に関わらず
         // 最優先で記録を終了する（vim-macro-recording skill の「qの優先順位」参照）。
-        if (macroRecording && keyChar == 'q') {
+        if (macros.isRecording() && keyChar == 'q') {
             stopMacroRecording();
             pendingSequence = "";
-            return;
+            return true;
         }
 
         // *compile* / *run* 疑似バッファ: Esc で表示前の元バッファに戻る
         if (outputBufferActive && keyCode == KeyEvent.VK_ESCAPE) {
             closeOutputBuffer();
-            return;
+            return true;
         }
+        return false;
+    }
+
+    /**
+     * {@code dd}/{@code yy}/{@code gg}/{@code gu}/{@code gU}/{@code g~}/{@code gr}/{@code gv}/
+     * {@code r}/{@code zz}/{@code [g}/{@code [d}/{@code s}系（ペイン操作）/{@code \\f}/{@code \\g}/
+     * {@code \\a}系/{@code SPC}系といった多打鍵シーケンスの2打鍵目以降を処理する。
+     *
+     * <p>入口で保留中のシーケンスを取り出して {@code pendingSequence} を空に戻すため、
+     * どの分岐にも当たらなかった場合は「保留は破棄され、押されたキーは通常のキーとして扱われる」
+     * という Vim と同じ挙動になる（＝false を返して呼び出し側の通常処理へ落とす）。
+     * 3打鍵目を待つ分岐（{@code gu}・{@code \\a}・{@code SPC g} 等）は
+     * {@code pendingSequence} を改めて設定してから true を返す。
+     *
+     * <p><b>判定の並び順には意味がある。</b>{@code seq.equals("gu")} のような3打鍵目の完了判定は、
+     * その下にある2打鍵目の遷移判定より必ず先に置くこと。{@code prev} は {@code seq.charAt(0)} なので
+     * {@code seq} が "g" でも "gu" でも同じ 'g' になり、順序を入れ替えると3打鍵目を
+     * 2打鍵目として誤って再度保留してしまう（{@code \\a} も同じ理由）。
+     *
+     * @return シーケンスが成立して処理したら true
+     */
+    private boolean handlePendingSequence(int keyCode, char keyChar) {
+        if (!pendingSequence.isEmpty()) {
+            String seq = pendingSequence;
+            pendingSequence = "";
+            statusMessage = "";
+            char prev = seq.charAt(0);
+            if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return true; }
+            if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return true; }
+            // q{register}: マクロ記録開始（小文字=新規, 大文字=既存レジスタへ追記）
+            if (prev == 'q') {
+                if (Character.isLetter(keyChar)) {
+                    startMacroRecording(keyChar);
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return true;
+            }
+            // @{register} / @@: マクロ再生
+            if (prev == '@') {
+                if (keyChar == '@') {
+                    replayLastMacro();
+                } else if (Character.isLetter(keyChar)) {
+                    playMacro(Character.toLowerCase(keyChar));
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return true;
+            }
+            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return true; }
+            if (prev == 'g' && keyChar == 'r') { goToReferences(false); return true; }
+            // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
+            if (prev == 'g' && keyChar == 'R') { goToReferences(true); return true; }
+            // gv: 直前の Visual 選択（種別・範囲）を再選択する
+            if (prev == 'g' && keyChar == 'v') { restoreLastVisual(); return true; }
+            // gu/gU/g~: 大文字小文字変換。yy/dd と同じ doubled-letter 方式で行全体に適用する
+            // （operator-pending モーションは②modal-editing-engineでスコープ外のため、3打鍵目は
+            // 常に同じ文字の繰り返しのみを受け付ける）。
+            // 3打鍵目の完了判定（seq.equals("gu") 等）を先に置くこと: prev は seq.charAt(0) であり
+            // seq="g"/"gu" のどちらでも 'g' になるため、下の2打鍵目の遷移判定を先に置くと
+            // 3打鍵目の 'u'/'U'/'~' を「2打鍵目」として誤って再度 pending 状態に戻してしまう。
+            if (seq.equals("gu") && keyChar == 'u') { applyCaseToLines(cursorRow, cursorRow, CaseOp.LOWER); return true; }
+            if (seq.equals("gU") && keyChar == 'U') { applyCaseToLines(cursorRow, cursorRow, CaseOp.UPPER); return true; }
+            if (seq.equals("g~") && keyChar == '~') { applyCaseToLines(cursorRow, cursorRow, CaseOp.TOGGLE); return true; }
+            if (seq.equals("g") && keyChar == 'u') { pendingSequence = "gu"; statusMessage = "gu-"; return true; }
+            if (seq.equals("g") && keyChar == 'U') { pendingSequence = "gU"; statusMessage = "gU-"; return true; }
+            if (seq.equals("g") && keyChar == '~') { pendingSequence = "g~"; statusMessage = "g~-"; return true; }
+            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
+                if (splitHorizontalCallback != null) splitHorizontalCallback.run();
+                return true;
+            }
+            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_S, 's')) {
+                if (splitVerticalCallback != null) splitVerticalCallback.run();
+                return true;
+            }
+            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_H, 'h') || matches(keyCode, keyChar, KeyEvent.VK_K, 'k'))) {
+                if (movePanePrevCallback != null) movePanePrevCallback.run();
+                return true;
+            }
+            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_L, 'l') || matches(keyCode, keyChar, KeyEvent.VK_J, 'j'))) {
+                if (movePaneNextCallback != null) movePaneNextCallback.run();
+                return true;
+            }
+            // r の2打目: キーマップ解決を経由せず、押された文字をそのまま置換文字として使う
+            // （VISUAL BLOCK の r と同じパターン。Esc によるキャンセルは上のESC早期分岐が
+            // pendingSequence を "ESC" で上書きすることで既に処理済みのため、ここでは扱わない）
+            if (prev == 'r') {
+                if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+                    replaceCharAtCursor(keyChar, pendingReplaceCount);
+                }
+                pendingReplaceCount = 1;
+                return true;
+            }
+            // \a+?: \a の3打鍵目（getter/setter生成）。\g（grep検索）とは別プレフィックスにするため、
+            // \gg/\gs/\gd ではなく \ag/\as/\ad にした（SPC g g/s/d と同じ generateGetter 等を再利用）。
+            // seq.equals("\\a") の判定は下の prev == '\\' 判定より先に置く必要がある
+            // （gu/gU/g~ と同じ理由: prev は seq.charAt(0) のため \a の3打鍵目でも '\\' に一致してしまう）。
+            if (seq.equals("\\a")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return true; }
+                // マッチしない場合は通常処理へ
+            }
+            // \f: ファイル名検索, \g: ファイル内容grep, \a: getter/setter生成プレフィックス（2打鍵目）
+            if (prev == '\\') {
+                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { enterFileSearch(FileSearchType.GREP); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_A, 'a')) { pendingSequence = "\\a"; statusMessage = "\\a-"; return true; }
+                // マッチしない場合は通常処理へ
+            }
+            // [g / [d: 診断ジャンプシーケンス
+            if (seq.equals("[")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { jumpToNextDiagnostic(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { jumpToPrevDiagnostic(); return true; }
+                // マッチしない場合は通常処理へ
+            }
+            // zz: カーソル行をviewport中央にスクロール（zt/zbは未実装のためzのみ受け付ける）
+            if (prev == 'z' && matches(keyCode, keyChar, KeyEvent.VK_Z, 'z')) { centerCursorLineInViewport(); return true; }
+            // SPC+g+? シーケンス（SPC+g の2打鍵の後）
+            if (seq.equals(" g")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return true; }
+                // マッチしない場合は通常処理へ
+            } else if (seq.equals(" i")) {
+                // SPC+i+? シーケンス（import 操作）
+                if (matches(keyCode, keyChar, KeyEvent.VK_O, 'o')) { organizeImports(); return true; }
+                // マッチしない場合は通常処理へ
+            } else if (prev == ' ') {
+                // SPC キー: 1打鍵目
+                if (matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) {
+                    pendingSequence = " g";
+                    statusMessage = "SPC-g-";
+                    return true;
+                }
+                if (matches(keyCode, keyChar, KeyEvent.VK_I, 'i')) {
+                    pendingSequence = " i";
+                    statusMessage = "SPC-i-";
+                    return true;
+                }
+                // SPC+f: telescope file picker
+                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterTelescope("files"); return true; }
+                // SPC+/: telescope grep
+                if (keyChar == '/') { enterTelescope("grep"); return true; }
+                // SPC+b: telescope buffers
+                if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); return true; }
+            }
+            // シーケンスが成立しなかった場合は落下してキーを通常処理
+        }
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // NORMAL モードの各アクションの中身
+    // （processNormalKey() の switch を「アクション名 → 動作」の対応表として読めるようにするため、
+    //   2行以上になる処理はここに名前を付けて切り出してある）
+    // -------------------------------------------------------------------------
+
+    /** i: その場から INSERT モードへ入る。 */
+    private void enterInsertMode() {
+        mode = Mode.INSERT;
+        statusMessage = "";
+    }
+
+    /** a: カーソルを1つ右へ寄せてから INSERT モードへ入る（行末は超えない）。 */
+    private void enterInsertAfterCursor() {
+        String[] lines = getLines();
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        cursorCol = Math.min(cursorCol + 1, lineLen);
+        mode = Mode.INSERT;
+        statusMessage = "";
+    }
+
+    /** o: カーソル行の下に空行を作り、その行頭から INSERT モードへ入る。 */
+    private void openLineBelowAndInsert() {
+        String[] lines = getLines();
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        int endOfLine = offsetAt(cursorRow, lineLen);
+        buffer.insert(endOfLine, "\n");
+        cursorRow++;
+        cursorCol = 0;
+        mode = Mode.INSERT;
+        statusMessage = "";
+    }
+
+    /** :: コマンド入力を空にして COMMAND モードへ入る。 */
+    private void enterCommandMode() {
+        commandBuffer.setLength(0);
+        statusMessage = "";
+        mode = Mode.COMMAND;
+    }
+
+    /** /: 検索入力を空にして SEARCH モードへ入る（既定は前方検索）。 */
+    private void enterSearchMode() {
+        searchBuffer.setLength(0);
+        mode = Mode.SEARCH;
+        lastSearchForward = true;
+        statusMessage = "";
+    }
+
+    /** u: 直前の編集を取り消し、カーソルが範囲外に出ていれば引き戻す。 */
+    private void undoEdit() {
+        buffer.undo();
+        clampCursorAfterUndoRedo();
+    }
+
+    /** Ctrl+R: 取り消した編集をやり直し、カーソルが範囲外に出ていれば引き戻す。 */
+    private void redoEdit() {
+        buffer.redo();
+        clampCursorAfterUndoRedo();
+    }
+
+    /** v / V / Ctrl+V: 選択の起点を現在のカーソル位置に置いて、指定の VISUAL 系モードへ入る。 */
+    private void enterVisualMode(Mode visualMode) {
+        anchorRow = cursorRow;
+        if (visualMode != Mode.VISUAL_LINE) {
+            // 行選択は列を持たないため、アンカーの列は更新しない（既存挙動）
+            anchorCol = cursorCol;
+        }
+        mode = visualMode;
+    }
+
+    /** r: 次に押された1文字で置換するため、count を覚えて2打鍵目を待つ。 */
+    private void beginReplaceChar(int count) {
+        pendingReplaceCount = count;
+        beginSequence("r", "r-");
+    }
+
+    /**
+     * 多打鍵シーケンスの1打鍵目を受け付け、2打鍵目を待つ状態にする。
+     *
+     * @param sequence  保留するシーケンス（{@code "g"}・{@code "SPC"} など）
+     * @param indicator ステータス行に出す待機表示（{@code "g-"} など）
+     */
+    private void beginSequence(String sequence, String indicator) {
+        pendingSequence = sequence;
+        statusMessage = indicator;
+    }
+
+    private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+        // 画面に出ているものによって意味が決まる割り込みキーを先に処理する
+        if (handleNormalModeInterrupt(keyCode, keyChar, modifiers)) return;
 
         // Esc: NORMALモードでは既定では何も割り当てられていないが、
         // 連続2回押すと検索ハイライトを強制的にクリアする。
@@ -687,138 +920,8 @@ public class ModalEditor {
             return;
         }
 
-        // 2打鍵シーケンス（yy / dd）の処理
-        if (!pendingSequence.isEmpty()) {
-            String seq = pendingSequence;
-            pendingSequence = "";
-            statusMessage = "";
-            char prev = seq.charAt(0);
-            if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
-            if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
-            // q{register}: マクロ記録開始（小文字=新規, 大文字=既存レジスタへ追記）
-            if (prev == 'q') {
-                if (Character.isLetter(keyChar)) {
-                    startMacroRecording(keyChar);
-                } else {
-                    statusMessage = "無効なレジスタです";
-                }
-                return;
-            }
-            // @{register} / @@: マクロ再生
-            if (prev == '@') {
-                if (keyChar == '@') {
-                    replayLastMacro();
-                } else if (Character.isLetter(keyChar)) {
-                    playMacro(Character.toLowerCase(keyChar));
-                } else {
-                    statusMessage = "無効なレジスタです";
-                }
-                return;
-            }
-            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
-            if (prev == 'g' && keyChar == 'r') { goToReferences(false); return; }
-            // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
-            if (prev == 'g' && keyChar == 'R') { goToReferences(true); return; }
-            // gv: 直前の Visual 選択（種別・範囲）を再選択する
-            if (prev == 'g' && keyChar == 'v') { restoreLastVisual(); return; }
-            // gu/gU/g~: 大文字小文字変換。yy/dd と同じ doubled-letter 方式で行全体に適用する
-            // （operator-pending モーションは②modal-editing-engineでスコープ外のため、3打鍵目は
-            // 常に同じ文字の繰り返しのみを受け付ける）。
-            // 3打鍵目の完了判定（seq.equals("gu") 等）を先に置くこと: prev は seq.charAt(0) であり
-            // seq="g"/"gu" のどちらでも 'g' になるため、下の2打鍵目の遷移判定を先に置くと
-            // 3打鍵目の 'u'/'U'/'~' を「2打鍵目」として誤って再度 pending 状態に戻してしまう。
-            if (seq.equals("gu") && keyChar == 'u') { applyCaseToLines(cursorRow, cursorRow, CaseOp.LOWER); return; }
-            if (seq.equals("gU") && keyChar == 'U') { applyCaseToLines(cursorRow, cursorRow, CaseOp.UPPER); return; }
-            if (seq.equals("g~") && keyChar == '~') { applyCaseToLines(cursorRow, cursorRow, CaseOp.TOGGLE); return; }
-            if (seq.equals("g") && keyChar == 'u') { pendingSequence = "gu"; statusMessage = "gu-"; return; }
-            if (seq.equals("g") && keyChar == 'U') { pendingSequence = "gU"; statusMessage = "gU-"; return; }
-            if (seq.equals("g") && keyChar == '~') { pendingSequence = "g~"; statusMessage = "g~-"; return; }
-            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
-                if (splitHorizontalCallback != null) splitHorizontalCallback.run();
-                return;
-            }
-            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_S, 's')) {
-                if (splitVerticalCallback != null) splitVerticalCallback.run();
-                return;
-            }
-            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_H, 'h') || matches(keyCode, keyChar, KeyEvent.VK_K, 'k'))) {
-                if (movePanePrevCallback != null) movePanePrevCallback.run();
-                return;
-            }
-            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_L, 'l') || matches(keyCode, keyChar, KeyEvent.VK_J, 'j'))) {
-                if (movePaneNextCallback != null) movePaneNextCallback.run();
-                return;
-            }
-            // r の2打目: キーマップ解決を経由せず、押された文字をそのまま置換文字として使う
-            // （VISUAL BLOCK の r と同じパターン。Esc によるキャンセルは上のESC早期分岐が
-            // pendingSequence を "ESC" で上書きすることで既に処理済みのため、ここでは扱わない）
-            if (prev == 'r') {
-                if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-                    replaceCharAtCursor(keyChar, pendingReplaceCount);
-                }
-                pendingReplaceCount = 1;
-                return;
-            }
-            // \a+?: \a の3打鍵目（getter/setter生成）。\g（grep検索）とは別プレフィックスにするため、
-            // \gg/\gs/\gd ではなく \ag/\as/\ad にした（SPC g g/s/d と同じ generateGetter 等を再利用）。
-            // seq.equals("\\a") の判定は下の prev == '\\' 判定より先に置く必要がある
-            // （gu/gU/g~ と同じ理由: prev は seq.charAt(0) のため \a の3打鍵目でも '\\' に一致してしまう）。
-            if (seq.equals("\\a")) {
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
-                // マッチしない場合は通常処理へ
-            }
-            // \f: ファイル名検索, \g: ファイル内容grep, \a: getter/setter生成プレフィックス（2打鍵目）
-            if (prev == '\\') {
-                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { enterFileSearch(FileSearchType.GREP); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_A, 'a')) { pendingSequence = "\\a"; statusMessage = "\\a-"; return; }
-                // マッチしない場合は通常処理へ
-            }
-            // [g / [d: 診断ジャンプシーケンス
-            if (seq.equals("[")) {
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { jumpToNextDiagnostic(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { jumpToPrevDiagnostic(); return; }
-                // マッチしない場合は通常処理へ
-            }
-            // zz: カーソル行をviewport中央にスクロール（zt/zbは未実装のためzのみ受け付ける）
-            if (prev == 'z' && matches(keyCode, keyChar, KeyEvent.VK_Z, 'z')) { centerCursorLineInViewport(); return; }
-            // SPC+g+? シーケンス（SPC+g の2打鍵の後）
-            if (seq.equals(" g")) {
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
-                // マッチしない場合は通常処理へ
-            } else if (seq.equals(" i")) {
-                // SPC+i+? シーケンス（import 操作）
-                if (matches(keyCode, keyChar, KeyEvent.VK_O, 'o')) { organizeImports(); return; }
-                // マッチしない場合は通常処理へ
-            } else if (prev == ' ') {
-                // SPC キー: 1打鍵目
-                if (matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) {
-                    pendingSequence = " g";
-                    statusMessage = "SPC-g-";
-                    return;
-                }
-                if (matches(keyCode, keyChar, KeyEvent.VK_I, 'i')) {
-                    pendingSequence = " i";
-                    statusMessage = "SPC-i-";
-                    return;
-                }
-                // SPC+f: telescope file picker
-                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterTelescope("files"); return; }
-                // SPC+/: telescope grep
-                if (keyChar == '/') { enterTelescope("grep"); return; }
-                // SPC+b: telescope buffers
-                if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); return; }
-            }
-            // シーケンスが成立しなかった場合は落下してキーを通常処理
-        }
+        // dd / yy / gg / gu / \a / SPC などの多打鍵シーケンス。成立しなければ通常のキー処理へ落ちる
+        if (handlePendingSequence(keyCode, keyChar)) return;
 
         // r の count 前置き（例: "3r"）。Visual '>'/'<' の visualCountBuffer と同じ方式で、
         // digit以外のキーが来たら次の行で無条件に破棄される（consumeNormalCount()）。
@@ -839,60 +942,17 @@ public class ModalEditor {
             case "cursor.right" -> moveCursor(0, 1);
             case "cursor.down" -> moveCursor(1, 0);
             case "cursor.up" -> moveCursor(-1, 0);
-            case "enter.insert" -> {
-                mode = Mode.INSERT;
-                statusMessage = "";
-            }
-            case "enter.insert.after" -> {
-                String[] lines = getLines();
-                int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
-                cursorCol = Math.min(cursorCol + 1, lineLen);
-                mode = Mode.INSERT;
-                statusMessage = "";
-            }
-            case "enter.insert.newline" -> {
-                String[] lines = getLines();
-                int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
-                int endOfLine = offsetAt(cursorRow, lineLen);
-                buffer.insert(endOfLine, "\n");
-                cursorRow++;
-                cursorCol = 0;
-                mode = Mode.INSERT;
-                statusMessage = "";
-            }
-            case "enter.command" -> {
-                commandBuffer.setLength(0);
-                statusMessage = "";
-                mode = Mode.COMMAND;
-            }
-            case "undo" -> {
-                buffer.undo();
-                clampCursorAfterUndoRedo();
-            }
-            case "redo" -> {
-                buffer.redo();
-                clampCursorAfterUndoRedo();
-            }
+            case "enter.insert" -> enterInsertMode();
+            case "enter.insert.after" -> enterInsertAfterCursor();
+            case "enter.insert.newline" -> openLineBelowAndInsert();
+            case "enter.command" -> enterCommandMode();
+            case "undo" -> undoEdit();
+            case "redo" -> redoEdit();
             case "case.toggle.char" -> toggleCaseUnderCursor();
-            case "replace.char.pending" -> {
-                pendingReplaceCount = replaceCount;
-                pendingSequence = "r";
-                statusMessage = "r-";
-            }
-            case "enter.visual" -> {
-                anchorRow = cursorRow;
-                anchorCol = cursorCol;
-                mode = Mode.VISUAL;
-            }
-            case "enter.visual.line" -> {
-                anchorRow = cursorRow;
-                mode = Mode.VISUAL_LINE;
-            }
-            case "enter.visual.block" -> {
-                anchorRow = cursorRow;
-                anchorCol = cursorCol;
-                mode = Mode.VISUAL_BLOCK;
-            }
+            case "replace.char.pending" -> beginReplaceChar(replaceCount);
+            case "enter.visual" -> enterVisualMode(Mode.VISUAL);
+            case "enter.visual.line" -> enterVisualMode(Mode.VISUAL_LINE);
+            case "enter.visual.block" -> enterVisualMode(Mode.VISUAL_BLOCK);
             case "delete.char" -> deleteCharAtCursor();
             case "delete.to.eol" -> deleteToEndOfLine();
             case "paste.after" -> pasteAfter();
@@ -900,14 +960,14 @@ public class ModalEditor {
             case "clipboard.paste" -> pasteFromSystemClipboard(true);
             case "yank.pending" -> pendingSequence = "y";
             case "delete.pending" -> pendingSequence = "d";
-            case "macro.record.pending" -> { pendingSequence = "q"; statusMessage = "q-"; }
-            case "macro.play.pending"   -> { pendingSequence = "@"; statusMessage = "@-"; }
-            case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
-            case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
-            case "screen.center.pending" -> { pendingSequence = "z"; statusMessage = "z-"; }
-            case "split.pending"       -> { pendingSequence = "s";  statusMessage = "s-"; }
-            case "leader.pending"      -> { pendingSequence = " "; statusMessage = "SPC-"; }
-            case "filesearch.pending"  -> { pendingSequence = "\\"; statusMessage = "\\-"; }
+            case "macro.record.pending"  -> beginSequence("q", "q-");
+            case "macro.play.pending"    -> beginSequence("@", "@-");
+            case "goto.pending"          -> beginSequence("g", "g-");
+            case "diag.pending"          -> beginSequence("[", "[-");
+            case "screen.center.pending" -> beginSequence("z", "z-");
+            case "split.pending"         -> beginSequence("s", "s-");
+            case "leader.pending"        -> beginSequence(" ", "SPC-");
+            case "filesearch.pending"    -> beginSequence("\\", "\\-");
             case "line.swap.down" -> swapLineDown();
             case "line.swap.up"   -> swapLineUp();
             case "word.forward"  -> moveWordForward();
@@ -921,12 +981,7 @@ public class ModalEditor {
             case "jdk.doc" -> lookupJdkDoc();
             case "jump.back" -> jumpBack();
             case "insert.override" -> insertOverrideStub();
-            case "search.enter" -> {
-                searchBuffer.setLength(0);
-                mode = Mode.SEARCH;
-                lastSearchForward = true;
-                statusMessage = "";
-            }
+            case "search.enter" -> enterSearchMode();
             case "search.next" -> jumpToNextMatch(lastSearchForward);
             case "search.prev" -> jumpToNextMatch(!lastSearchForward);
             case "search.star" -> searchWordAtCursor(true);
@@ -952,8 +1007,40 @@ public class ModalEditor {
     // INSERTモード処理
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // 一覧を上下に動かすキーの判定
+    // （補完ポップアップ・telescope・FILER・import 候補選択で共通。
+    //   j/k を使ってよいかは画面によって違うので、別のメソッドに分けてある）
+    // -------------------------------------------------------------------------
+
+    /** 次の項目へ: Ctrl+N（Emacs式）または ↓。どの一覧画面でも使える。 */
+    private static boolean isSelectNextKey(int keyCode, boolean ctrlDown) {
+        return (ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN;
+    }
+
+    /** 前の項目へ: Ctrl+P（Emacs式）または ↑。どの一覧画面でも使える。 */
+    private static boolean isSelectPrevKey(int keyCode, boolean ctrlDown) {
+        return (ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP;
+    }
+
+    /**
+     * 次の項目へ: Vim 式の {@code j}。
+     *
+     * <p><b>自由入力のない一覧でのみ使ってよい。</b>telescope や FILER の検索モードのように
+     * 打ち込んだ文字で絞り込む画面では、{@code j} は文字入力として扱う必要があるため
+     * 移動キーに割り当ててはならない（"j" を含む名前を検索できなくなる）。
+     */
+    private static boolean isVimNextKey(char keyChar, boolean ctrlDown) {
+        return !ctrlDown && keyChar == 'j';
+    }
+
+    /** 前の項目へ: Vim 式の {@code k}。{@link #isVimNextKey} と同じ制約がある。 */
+    private static boolean isVimPrevKey(char keyChar, boolean ctrlDown) {
+        return !ctrlDown && keyChar == 'k';
+    }
+
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
-        // Ctrl+Space → 補完トリガー（completionActive 状態に関わらず再トリガー）
+        // Ctrl+Space → 補完トリガー（ポップアップが開いていても再トリガー）
         if ((modifiers & KeyEvent.CTRL_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SPACE) {
             triggerCompletion();
             syncCanvas();
@@ -969,36 +1056,24 @@ public class ModalEditor {
         }
 
         // 補完ポップアップが開いているときのナビゲーションキー処理
-        if (completionActive) {
+        if (completion.isActive()) {
             boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
                 && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
-            if (ctrlOnly && keyCode == KeyEvent.VK_N) {
-                completionSelectedIdx = Math.min(completionSelectedIdx + 1,
-                                                 completionItems.size() - 1);
+            // 次候補へ: Ctrl+N（Emacs式）と ↓ は同じ意味
+            if (isSelectNextKey(keyCode, ctrlOnly)) {
+                completion.selectNext();
                 syncCompletionCanvas();
                 syncCanvas();
                 return;
             }
-            if (ctrlOnly && keyCode == KeyEvent.VK_P) {
-                completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
+            // 前候補へ: Ctrl+P（Emacs式）と ↑ は同じ意味
+            if (isSelectPrevKey(keyCode, ctrlOnly)) {
+                completion.selectPrevious();
                 syncCompletionCanvas();
                 syncCanvas();
                 return;
             }
             switch (keyCode) {
-                case KeyEvent.VK_DOWN -> {
-                    completionSelectedIdx = Math.min(completionSelectedIdx + 1,
-                                                     completionItems.size() - 1);
-                    syncCompletionCanvas();
-                    syncCanvas();
-                    return;
-                }
-                case KeyEvent.VK_UP -> {
-                    completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
-                    syncCompletionCanvas();
-                    syncCanvas();
-                    return;
-                }
                 case KeyEvent.VK_TAB, KeyEvent.VK_ENTER -> {
                     applyCompletion();
                     syncCanvas();
@@ -1009,6 +1084,7 @@ public class ModalEditor {
                     syncCanvas();
                     return;
                 }
+                default -> { /* それ以外のキーは通常の INSERT 処理へ落とす */ }
             }
         }
 
@@ -1256,32 +1332,24 @@ public class ModalEditor {
     /** 補完候補リストを有効化して canvas に反映する（4つのトリガ/再クエリ経路の共通末尾処理）。 */
     private void activateCompletion(String prefix,
             java.util.List<dev.javatexteditor.analysis.CompletionItem> items, boolean wordMode) {
-        completionPrefix      = prefix;
-        completionItems       = items;
-        completionSelectedIdx = 0;
-        completionActive      = true;
-        completionIsWordMode  = wordMode;
+        completion.openWith(prefix, items, wordMode);
         syncCompletionCanvas();
     }
 
     /** 補完ポップアップを閉じる。 */
     private void dismissCompletion() {
-        if (!completionActive) return;
-        completionActive = false;
-        completionItems  = java.util.List.of();
-        completionPrefix = "";
-        completionIsWordMode = false;
+        if (!completion.close()) return;
         syncCompletionCanvas();
     }
 
     /**
      * 文字を挿入・削除した後に補完候補を再クエリする。
      * インデックス未完了・候補なし・プレフィックスなしのときはサイレントに閉じる。
-     * completionActive の状態に関わらず常に呼んでよい。
-     * completionIsWordMode に応じて単語補完/シンボル補完のどちらを再クエリするか切り替える。
+     * ポップアップが開いているかどうかに関わらず常に呼んでよい。
+     * ポップアップの wordMode に応じて単語補完/シンボル補完のどちらを再クエリするか切り替える。
      */
     private void recheckCompletion() {
-        if (completionIsWordMode) {
+        if (completion.isWordMode()) {
             recheckWordCompletion();
             return;
         }
@@ -1290,15 +1358,15 @@ public class ModalEditor {
         if (!classReady && !wordReady) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
-            if (completionActive) dismissCompletion();
+            if (completion.isActive()) dismissCompletion();
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryMergedCompletion(prefix);
         if (items.isEmpty()) {
-            if (completionActive) dismissCompletion();
+            if (completion.isActive()) dismissCompletion();
             return;
         }
-        // このメソッドは冒頭の completionIsWordMode ガードにより wordMode=false の文脈でしか到達しない
+        // このメソッドは冒頭の isWordMode() ガードにより wordMode=false の文脈でしか到達しない
         activateCompletion(prefix, items, false);
     }
 
@@ -1317,15 +1385,14 @@ public class ModalEditor {
             dismissCompletion();
             return;
         }
-        // このメソッドに到達する時点で completionIsWordMode == true（recheckCompletion 経由）
+        // このメソッドに到達する時点で wordMode == true（recheckCompletion 経由）
         activateCompletion(prefix, items, true);
     }
 
     /** 現在選択中の補完候補をバッファに適用する。 */
     private void applyCompletion() {
-        if (!completionActive || completionItems.isEmpty()) return;
-        dev.javatexteditor.analysis.CompletionItem item =
-            completionItems.get(completionSelectedIdx);
+        dev.javatexteditor.analysis.CompletionItem item = completion.selectedItem();
+        if (item == null) return;
         String label = item.label();
 
         // カーソル前の識別子プレフィックスを削除してラベルを挿入
@@ -1366,17 +1433,16 @@ public class ModalEditor {
     /** 補完状態を EditorCanvas に反映する。 */
     private void syncCompletionCanvas() {
         if (canvas == null) return;
-        if (!completionActive || completionItems.isEmpty()) {
-            canvas.setCompletionState(false,
-                java.util.List.of(), java.util.List.of(), 0, 0, 0);
+        if (completion.hasNoVisibleItems()) {
+            canvas.setCompletionView(CompletionView.hidden());
             return;
         }
-        java.util.List<String> labels = completionItems.stream()
+        java.util.List<String> labels = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::label).toList();
-        java.util.List<String> kinds = completionItems.stream()
+        java.util.List<String> kinds = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::kind).toList();
-        canvas.setCompletionState(true, labels, kinds,
-            completionSelectedIdx, cursorRow, cursorCol);
+        canvas.setCompletionView(new CompletionView(
+            true, labels, kinds, completion.selectedIdx(), cursorRow, cursorCol));
     }
 
     private static final java.util.Set<Character> CLOSING_PAIRS =
@@ -1592,7 +1658,7 @@ public class ModalEditor {
             return; // cd 以外のコマンドでは補完しない
         }
 
-        String expanded = expandHome(pathStr);
+        String expanded = UserPathResolver.expandHome(pathStr);
         int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
         String parentPart = sepIdx >= 0 ? expanded.substring(0, sepIdx + 1) : "";
         String prefix = sepIdx >= 0 ? expanded.substring(sepIdx + 1) : expanded;
@@ -1655,10 +1721,7 @@ public class ModalEditor {
      * 現在編集中のバッファは cdSaved* に退避し、Enter で選択 / q でキャンセルすると復元する。
      */
     private void openCdCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
-        cdSavedBuffer = buffer;
-        cdSavedFilePath = currentFilePath;
-        cdSavedCursorRow = cursorRow;
-        cdSavedCursorCol = cursorCol;
+        saveToStash(cdStash);
         cdSavedCommandText = originalCmd;
         cdCandidates = candidates;
         cdCandidateParentPart = parentPart;
@@ -1706,14 +1769,9 @@ public class ModalEditor {
     }
 
     private void restoreCdSavedBuffer() {
-        buffer = cdSavedBuffer != null ? cdSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = cdSavedFilePath;
-        cursorRow = cdSavedCursorRow;
-        cursorCol = cdSavedCursorCol;
+        restoreFromStash(cdStash);
         resetSearchAndResultState();
         cdSelectionActive = false;
-        cdSavedBuffer = null;
-        cdSavedFilePath = null;
         cdSavedCommandText = "";
     }
 
@@ -1735,7 +1793,7 @@ public class ModalEditor {
             return;
         }
 
-        String expanded = expandHome(pathStr);
+        String expanded = UserPathResolver.expandHome(pathStr);
         int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
         String parentPart = sepIdx >= 0 ? expanded.substring(0, sepIdx + 1) : "";
         String prefix = sepIdx >= 0 ? expanded.substring(sepIdx + 1) : expanded;
@@ -1784,10 +1842,7 @@ public class ModalEditor {
     }
 
     private void openEditCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
-        edSavedBuffer = buffer;
-        edSavedFilePath = currentFilePath;
-        edSavedCursorRow = cursorRow;
-        edSavedCursorCol = cursorCol;
+        saveToStash(edStash);
         edSavedCommandText = originalCmd;
         edCandidates = candidates;
         edCandidateParentPart = parentPart;
@@ -1844,14 +1899,9 @@ public class ModalEditor {
     }
 
     private void restoreEditSavedBuffer() {
-        buffer = edSavedBuffer != null ? edSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = edSavedFilePath;
-        cursorRow = edSavedCursorRow;
-        cursorCol = edSavedCursorCol;
+        restoreFromStash(edStash);
         resetSearchAndResultState();
         edSelectionActive = false;
-        edSavedBuffer = null;
-        edSavedFilePath = null;
         edSavedCommandText = "";
     }
 
@@ -1859,26 +1909,54 @@ public class ModalEditor {
     // SEARCHモード処理
     // -------------------------------------------------------------------------
 
-    private void processSearchKey(int keyCode, char keyChar) {
+    /**
+     * 1行のテキストを打ち込ませる疑似モード共通のキー処理。
+     * {@code /}（検索）・{@code \\f}/{@code \\g}（ファイル検索）・F10/F11/F12 の追加クラスパス入力が
+     * これに当たる。いずれも振る舞いは4つしかない。
+     *
+     * <ul>
+     *   <li>Esc — 取り消す</li>
+     *   <li>Backspace — 末尾を1文字消す（空なら何もしない）</li>
+     *   <li>Enter — 打ち込んだ内容を確定する</li>
+     *   <li>印字可能文字 — 書き足す</li>
+     * </ul>
+     *
+     * 画面ごとに違うのは「どの入力欄か」「取り消したら何をするか」「確定したら何をするか」の3点だけなので、
+     * それだけを引数で受け取る。
+     *
+     * @param input    打ち込み先の入力欄
+     * @param onCancel Esc が押されたときの処理
+     * @param onCommit Enter が押されたときの処理。入力欄の現在の内容が渡る（欄は消さない）
+     */
+    private void handleTextPromptKey(int keyCode, char keyChar, StringBuilder input,
+                                     Runnable onCancel, Consumer<String> onCommit) {
         if (keyCode == KeyEvent.VK_ESCAPE) {
-            searchBuffer.setLength(0);
-            mode = Mode.NORMAL;
-            clearSearchHighlights();
+            onCancel.run();
         } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (searchBuffer.length() > 0) {
-                searchBuffer.deleteCharAt(searchBuffer.length() - 1);
+            if (input.length() > 0) {
+                input.deleteCharAt(input.length() - 1);
             }
         } else if (keyCode == KeyEvent.VK_ENTER) {
-            String pattern = searchBuffer.toString();
-            mode = Mode.NORMAL;
-            if (!pattern.isEmpty()) {
+            onCommit.accept(input.toString());
+        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            input.append(keyChar);
+        }
+    }
+
+    private void processSearchKey(int keyCode, char keyChar) {
+        handleTextPromptKey(keyCode, keyChar, searchBuffer,
+            () -> {
+                searchBuffer.setLength(0);
+                mode = Mode.NORMAL;
+                clearSearchHighlights();
+            },
+            pattern -> {
+                mode = Mode.NORMAL;
+                if (pattern.isEmpty()) return;
                 lastSearchPattern = pattern;
                 lastSearchForward = true;
                 executeSearch(pattern, true);
-            }
-        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            searchBuffer.append(keyChar);
-        }
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -1893,30 +1971,28 @@ public class ModalEditor {
     }
 
     private void processFileSearchKey(int keyCode, char keyChar) {
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            fileSearchBuffer.setLength(0);
-            mode = Mode.NORMAL;
-        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (fileSearchBuffer.length() > 0) {
-                fileSearchBuffer.deleteCharAt(fileSearchBuffer.length() - 1);
-            }
-        } else if (keyCode == KeyEvent.VK_ENTER) {
-            String input = fileSearchBuffer.toString();
-            mode = Mode.NORMAL;
-            if (!input.isEmpty()) {
-                // 先頭が '!' なら bang 指定（\f! / \g!）: デフォルトスキップ対象を無視して全ファイル検索
-                boolean fullScan = input.startsWith("!");
-                String pattern = fullScan ? input.substring(1) : input;
-                if (!pattern.isEmpty()) {
-                    if (fileSearchType == FileSearchType.NAME) {
-                        executeFileNameSearch(pattern, fullScan);
-                    } else {
-                        executeGrep(pattern, getProjectRoot(), fullScan);
-                    }
-                }
-            }
-        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            fileSearchBuffer.append(keyChar);
+        handleTextPromptKey(keyCode, keyChar, fileSearchBuffer,
+            () -> {
+                fileSearchBuffer.setLength(0);
+                mode = Mode.NORMAL;
+            },
+            this::runFileSearch);
+    }
+
+    /**
+     * \f / \g で打ち込まれたパターンを実行する。
+     * 先頭が '!' なら bang 指定（\f! / \g!）で、デフォルトのスキップ対象も含めた全ファイル検索になる。
+     */
+    private void runFileSearch(String input) {
+        mode = Mode.NORMAL;
+        if (input.isEmpty()) return;
+        boolean fullScan = input.startsWith("!");
+        String pattern = fullScan ? input.substring(1) : input;
+        if (pattern.isEmpty()) return;
+        if (fileSearchType == FileSearchType.NAME) {
+            executeFileNameSearch(pattern, fullScan);
+        } else {
+            executeGrep(pattern, getProjectRoot(), fullScan);
         }
     }
 
@@ -1943,17 +2019,10 @@ public class ModalEditor {
     }
 
     private void processClasspathInputKey(int keyCode, char keyChar) {
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            finishClasspathInput(List.of());
-        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (classpathInputBuffer.length() > 0) {
-                classpathInputBuffer.deleteCharAt(classpathInputBuffer.length() - 1);
-            }
-        } else if (keyCode == KeyEvent.VK_ENTER) {
-            finishClasspathInput(parseClasspathInput(classpathInputBuffer.toString()));
-        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            classpathInputBuffer.append(keyChar);
-        }
+        handleTextPromptKey(keyCode, keyChar, classpathInputBuffer,
+            // Esc は「クラスパス追加をスキップする」の意味。コンパイル/実行そのものは中断しない
+            () -> finishClasspathInput(List.of()),
+            input -> finishClasspathInput(parseClasspathInput(input)));
     }
 
     private void finishClasspathInput(List<Path> extraClasspath) {
@@ -1986,12 +2055,7 @@ public class ModalEditor {
      * 追加クラスパス入力（F10/F11/F12）専用。resolveRelativeToProjectRoot() の getBuildRoot() 版。
      */
     private String resolveRelativeToBuildRoot(String pathSpec) {
-        String expanded = expandHome(pathSpec);
-        Path target = Path.of(expanded);
-        if (target.isAbsolute()) {
-            return target.toString();
-        }
-        return getBuildRoot().resolve(expanded).toAbsolutePath().toString();
+        return UserPathResolver.resolveAgainst(getBuildRoot(), pathSpec);
     }
 
     // -------------------------------------------------------------------------
@@ -2029,10 +2093,7 @@ public class ModalEditor {
      * *picker* 疑似バッファに差し替える。キャンセル時（Esc）は退避した状態にそのまま戻す。
      */
     private void beginTelescopeSession() {
-        telescopeSavedBuffer = buffer;
-        telescopeSavedFilePath = currentFilePath;
-        telescopeSavedCursorRow = cursorRow;
-        telescopeSavedCursorCol = cursorCol;
+        saveToStash(telescopeStash);
         telescopeSavedGrepResults = grepResults;
         telescopeSavedGrepBaseDir = grepBaseDir;
         telescopeSavedFileNameResults = fileNameResults;
@@ -2088,12 +2149,8 @@ public class ModalEditor {
         // Ctrl+N / Ctrl+P、および矢印キー(↓↑)でリスト移動
         // クエリに自由入力があるため j/k は文字入力として扱う必要があり、移動キーには割り当てない。
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
-        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
-            moveTelescope(1); return;
-        }
-        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
-            moveTelescope(-1); return;
-        }
+        if (isSelectNextKey(keyCode, ctrlDown)) { moveTelescope(1);  return; }
+        if (isSelectPrevKey(keyCode, ctrlDown)) { moveTelescope(-1); return; }
         // BufferPicker 中に Ctrl+D: 選択バッファをレジストリから削除（クローズ）。
         // 'd'/'D' はいずれも自由入力（バッファ名フィルタ）に使うため文字キーには割り当てず、
         // Ctrl+N/Ctrl+P と同じ修飾キー方式にした（大文字 D だと "D" を含むファイル名を検索できなく
@@ -2269,15 +2326,10 @@ public class ModalEditor {
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
-        buffer = telescopeSavedBuffer != null ? telescopeSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = telescopeSavedFilePath;
-        cursorRow = telescopeSavedCursorRow;
-        cursorCol = telescopeSavedCursorCol;
+        restoreFromStash(telescopeStash);
         grepResults = telescopeSavedGrepResults;
         grepBaseDir = telescopeSavedGrepBaseDir;
         fileNameResults = telescopeSavedFileNameResults;
-        telescopeSavedBuffer = null;
-        telescopeSavedFilePath = null;
         telescopeSavedGrepResults = null;
         telescopeSavedGrepBaseDir = null;
         telescopeSavedFileNameResults = null;
@@ -2382,14 +2434,7 @@ public class ModalEditor {
             return;
         }
 
-        String text = buffer.getText();
-        Matcher m = p.matcher(text);
-        List<int[]> matches = new ArrayList<>();
-        while (m.find()) {
-            int len = m.end() - m.start();
-            matches.add(new int[]{m.start(), len > 0 ? len : 1});
-        }
-
+        List<int[]> matches = BufferTextSearch.findAll(buffer.getText(), p);
         if (matches.isEmpty()) {
             statusMessage = "Pattern not found: " + pattern;
             searchMatches = List.of();
@@ -2399,31 +2444,8 @@ public class ModalEditor {
         }
 
         searchMatches = matches;
-        int cursorOffset = offsetOfCursor();
-
-        if (forward) {
-            currentMatchIdx = -1;
-            for (int i = 0; i < matches.size(); i++) {
-                if (matches.get(i)[0] > cursorOffset) {
-                    currentMatchIdx = i;
-                    break;
-                }
-            }
-            if (currentMatchIdx < 0) currentMatchIdx = 0; // wrap around
-        } else {
-            currentMatchIdx = -1;
-            for (int i = matches.size() - 1; i >= 0; i--) {
-                if (matches.get(i)[0] < cursorOffset) {
-                    currentMatchIdx = i;
-                    break;
-                }
-            }
-            if (currentMatchIdx < 0) currentMatchIdx = matches.size() - 1; // wrap around
-        }
-
-        moveCursorToOffset(searchMatches.get(currentMatchIdx)[0]);
-        statusMessage = "/" + pattern + "  [" + (currentMatchIdx + 1) + "/" + matches.size() + "]";
-        updateSearchHighlights();
+        currentMatchIdx = BufferTextSearch.selectNearest(matches, offsetOfCursor(), forward);
+        jumpToCurrentMatch(pattern);
     }
 
     /** n/N: 最後の検索方向（または逆方向）で次マッチへジャンプ。 */
@@ -2436,13 +2458,14 @@ public class ModalEditor {
             statusMessage = "E: no previous search pattern";
             return;
         }
-        if (forward) {
-            currentMatchIdx = (currentMatchIdx + 1) % searchMatches.size();
-        } else {
-            currentMatchIdx = (currentMatchIdx - 1 + searchMatches.size()) % searchMatches.size();
-        }
+        currentMatchIdx = BufferTextSearch.step(searchMatches, currentMatchIdx, forward);
+        jumpToCurrentMatch(lastSearchPattern);
+    }
+
+    /** 選択中の一致へカーソルを移動し、「/パターン [3/7]」形式の進捗をステータス行に出す。 */
+    private void jumpToCurrentMatch(String pattern) {
         moveCursorToOffset(searchMatches.get(currentMatchIdx)[0]);
-        statusMessage = "/" + lastSearchPattern + "  [" + (currentMatchIdx + 1) + "/" + searchMatches.size() + "]";
+        statusMessage = "/" + pattern + "  [" + (currentMatchIdx + 1) + "/" + searchMatches.size() + "]";
         updateSearchHighlights();
     }
 
@@ -2509,100 +2532,122 @@ public class ModalEditor {
     }
 
     private void executeCommand(String cmd) {
-        if (handleSubstituteCommand(cmd)) {
-            // 置換コマンドとして処理済み
-        } else if (cmd.equals("wa") || cmd.equals("wall")) {
-            saveAll();
-        } else if (cmd.equals("w")) {
-            saveToFile(currentFilePath);
-        } else if (cmd.startsWith("w ")) {
-            String path = cmd.substring(2).trim();
-            saveToFile(path); // 成功時、絶対パスへの currentFilePath 更新は saveToFile 内で行う
-        } else if (cmd.equals("e") || cmd.equals("enew")) {
-            newBuffer();
-        } else if (cmd.startsWith("e ")) {
-            String path = cmd.substring(2).trim();
-            loadFromFile(resolveRelativeToProjectRoot(path));
-        } else if (cmd.equals("b")) {
-            toggleBinaryMode();
-        } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
-            openTutorial();
-        } else if (cmd.equals("nimo")) {
-            showClassFileMnemonic();
-        } else if (cmd.equals("view")) {
-            enterMarkdownView();
-        } else if (cmd.equals("mark")) {
-            exitMarkdownView();
-        } else if (cmd.equals("main") || cmd.startsWith("main ")) {
-            executeMain(cmd.equals("main") ? "" : cmd.substring(5).trim());
-        } else if (cmd.startsWith("grep! ")) {
-            // bang付き: node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
-            String pattern = cmd.substring(6).trim();
-            executeGrep(pattern, getProjectRoot(), true);
-        } else if (cmd.startsWith("grep ")) {
-            String pattern = cmd.substring(5).trim();
-            executeGrep(pattern);
-        } else if (cmd.startsWith("rename ")) {
-            String args = cmd.substring(7).trim();
-            executeRename(args);
-        } else if (cmd.equals("oi") || cmd.equals("organize-imports")) {
-            organizeImports();
-        } else if (cmd.startsWith("remove-import ")) {
-            String fqn = cmd.substring("remove-import ".length()).trim();
-            executeRemoveImport(fqn);
-        } else if (cmd.equals("wrap")) {
-            wrapEnabled = true;
-        } else if (cmd.equals("nowrap")) {
-            wrapEnabled = false;
-        } else if (cmd.startsWith("font ")) {
-            applyFontCommand(cmd.substring(5).trim());
-        } else if (cmd.startsWith("fs ")) {
-            applyFontSizeCommand(cmd.substring(3).trim());
-        } else if (cmd.startsWith("color ")) {
-            applyColorCommand(cmd.substring(6).trim());
-        } else if (cmd.equals("pwd")) {
-            statusMessage = getProjectRoot().toString();
-        } else if (cmd.equals("pr")) {
-            // :pr — その時点の :cd 現在ディレクトリを F10/F11/F12 用プロジェクトルートとして記憶する。
-            // 別ディレクトリで再度 :pr を打てば上書きされる。セッション終了時に破棄（永続化しない）。
-            projectRootOverride = getProjectRoot();
-            statusMessage = "project root: " + projectRootOverride;
-        } else if (cmd.equals("pr?")) {
-            // :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。
-            statusMessage = (projectRootOverride != null)
-                ? "project root: " + projectRootOverride
-                : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
-        } else if (cmd.startsWith("cd ")) {
-            changeDirectory(cmd.substring(3).trim());
-        } else if (cmd.equals("bnext") || cmd.equals("bn")) {
-            switchToRelativeBuffer(+1);
-        } else if (cmd.equals("bprev") || cmd.equals("bp")) {
-            switchToRelativeBuffer(-1);
-        } else if (cmd.equals("sp") || cmd.equals("split")) {
-            if (splitVerticalCallback != null) splitVerticalCallback.run();
-        } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
-            if (splitHorizontalCallback != null) splitHorizontalCallback.run();
-        } else if (cmd.equals("qa") || cmd.equals("qall")) {
-            quitAll(false);
-        } else if (cmd.equals("qa!") || cmd.equals("qall!")) {
-            quitAll(true);
-        } else if (cmd.equals("q")) {
-            if (closeBlockedCallback != null) {
-                closeBlockedCallback.run();
-            } else {
-                exitCallback.run();
-            }
-        } else if (cmd.equals("wq")) {
-            if (closeBlockedCallback != null) {
-                closeBlockedCallback.run();
-            } else if (saveToFile(currentFilePath)) {
-                exitCallback.run();
-            }
-        } else if (cmd.matches("\\d+")) {
+        // :s 置換だけは他と形が違う（範囲指定・区切り文字が可変）ため、表ではなく専用の述語で最初に判定する。
+        if (handleSubstituteCommand(cmd)) return;
+        if (commands.dispatch(cmd)) return;
+        // どのコマンド名にも一致しなかった場合の最後の受け皿: :42 のような行番号ジャンプ
+        if (cmd.matches("\\d+")) {
             jumpToLineNumber(Integer.parseInt(cmd));
-        } else {
-            statusMessage = "E: unknown command '" + cmd + "'";
+            return;
         }
+        statusMessage = "E: unknown command '" + cmd + "'";
+    }
+
+    /**
+     * COMMAND モードのコマンド表を組み立てる。
+     *
+     * <p>ここは「どんなコマンドが存在するか」の一覧であり、振り分けの仕組み自体は
+     * {@link CommandRegistry} が持つ。コマンドを追加するときは分岐を書き足すのではなく、
+     * この表に1行足す。
+     *
+     * <p>完全一致（空白を含まない名前）と前置一致（空白で終わる接頭辞）は決して同じ文字列に
+     * マッチしないため、両者の並び順は結果に影響しない。
+     * 一方 <b>前置一致どうしは登録順が評価順になる</b>点に注意すること。
+     */
+    private CommandRegistry buildCommandRegistry() {
+        CommandRegistry r = new CommandRegistry();
+
+        // --- 保存・終了 ---
+        r.on(this::saveAll,                          "wa", "wall");
+        r.on(() -> saveToFile(currentFilePath),      "w");
+        r.on(() -> quitAll(false),                   "qa", "qall");
+        r.on(() -> quitAll(true),                    "qa!", "qall!");
+        r.on(this::closeCurrentPane,                 "q");
+        r.on(this::saveAndCloseCurrentPane,          "wq");
+        r.onPrefix("w ", path -> saveToFile(path)); // 成功時の currentFilePath 更新は saveToFile 内
+
+        // --- バッファを開く・切り替える ---
+        r.on(this::newBuffer,                        "e", "enew");
+        r.on(this::toggleBinaryMode,                 "b");
+        r.on(this::openTutorial,                     "tutor", "Tutor", "tutorial");
+        r.on(() -> switchToRelativeBuffer(+1),       "bnext", "bn");
+        r.on(() -> switchToRelativeBuffer(-1),       "bprev", "bp");
+        r.onPrefix("e ", path -> loadFromFile(resolveRelativeToProjectRoot(path)));
+
+        // --- 表示の切り替え ---
+        r.on(this::showClassFileMnemonic,            "nimo");
+        r.on(this::enterMarkdownView,                "view");
+        r.on(this::exitMarkdownView,                 "mark");
+        r.on(() -> wrapEnabled = true,               "wrap");
+        r.on(() -> wrapEnabled = false,              "nowrap");
+        r.onPrefix("font ",  this::applyFontCommand);
+        r.onPrefix("fs ",    this::applyFontSizeCommand);
+        r.onPrefix("color ", this::applyColorCommand);
+
+        // --- ペイン分割 ---
+        r.on(() -> runIfPresent(splitVerticalCallback),   "sp", "split");
+        r.on(() -> runIfPresent(splitHorizontalCallback), "vs", "vsplit", "vsp");
+
+        // --- 検索・リファクタリング ---
+        // ":grep! " は ":grep " より先に登録する必要がある（前置一致は登録順に評価されるため）
+        r.onPrefix("grep! ", pattern -> executeGrep(pattern, getProjectRoot(), true));
+        r.onPrefix("grep ",   this::executeGrep);
+        r.onPrefix("rename ", this::executeRename);
+
+        // --- import 整理 ---
+        r.on(this::organizeImports,                  "oi", "organize-imports");
+        r.onPrefix("remove-import ", this::executeRemoveImport);
+
+        // --- 作業ディレクトリ・プロジェクトルート ---
+        r.on(() -> statusMessage = getProjectRoot().toString(), "pwd");
+        r.on(this::pinProjectRoot,                   "pr");
+        r.on(this::reportProjectRoot,                "pr?");
+        r.onPrefix("cd ", this::changeDirectory);
+
+        // --- JDK/javac の起動点へジャンプ ---
+        r.on(() -> executeMain(""),                  "main");
+        r.onPrefix("main ", this::executeMain);
+
+        return r;
+    }
+
+    /** コールバックが配線されていれば実行する（分割系は GUI 側から注入される）。 */
+    private void runIfPresent(Runnable callback) {
+        if (callback != null) callback.run();
+    }
+
+    /** :q — 現在のペインを閉じる。閉じられない事情がある場合は closeBlockedCallback に委ねる。 */
+    private void closeCurrentPane() {
+        if (closeBlockedCallback != null) {
+            closeBlockedCallback.run();
+        } else {
+            exitCallback.run();
+        }
+    }
+
+    /** :wq — 保存に成功したときだけ現在のペインを閉じる。 */
+    private void saveAndCloseCurrentPane() {
+        if (closeBlockedCallback != null) {
+            closeBlockedCallback.run();
+        } else if (saveToFile(currentFilePath)) {
+            exitCallback.run();
+        }
+    }
+
+    /**
+     * :pr — その時点の :cd 現在ディレクトリを F10/F11/F12 用プロジェクトルートとして記憶する。
+     * 別ディレクトリで再度 :pr を打てば上書きされる。セッション終了時に破棄（永続化しない）。
+     */
+    private void pinProjectRoot() {
+        projectRootOverride = getProjectRoot();
+        statusMessage = "project root: " + projectRootOverride;
+    }
+
+    /** :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。 */
+    private void reportProjectRoot() {
+        statusMessage = (projectRootOverride != null)
+            ? "project root: " + projectRootOverride
+            : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
     }
 
     /**
@@ -2974,12 +3019,7 @@ public class ModalEditor {
      * ファイルを開く経路がいずれも絶対パスを currentFilePath に格納するのと形式を揃えるため）。
      */
     private String resolveRelativeToProjectRoot(String pathSpec) {
-        String expanded = expandHome(pathSpec);
-        Path target = Path.of(expanded);
-        if (target.isAbsolute()) {
-            return target.toString();
-        }
-        return getProjectRoot().resolve(expanded).toAbsolutePath().toString();
+        return UserPathResolver.resolveAgainst(getProjectRoot(), pathSpec);
     }
 
     /**
@@ -3363,34 +3403,40 @@ public class ModalEditor {
         }
     }
 
-    /** 現在のバッファ状態を履歴に追加し historyIdx を末尾へ進める。 */
+    /** いま編集中の状態を退避置き場へ預ける（疑似バッファを開く直前に呼ぶ）。 */
+    private void saveToStash(PseudoBufferStash stash) {
+        stash.save(buffer, currentFilePath, cursorRow, cursorCol);
+    }
+
+    /** 退避置き場から元の編集状態へ戻す（疑似バッファを閉じるときに呼ぶ）。 */
+    private void restoreFromStash(PseudoBufferStash stash) {
+        buffer = stash.buffer();
+        currentFilePath = stash.filePath();
+        cursorRow = stash.cursorRow();
+        cursorCol = stash.cursorCol();
+        stash.clear();
+    }
+
+    /** 現在のバッファ状態を履歴に追加する。 */
     private void pushBuffer() {
-        BufferSnapshot snap = new BufferSnapshot(
-            buffer.getText(), currentFilePath, cursorRow, cursorCol);
-        // 現在位置より後ろの履歴を切り捨て
-        if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
-            bufferHistory.subList(historyIdx + 1, bufferHistory.size()).clear();
-        }
-        bufferHistory.add(snap);
-        historyIdx = bufferHistory.size() - 1;
+        history.push(currentBufferSnapshot());
     }
 
     /** 履歴インデックス idx のバッファを復元する。 */
     private void restoreBuffer(int idx) {
-        // 現在のバッファ状態を現在の履歴スロットに上書き保存
-        if (historyIdx >= 0 && historyIdx < bufferHistory.size()) {
-            bufferHistory.set(historyIdx, new BufferSnapshot(
-                buffer.getText(), currentFilePath, cursorRow, cursorCol));
-        }
-        historyIdx = idx;
-        BufferSnapshot snap = bufferHistory.get(idx);
+        BufferSnapshot snap = history.moveTo(idx, currentBufferSnapshot());
         buffer = new UndoablePieceTable(snap.text());
         currentFilePath = snap.filePath();
         cursorRow = snap.row();
         cursorCol = snap.col();
         resetSearchAndResultState();
         String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[新規バッファ]";
-        statusMessage = label + " (" + (idx + 1) + "/" + bufferHistory.size() + ")";
+        statusMessage = label + " (" + (idx + 1) + "/" + history.size() + ")";
+    }
+
+    /** いま編集中の内容・ファイル・カーソル位置を1つの値として写し取る。 */
+    private BufferSnapshot currentBufferSnapshot() {
+        return new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
     }
 
     private void executeGrep(String pattern) {
@@ -4245,54 +4291,30 @@ public class ModalEditor {
 
     /** register: 小文字なら新規記録、大文字なら既存内容への追記。 */
     private void startMacroRecording(char register) {
-        char reg = Character.toLowerCase(register);
-        macroRecordBuffer.clear();
-        if (Character.isUpperCase(register)) {
-            List<RecordedKey> existing = macroRegisters.get(reg);
-            if (existing != null) macroRecordBuffer.addAll(existing);
-        }
-        macroRecording = true;
-        macroRecordingRegister = reg;
-        statusMessage = "recording @" + reg;
+        macros.startRecording(register);
+        statusMessage = "recording @" + macros.recordingRegister();
     }
 
     private void stopMacroRecording() {
-        macroRegisters.put(macroRecordingRegister, List.copyOf(macroRecordBuffer));
-        macroRecording = false;
+        macros.stopRecording();
         statusMessage = "";
     }
 
     private void playMacro(char register) {
-        List<RecordedKey> keys = macroRegisters.get(register);
-        if (keys == null || keys.isEmpty()) {
-            statusMessage = "レジスタ " + register + " は空です";
-            return;
-        }
-        lastPlayedMacroRegister = register;
-        executeMacroKeys(keys);
+        reportMacroOutcome(macros.play(register), register);
     }
 
     private void replayLastMacro() {
-        if (lastPlayedMacroRegister == '\0') {
-            statusMessage = "直前に実行したマクロがありません";
-            return;
-        }
-        playMacro(lastPlayedMacroRegister);
+        reportMacroOutcome(macros.replayLast(), macros.lastPlayedRegister());
     }
 
-    /** 記録済みキー列を processKey() へ再投入して再生する。無限再帰は深さ上限で打ち切る。 */
-    private void executeMacroKeys(List<RecordedKey> keys) {
-        if (macroReplayDepth >= MACRO_MAX_REPLAY_DEPTH) {
-            statusMessage = "マクロの再帰が深すぎます（中断しました）";
-            return;
-        }
-        macroReplayDepth++;
-        try {
-            for (RecordedKey k : keys) {
-                processKey(k.keyCode(), k.keyChar(), k.modifiers());
-            }
-        } finally {
-            macroReplayDepth--;
+    /** マクロ再生の結果をステータス行の文言へ翻訳する。 */
+    private void reportMacroOutcome(MacroRecorder.PlayOutcome outcome, char register) {
+        switch (outcome) {
+            case PLAYED -> { /* 再生されたキー自身がステータス行を更新するため、ここでは何もしない */ }
+            case EMPTY_REGISTER -> statusMessage = "レジスタ " + register + " は空です";
+            case NO_PREVIOUS_MACRO -> statusMessage = "直前に実行したマクロがありません";
+            case RECURSION_LIMIT_REACHED -> statusMessage = "マクロの再帰が深すぎます（中断しました）";
         }
     }
 
@@ -4546,97 +4568,37 @@ public class ModalEditor {
 
     /** 内部ヤンクレジスタとは独立に、指定テキストをOSのシステムクリップボードへコピーする。 */
     private void copyToSystemClipboard(String text) {
-        try {
-            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-            clipboard.setContents(new StringSelection(text), null);
-            statusMessage = text.length() + " bytes copied to clipboard";
-        } catch (Exception e) {
-            statusMessage = "E: clipboard copy failed: " + e.getMessage();
-        }
+        SystemClipboardAccess.CopyResult result = systemClipboard.copy(text);
+        statusMessage = result.isFailure()
+                ? "E: " + result.errorReason()
+                : text.length() + " bytes copied to clipboard";
     }
 
     /**
-     * システムクリップボードの内容をカーソル位置へ貼り付ける。文字列（stringFlavor）が
-     * 取得できればそのまま挿入する。ファイルマネージャ等でコピーしたファイル（javaFileListFlavor）
-     * の場合は絶対パスを1行1件で挿入する。画像（imageFlavor）・音声等の非テキストデータの場合は、
-     * ストリーム系 DataFlavor またはImageからエンコードした生バイト列を、ISO-8859-1
-     * （1バイト=1文字の可逆マッピング）でデコードしてバイト列そのものをバッファへ挿入する
-     * （getBytes(ISO_8859_1)で元のバイト列を復元可能）。
+     * システムクリップボードの内容をカーソル位置へ貼り付ける。
+     * 何が取れたか（文字列・ファイル一覧・画像等のバイナリ）の判別は
+     * {@link SystemClipboardAccess} が担い、ここでは「取れたテキストを挿入する」ことだけを行う。
      *
      * @param asNormalMode true の場合 NORMAL モードと同じカーソルクランプを行う（P相当）。
      *                     false の場合 INSERT モード中の挿入として扱い、クランプしない。
      */
     private void pasteFromSystemClipboard(boolean asNormalMode) {
-        Transferable contents;
-        try {
-            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-            contents = clipboard.getContents(null);
-        } catch (Exception e) {
-            // ヘッドレス環境等、システムクリップボードにそもそもアクセスできない場合
-            statusMessage = "E: clipboard unavailable: " + e.getMessage();
-            return;
+        switch (systemClipboard.read()) {
+            case SystemClipboardAccess.ReadResult.Content(String text) -> insertPastedText(text, asNormalMode);
+            case SystemClipboardAccess.ReadResult.Empty(String reason) -> statusMessage = reason;
+            case SystemClipboardAccess.ReadResult.Failure(String reason) -> statusMessage = "E: " + reason;
         }
-        if (contents == null) {
-            statusMessage = "clipboard is empty";
-            return;
-        }
-        String text;
-        try {
-            if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
-                text = (String) contents.getTransferData(DataFlavor.stringFlavor);
-            } else if (contents.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
-                text = readClipboardFilePaths(contents);
-            } else {
-                byte[] bytes = readClipboardBinary(contents);
-                if (bytes == null) {
-                    statusMessage = "unsupported clipboard content";
-                    return;
-                }
-                text = new String(bytes, StandardCharsets.ISO_8859_1);
-            }
-        } catch (UnsupportedFlavorException | IOException e) {
-            statusMessage = "E: clipboard paste failed: " + e.getMessage();
-            return;
-        }
-        if (text.isEmpty()) return;
+    }
 
+    /** 貼り付けたテキストをカーソル位置へ挿入し、カーソルを挿入後の末尾へ移動する。 */
+    private void insertPastedText(String text, boolean asNormalMode) {
+        if (text.isEmpty()) return;
         int offset = offsetOfCursor();
         buffer.insert(offset, text);
         moveCursorToOffset(offset + text.length());
         if (asNormalMode) {
             clampCursorForNormal();
         }
-    }
-
-    /** ファイルマネージャ等でコピーされたファイル一覧を、絶対パスを改行区切りにした文字列へ変換する。 */
-    @SuppressWarnings("unchecked")
-    private String readClipboardFilePaths(Transferable contents) throws UnsupportedFlavorException, IOException {
-        List<File> files = (List<File>) contents.getTransferData(DataFlavor.javaFileListFlavor);
-        return ClipboardBinaryCodec.joinFilePaths(files);
-    }
-
-    /**
-     * 文字列・ファイル一覧以外の DataFlavor（image/audio 等）から生バイト列を読み出す。
-     * ストリーム系 DataFlavor を優先し、見つからなければ imageFlavor（java.awt.Image、
-     * スクリーンショットツール等が公開する非ストリーム形式）をPNGへエンコードして返す。
-     * いずれも取得不能なら null。
-     */
-    private byte[] readClipboardBinary(Transferable contents) throws UnsupportedFlavorException, IOException {
-        for (DataFlavor flavor : contents.getTransferDataFlavors()) {
-            if (!InputStream.class.isAssignableFrom(flavor.getRepresentationClass())) continue;
-            try (InputStream in = (InputStream) contents.getTransferData(flavor)) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                in.transferTo(out);
-                return out.toByteArray();
-            }
-        }
-        if (contents.isDataFlavorSupported(DataFlavor.imageFlavor)) {
-            Object data = contents.getTransferData(DataFlavor.imageFlavor);
-            if (data instanceof Image image) {
-                return ClipboardBinaryCodec.encodeImageAsPng(image);
-            }
-        }
-        return null;
     }
 
     /** 行ヤンク: カーソル行の下に貼り付け、カーソルを貼り付け行へ移動 */
@@ -4918,23 +4880,9 @@ public class ModalEditor {
         cursorCol = 0;
     }
 
-    /**
-     * 先頭の {@code ~} をホームディレクトリに展開する。OSに関係なく {@code ~}・{@code ~/...}・{@code ~\...} を認識する。
-     * {@code Path.resolve()} は絶対パスを渡すとそれをそのまま返す仕様のため、展開後は resolve に委ねてよい。
-     */
-    private static String expandHome(String pathStr) {
-        if (pathStr.equals("~")) {
-            return System.getProperty("user.home", "");
-        }
-        if (pathStr.startsWith("~/") || pathStr.startsWith("~\\")) {
-            return System.getProperty("user.home", "") + File.separator + pathStr.substring(2);
-        }
-        return pathStr;
-    }
-
     private void changeDirectory(String pathStr) {
         try {
-            pathStr = expandHome(pathStr);
+            pathStr = UserPathResolver.expandHome(pathStr);
             Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
             if (changeWdCallback == null) {
                 statusMessage = "E: working directory handler not set";
@@ -4945,10 +4893,7 @@ public class ModalEditor {
                 statusMessage = "E: " + err;
                 return;
             }
-            filerSavedBuffer = buffer;
-            filerSavedFilePath = currentFilePath;
-            filerSavedCursorRow = cursorRow;
-            filerSavedCursorCol = cursorCol;
+            saveToStash(filerStash);
             enterFiler();
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
@@ -4958,12 +4903,7 @@ public class ModalEditor {
     /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */
     private void exitFiler() {
         mode = Mode.NORMAL;
-        buffer = filerSavedBuffer != null ? filerSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = filerSavedFilePath;
-        cursorRow = filerSavedCursorRow;
-        cursorCol = filerSavedCursorCol;
-        filerSavedBuffer = null;
-        filerSavedFilePath = null;
+        restoreFromStash(filerStash);
     }
 
     private void processFilerKey(int keyCode, char keyChar, int modifiers) {
@@ -4992,8 +4932,8 @@ public class ModalEditor {
                 return;
             }
             // 自由入力(検索クエリ)があるため j/k は文字入力として扱い、移動キーには割り当てない。
-            if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) { moveSelection(1);  return; }
-            if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP)   { moveSelection(-1); return; }
+            if (isSelectNextKey(keyCode, ctrlDown)) { moveSelection(1);  return; }
+            if (isSelectPrevKey(keyCode, ctrlDown)) { moveSelection(-1); return; }
             if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ' && !ctrlDown) {
                 filerQuery.append(keyChar);
                 filerFiltered = DirectoryLister.filterEntries(filerEntries, filerQuery.toString());
@@ -5010,8 +4950,8 @@ public class ModalEditor {
                 return;
             }
             // 自由入力のない一覧表示中は j/k(Vim式)・矢印キー・Ctrl+N/Pのいずれでも移動できる。
-            if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN || (!ctrlDown && keyChar == 'j')) { moveSelection(1);  return; }
-            if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP   || (!ctrlDown && keyChar == 'k')) { moveSelection(-1); return; }
+            if (isSelectNextKey(keyCode, ctrlDown) || isVimNextKey(keyChar, ctrlDown)) { moveSelection(1);  return; }
+            if (isSelectPrevKey(keyCode, ctrlDown) || isVimPrevKey(keyChar, ctrlDown)) { moveSelection(-1); return; }
             if (keyChar == '/') {
                 filerSearchMode = true;
                 filerQuery.setLength(0);
@@ -5075,96 +5015,99 @@ public class ModalEditor {
         canvasTextRebuildCount++;
     }
 
-    public void syncCanvas() {
-        if (canvas != null) {
-            refreshCanvasTextCache();
-            canvas.setLanguage(dev.javatexteditor.ui.SourceLanguage.detect(currentFilePath));
-            canvas.setText(canvasCachedText, canvasCachedLines);
-            canvas.setWrapEnabled(wrapEnabled);
-            // :font/:color コマンドで変更された値を反映する。値が変化していない場合は
-            // EditorCanvas.setTheme()/setFontChoice() 側のガードによりグリフキャッシュの
-            // 破棄は起きないため、1キー入力ごとに呼んでも問題ない。
-            canvas.setTheme(theme);
-            canvas.setFontChoice(fontChoice);
-            java.util.Set<Integer> errorLines;
-            if (outputErrorLinesOwner == buffer) {
-                errorLines = outputErrorLines;
-            } else {
-                errorLines = java.util.Set.of();
-            }
-            canvas.setErrorLines(errorLines);
-            canvas.setCursor(cursorRow, cursorCol);
-            canvas.setInsertMode(mode == Mode.INSERT);
-
-            boolean isVisual      = (mode == Mode.VISUAL);
-            boolean isVisualLine  = (mode == Mode.VISUAL_LINE);
-            boolean isVisualBlock = (mode == Mode.VISUAL_BLOCK);
-            canvas.setVisualMode(isVisual || isVisualLine || isVisualBlock);
-            canvas.setVisualLineMode(isVisualLine);
-            canvas.setVisualBlockMode(isVisualBlock);
-
-            if (isVisual || isVisualBlock) {
-                canvas.setSelection(anchorRow, anchorCol, cursorRow, cursorCol);
-            } else if (isVisualLine) {
-                canvas.setSelection(anchorRow, 0, cursorRow, 0);
-            } else {
-                canvas.clearSelection();
-            }
-
-            canvas.ensureCursorVisible(cursorRow);
-            String[] lines = canvasCachedLines;
-            String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
-            canvas.ensureCursorColVisible(cursorCol, curLine);
-
-            // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
-            // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、
-            // 画面幅を2倍で扱う uiTextWidth 等の全角対応ロジックとは無関係）。
-            // canvasCachedLines を再利用し、buffer.getText() の再構築を増やさない。
-            // syncCanvas() はキー入力1回につき1度だけ呼ばれるため、ここで計算しキャッシュしておく。
-            // EditorCanvas側（30fpsのanimTimerでrepaintされるdrawStatusLine）では再計算しない設計。
-            int totalChars = 0;
-            for (int i = 0; i < cursorRow && i < lines.length; i++) {
-                totalChars += lines[i].length() + 1; // +1 は改行文字
-            }
-            totalChars += Math.min(cursorCol, curLine.length()) + 1;
-            canvas.setCursorPositionLabel("(" + (cursorRow + 1) + ":" + totalChars + ")");
-            if (mode == Mode.COMMAND) {
-                canvas.setCommandLineText(":" + commandBuffer.toString());
-            } else if (mode == Mode.SEARCH) {
-                canvas.setCommandLineText("/" + searchBuffer.toString());
-            } else if (mode == Mode.FILESEARCH) {
-                String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
-                canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
-            } else if (mode == Mode.TELESCOPE && telescopePicker != null) {
-                canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
-            } else if (mode == Mode.CLASSPATH_INPUT) {
-                canvas.setCommandLineText(classpathInputLabel
-                    + " classpath (カンマ区切り, Enter=確定, Esc=スキップ): "
-                    + classpathInputBuffer.toString());
-            } else if (!statusMessage.isEmpty()) {
-                canvas.setCommandLineText(statusMessage);
-            } else {
-                canvas.setCommandLineText(null);
-            }
-
-            // TELESCOPE/FILER は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
-            // オーバーレイは使わない。IMPORT_SELECT のみ従来どおりオーバーレイを使う。
-            if (mode == Mode.IMPORT_SELECT) {
-                // import 候補選択モーダル: TelescopeItem リストとして表示する
-                List<TelescopeItem> items = new ArrayList<>();
-                for (String fqn : importSelectFqns) {
-                    items.add(new TelescopeItem(fqn, null, 0, 0));
-                }
-                int sym = pendingImportIdx + 1;
-                int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
-                String title = "Import: " + importSelectSymbol
-                    + "  [" + sym + "/" + total + "]";
-                canvas.setTelescopeState(true, title, "", items, importSelectIdx, "");
-            } else {
-                canvas.setTelescopeState(false, "", "", List.of(), 0, "");
-            }
-        }
+    /** 現在のモードから、画面に描くべき選択範囲を組み立てる。 */
+    private SelectionView currentSelectionView() {
+        return switch (mode) {
+            case VISUAL       -> SelectionView.of(
+                    SelectionView.Kind.CHARACTER, anchorRow, anchorCol, cursorRow, cursorCol);
+            case VISUAL_BLOCK -> SelectionView.of(
+                    SelectionView.Kind.BLOCK, anchorRow, anchorCol, cursorRow, cursorCol);
+            case VISUAL_LINE  -> SelectionView.ofLines(anchorRow, cursorRow);
+            default           -> SelectionView.none();
+        };
     }
+
+    public void syncCanvas() {
+        if (canvas == null) return;
+        // 1キー入力ぶんの状態更新をまとめ、再描画の予約を1度だけにする
+        canvas.batchUpdate(() -> {
+                refreshCanvasTextCache();
+                canvas.setLanguage(dev.javatexteditor.ui.SourceLanguage.detect(currentFilePath));
+                canvas.setText(canvasCachedText, canvasCachedLines);
+                canvas.setWrapEnabled(wrapEnabled);
+                // :font/:color コマンドで変更された値を反映する。値が変化していない場合は
+                // EditorCanvas.setTheme()/setFontChoice() 側のガードによりグリフキャッシュの
+                // 破棄は起きないため、1キー入力ごとに呼んでも問題ない。
+                canvas.setTheme(theme);
+                canvas.setFontChoice(fontChoice);
+                java.util.Set<Integer> errorLines;
+                if (outputErrorLinesOwner == buffer) {
+                    errorLines = outputErrorLines;
+                } else {
+                    errorLines = java.util.Set.of();
+                }
+                canvas.setErrorLines(errorLines);
+                canvas.setCursor(cursorRow, cursorCol);
+                canvas.setInsertMode(mode == Mode.INSERT);
+
+                canvas.setSelectionView(currentSelectionView());
+
+                canvas.ensureCursorVisible(cursorRow);
+                String[] lines = canvasCachedLines;
+                String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
+                canvas.ensureCursorColVisible(cursorCol, curLine);
+
+                // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
+                // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、
+                // 画面幅を2倍で扱う uiTextWidth 等の全角対応ロジックとは無関係）。
+                // canvasCachedLines を再利用し、buffer.getText() の再構築を増やさない。
+                // syncCanvas() はキー入力1回につき1度だけ呼ばれるため、ここで計算しキャッシュしておく。
+                // EditorCanvas側（30fpsのanimTimerでrepaintされるdrawStatusLine）では再計算しない設計。
+                int totalChars = 0;
+                for (int i = 0; i < cursorRow && i < lines.length; i++) {
+                    totalChars += lines[i].length() + 1; // +1 は改行文字
+                }
+                totalChars += Math.min(cursorCol, curLine.length()) + 1;
+                canvas.setCursorPositionLabel("(" + (cursorRow + 1) + ":" + totalChars + ")");
+                if (mode == Mode.COMMAND) {
+                    canvas.setCommandLineText(":" + commandBuffer.toString());
+                } else if (mode == Mode.SEARCH) {
+                    canvas.setCommandLineText("/" + searchBuffer.toString());
+                } else if (mode == Mode.FILESEARCH) {
+                    String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
+                    canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
+                } else if (mode == Mode.TELESCOPE && telescopePicker != null) {
+                    canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
+                } else if (mode == Mode.CLASSPATH_INPUT) {
+                    canvas.setCommandLineText(classpathInputLabel
+                        + " classpath (カンマ区切り, Enter=確定, Esc=スキップ): "
+                        + classpathInputBuffer.toString());
+                } else if (!statusMessage.isEmpty()) {
+                    canvas.setCommandLineText(statusMessage);
+                } else {
+                    canvas.setCommandLineText(null);
+                }
+
+                // TELESCOPE/FILER は \f/\g と同じ疑似バッファ表示（buffer に直接描画済み）のため
+                // オーバーレイは使わない。IMPORT_SELECT のみ従来どおりオーバーレイを使う。
+                if (mode == Mode.IMPORT_SELECT) {
+                    // import 候補選択モーダル: TelescopeItem リストとして表示する
+                    List<TelescopeItem> items = new ArrayList<>();
+                    for (String fqn : importSelectFqns) {
+                        items.add(new TelescopeItem(fqn, null, 0, 0));
+                    }
+                    int sym = pendingImportIdx + 1;
+                    int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
+                    String title = "Import: " + importSelectSymbol
+                        + "  [" + sym + "/" + total + "]";
+                    canvas.setTelescopeView(new TelescopeView(
+                        true, title, "", items, importSelectIdx, ""));
+                } else {
+                    canvas.setTelescopeView(TelescopeView.hidden());
+                }
+        });
+    }
+
 
     // -------------------------------------------------------------------------
     // パブリックアクセサ（テスト・外部連携用）
@@ -5196,8 +5139,8 @@ public class ModalEditor {
     public boolean isBinaryMode()         { return mode == Mode.BINARY; }
     public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
-    public boolean isCompletionActive()   { return completionActive; }
-    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completionItems; }
+    public boolean isCompletionActive()   { return completion.isActive(); }
+    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completion.items(); }
     public boolean isCdSelectionActive()  { return cdSelectionActive; }
     public List<String> getCdCandidates() { return cdCandidates; }
     public boolean isEditSelectionActive() { return edSelectionActive; }
@@ -5291,32 +5234,22 @@ public class ModalEditor {
 
     // *compile* / *run* 疑似バッファ表示前の元バッファへ Esc で戻るための退避状態。
     // jdk-source疑似バッファ（saved*/inJdkSourceBuffer）と同じ「一時退避→復元」パターン。
-    private UndoablePieceTable outputSavedBuffer = null;
-    private String outputSavedFilePath = null;
-    private int outputSavedCursorRow = 0;
-    private int outputSavedCursorCol = 0;
+    /** *compile* / *run* 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash outputStash = new PseudoBufferStash();
     private boolean outputBufferActive = false;
 
     /** F10/F11開始時に呼ぶ。既に *compile* / *run* 表示中（連続F10等）なら元の退避内容を保持したまま何もしない。 */
     private void saveBufferBeforeOutput() {
         if (outputBufferActive) return;
-        outputSavedBuffer = buffer;
-        outputSavedFilePath = currentFilePath;
-        outputSavedCursorRow = cursorRow;
-        outputSavedCursorCol = cursorCol;
+        saveToStash(outputStash);
         outputBufferActive = true;
     }
 
     /** Esc: *compile* / *run* 疑似バッファから表示前の元バッファへ戻る。 */
     private void closeOutputBuffer() {
         if (!outputBufferActive) return;
-        buffer = outputSavedBuffer != null ? outputSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = outputSavedFilePath;
-        cursorRow = outputSavedCursorRow;
-        cursorCol = outputSavedCursorCol;
+        restoreFromStash(outputStash);
         outputBufferActive = false;
-        outputSavedBuffer = null;
-        outputSavedFilePath = null;
         clearSearchHighlights();
         statusMessage = "";
     }
@@ -5376,12 +5309,9 @@ public class ModalEditor {
             statusMessage = "E: not a markdown (.md) file";
             return;
         }
-        markdownViewSavedBuffer = buffer;
-        markdownViewSavedFilePath = currentFilePath;
-        markdownViewSavedCursorRow = cursorRow;
-        markdownViewSavedCursorCol = cursorCol;
+        saveToStash(markdownViewStash);
         String fileName = Path.of(currentFilePath).getFileName().toString();
-        String rendered = MarkdownRenderer.render(fileName, markdownViewSavedBuffer.getText());
+        String rendered = MarkdownRenderer.render(fileName, markdownViewStash.buffer().getText());
         buffer = new UndoablePieceTable(rendered);
         // 読み取り専用プレビュー: currentFilePathをnullにすることで:wを「no file name」エラーへ
         // 自然にフォールバックさせ、実.mdファイルへの誤保存（レンダリング後テキストでの上書き）を
@@ -5402,12 +5332,8 @@ public class ModalEditor {
             statusMessage = "E: not in markdown view";
             return;
         }
-        buffer = markdownViewSavedBuffer != null ? markdownViewSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = markdownViewSavedFilePath;
-        cursorRow = markdownViewSavedCursorRow;
-        cursorCol = markdownViewSavedCursorCol;
+        restoreFromStash(markdownViewStash);
         markdownViewOwner = null;
-        markdownViewSavedBuffer = null;
         clearSearchHighlights();
         statusMessage = "source view";
     }
@@ -5587,15 +5513,9 @@ public class ModalEditor {
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType == YankType.LINE ? "line" : "char"; }
     // vim-macro-recording: テスト・プラグイン向けアクセサ
-    public boolean isRecordingMacro()  { return macroRecording; }
-    public boolean hasMacro(char register) {
-        List<RecordedKey> keys = macroRegisters.get(Character.toLowerCase(register));
-        return keys != null && !keys.isEmpty();
-    }
-    public int getMacroLength(char register) {
-        List<RecordedKey> keys = macroRegisters.get(Character.toLowerCase(register));
-        return keys == null ? 0 : keys.size();
-    }
+    public boolean isRecordingMacro()  { return macros.isRecording(); }
+    public boolean hasMacro(char register)   { return macros.hasMacro(register); }
+    public int getMacroLength(char register) { return macros.macroLength(register); }
 
     // プラグイン向けバッファ操作
     public int getLineCount() {
@@ -5803,11 +5723,11 @@ public class ModalEditor {
             return;
         }
         // 自由入力のない選択専用画面のため j/k(Vim式)も移動キーとして使える。
-        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN || (!ctrlDown && keyChar == 'j')) {
+        if (isSelectNextKey(keyCode, ctrlDown) || isVimNextKey(keyChar, ctrlDown)) {
             if (importSelectIdx < importSelectFqns.size() - 1) importSelectIdx++;
             return;
         }
-        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP || (!ctrlDown && keyChar == 'k')) {
+        if (isSelectPrevKey(keyCode, ctrlDown) || isVimPrevKey(keyChar, ctrlDown)) {
             if (importSelectIdx > 0) importSelectIdx--;
             return;
         }
@@ -5885,7 +5805,7 @@ public class ModalEditor {
      * メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
      */
     private void lookupJdkDoc() {
-        BufferSnapshot before = new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
+        BufferSnapshot before = currentBufferSnapshot();
 
         // C言語（.c/.h）バッファでは C 専用の定義ジャンプへ振り分ける（jdk-source 疑似バッファ内は除く）。
         if (isCFilePath(currentFilePath) && !inJdkSourceBuffer) {
@@ -6491,10 +6411,7 @@ public class ModalEditor {
      */
     private void openJdkSourceBuffer(String title, String content, boolean isNative) {
         if (!inJdkSourceBuffer) {
-            savedBuffer = buffer;
-            savedFilePath = currentFilePath;
-            savedCursorRow = cursorRow;
-            savedCursorCol = cursorCol;
+            saveToStash(jdkSourceStash);
         }
         buffer = new UndoablePieceTable(content);
         currentFilePath = title;
@@ -6511,13 +6428,9 @@ public class ModalEditor {
     /** JDK ソース疑似バッファを閉じて元バッファに戻る。 */
     private void closeJdkSourceBuffer() {
         if (!inJdkSourceBuffer) return;
-        buffer = savedBuffer != null ? savedBuffer : new UndoablePieceTable("");
-        currentFilePath = savedFilePath;
-        cursorRow = savedCursorRow;
-        cursorCol = savedCursorCol;
+        restoreFromStash(jdkSourceStash);
         inJdkSourceBuffer = false;
         jdkSourceIsNative = false;
-        savedBuffer = null;
         clearSearchHighlights();
         setStatusMessage("Returned from JDK source");
     }

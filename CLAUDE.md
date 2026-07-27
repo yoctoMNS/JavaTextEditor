@@ -1158,3 +1158,445 @@ project-root/
   `:view`/`:mark`往復でバッファ参照が同一オブジェクトのまま保たれること＝共有バッファ整合性を
   含む）。既存のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件＝いずれも本変更前から
   失敗、仕様判断未決のため修正禁止）を除き全PASS。
+
+## ModalEditor 神クラス解体リファクタリング 第1弾（2026-07-27）
+
+「プロジェクト全体のコードが大きくなりすぎて読みづらい。SOLID原則に沿った美しいクラス設計へ、
+ただし規模を小さく・デグレを起こさないよう慎重に」という依頼に基づく、`ModalEditor`（6,850行・
+355メソッドの神クラス）の段階的な解体。**今回は第1弾であり、まだ続きがある**（後述「次に着手すべき候補」）。
+
+### 進め方（次の担当者もこの手順を踏襲すること）
+
+1. **着手前に全テストのベースラインを取る**。`./scripts/test.sh` は1クラスでも落ちると途中で止まるため、
+   各テストクラスを個別JVM＋`timeout 180`で回し、クラスごとの合否を1ファイルに記録する方式を使った。
+   ベースライン（本リファクタリング開始時点、全91テストクラス）:
+   - 89クラス PASS
+   - `dev.javatexteditor.editor.ScrollTest` — 2件FAIL（Ctrl+Uの仕様変更にテストが未追従。
+     **仕様判断未決のため修正禁止**。既存の「既知の未接続・二重定義」6.・REFACTORING_PLAN U-7 参照）
+   - `dev.javatexteditor.editor.ModalEditorTest` — 1件FAIL（同じくベースラインからの既知FAIL）
+2. **1つの抽出につき1コミット**。抽出 → `./scripts/build.sh` → 影響範囲のテストクラスだけを個別実行 →
+   コミット、を繰り返す。中核状態に触れた回（バッファ履歴）と最終回だけ全91クラスを回し、
+   **ベースラインとの差分がゼロであること**を `diff` で機械的に確認した。
+3. **公開シグネチャは一切変更しない**。テスト側が `getYankType()` の文字列値や
+   `getSearchMatches()` の `List<int[]>` 型に依存しているため（REFACTORING_PLAN §1.5）。
+   今回の抽出はすべて「内部フィールドと private メソッドの移動」に留めてある。
+
+### 抽出したクラス（すべて `dev.javatexteditor.editor` パッケージ・package-private）
+
+| 新クラス | 抽出元の責務 | 主な改善点 |
+|---|---|---|
+| `SystemClipboardAccess` | OSクリップボードの読み書き（Ctrl+Shift+C / Ctrl+Shift+V） | 「何が取れたか」を sealed interface `ReadResult`（`Content`/`Empty`/`Failure`）で返す。`ModalEditor` 側は `switch` のパターンマッチ3行になり、「OSと話す処理」と「テキストを編集する処理」が分離された |
+| `MacroRecorder` | Vim式マクロの記録・再生（`q`/`@`/`@@`） | 散在していた状態7個を集約。再生は `KeyReplayer` 関数型インタフェース経由でキーを呼び出し側へ差し戻すため `ModalEditor` への逆依存がない。失敗理由は `PlayOutcome` enum で返し、日本語文言は `reportMacroOutcome()` 1箇所に集約 |
+| `UserPathResolver` | コマンド行のパス文字列 → 絶対パス | `resolveRelativeToProjectRoot()` と `resolveRelativeToBuildRoot()` は基準ディレクトリが違うだけの完全な重複だった。`resolveAgainst(baseDir, pathSpec)` 1本に統合 |
+| `BufferHistory` + `BufferSnapshot` | Ctrl+U/Ctrl+P の疑似バッファ履歴 | `historyIdx >= 0 && historyIdx < bufferHistory.size() - 1` のような境界条件の書き下しを `hasPrevious()`/`hasNext()` に置換。「現在位置より後ろを切り捨てる」「離れる直前の状態を書き戻す」という暗黙ルールを `push()`/`moveTo()` の内側へ隠蔽。`BufferSnapshot` は履歴とShift+Kの復帰点の2箇所で共有されるためトップレベル record へ昇格 |
+| `CompletionPopupState` | 補完ポップアップの状態（Ctrl+Space / Alt+/ 共通） | 5フィールドを毎回まとめて書き換える暗黙の不変条件を `openWith()`/`close()` に隠蔽。4箇所に重複していたクランプ式 `Math.min(idx+1, size-1)` を `selectNext()`/`selectPrevious()` へ集約。Ctrl+N と ↓、Ctrl+P と ↑ が完全に同一動作だったため4ブロック→2ブロックへ統合 |
+| `BufferTextSearch` | `/`・`n`・`N` の一致箇所計算 | 前方/後方でほぼ同一だった2つの走査ループを `selectNearest()` 1本に統合し、Vim互換の「ファイル端で折り返す」規則に名前を付けた。`{offset, length}` の `int[]` 表現は `getSearchMatches()` の公開シグネチャ維持のため**あえて record 化していない** |
+
+結果: `ModalEditor.java` は 6,850行 → 6,657行（-193行）。行数の減少幅より、
+**5つの状態クラスタが名前付きの型として独立し、`ModalEditor` から「フィールドを直接いじる」記述が消えたこと**が本質。
+
+### 意図的に手を付けなかった箇所（次の担当者が「直し忘れ」と誤解しないための記録）
+
+- **識別子プレフィックスの後方走査が3箇所に重複**（`extractCompletionPrefix()`／`prefixStartOffset()`／
+  `applyCompletion()` 内のループ）。CLAUDE.md 既存節「補完候補の並び順を Vim の i_CTRL-N に合わせる」で
+  **「3行の重複は早すぎる抽象化よりよい」という方針に従いあえて共通化しなかった**と明記済みの
+  記録済み設計判断のため、今回も覆さなかった。共通化する場合はユーザーに確認すること。
+- **`ScrollTest` 2件・`ModalEditorTest` 1件の既知FAIL**。仕様判断が未決のため「ついでに」直さない
+  （既存節「既知の未接続・二重定義」6. と同じ扱い）。
+- **`processNormalKey()`（約360行）・`executeCommand()`（約100行の if-else 連鎖）・`syncCanvas()`** 等の
+  巨大メソッド本体。分割にはモード遷移の意味論に踏み込む判断が必要で、今回の「小さく安全に」という
+  依頼の範囲を超えるため見送った。
+- **`EditorCanvas`（1,863行）・`Main`（1,282行）**。今回は最大の神クラス1つに絞った。
+
+### 次に着手すべき候補（優先度順）
+
+1. ~~**`ModalEditor` の疑似バッファ退避・復元の系統統一**~~ → **✅ 第2弾で完了**（下記参照）
+2. **`executeCommand()` の if-else 連鎖 → コマンド名 → ハンドラの `Map` 化**。`:wa`/`:qa` の
+   `equals` 完全一致判定と `startsWith` 判定が混在しており、追加順序に依存する暗黙の優先順位がある。
+   順序依存を壊さないことの検証が必須。
+3. **FILER／TELESCOPE／FILESEARCH／IMPORT_SELECT／CLASSPATH_INPUT の疑似モード群**。いずれも
+   `KeymapRegistry` をバイパスして `processXxxKey()` で直接キーを処理する同型の構造をしており、
+   共通のインタフェース（例: `ModalScreen`）へ寄せられる可能性がある。
+
+## ModalEditor 神クラス解体リファクタリング 第2弾（2026-07-27）— 疑似バッファ退避の統一
+
+第1弾の「次に着手すべき候補」1. を実施した。進め方（着手前の全クラスベースライン取得 →
+1抽出1コミット → Phase 完了時にベースラインとの `diff` ゼロを機械的に確認 → 公開シグネチャ不変）は
+第1弾と同じ手順を踏襲している。
+
+### 何が重複していたか
+
+疑似バッファを表示している間、その裏に隠れる「元の編集状態」を預かる仕組みが**7系統**に分かれ、
+いずれも `xxxSavedBuffer` / `xxxSavedFilePath` / `xxxSavedCursorRow` / `xxxSavedCursorCol` という
+**同じ4フィールドを重複して持っていた**（計28フィールド）。保存側・復元側とも代入順まで一致し、
+復元時の `saved != null ? saved : new UndoablePieceTable("")` というフォールバックも7箇所に散っていた。
+
+対象7系統: telescope / `:cd`候補 / `:e`候補 / FILER / jdk-source / `*compile*`・`*run*` / Markdown閲覧ビュー。
+
+### 何をしたか
+
+- **`PseudoBufferStash`（新設）**: 4点セットを預かるだけの型。空フォールバックを `buffer()` の中に
+  1つだけ置き、7箇所の三項演算子の重複を解消した。
+- **`ModalEditor.saveToStash()` / `restoreFromStash()`**: 各系統の保存・復元が1行になった。
+- **28フィールド → 7フィールド**。`ModalEditor` は 6,657行 → 6,603行。
+
+### 引き継ぎ上の重要な設計判断（次の担当者は必ず読むこと）
+
+1. **バッファは「本文の写し」ではなく生きた `UndoablePieceTable` の参照として預かる。**
+   Vim方式の共有バッファ（同一ファイルを複数ペインで開くと同一インスタンスを共有する）を
+   壊さないために必須。ここで新インスタンスを作り直すと、疑似バッファを開いて閉じただけで
+   そのペインが共有から静かに外れる。本文をコピーする `BufferSnapshot`（Ctrl+U/Ctrl+P の履歴用）
+   とは役割が異なるので**混同しないこと**。
+2. **型は共通化したが、インスタンスは用途ごとに7つ独立させたまま**にした。1つに統合すると
+   「疑似バッファを重ねて開いた場合の挙動は未定義・未テスト」（本ファイル「既知の未接続・二重定義」5.）
+   という現状の意味論を意図せず変えてしまう。**この未定義事項は第2弾でも解消していない**。
+   統合するなら、まず重ね合わせ時の仕様をユーザーと確定させること。
+3. **各系統に固有の「おまけの状態」は stash に入れなかった**:
+   - telescope … `telescopeSavedGrepResults` / `telescopeSavedGrepBaseDir` / `telescopeSavedFileNameResults`
+   - `:cd`候補 / `:e`候補 … `cdSavedCommandText` / `edSavedCommandText`（COMMAND モード復帰用）
+
+   いずれも「疑似バッファの退避」とは別の関心事のため `ModalEditor` 側に残してある。
+4. **既存の細かな差異はそのまま維持**した。例: `restoreCdSavedBuffer()` は
+   `resetSearchAndResultState()` を呼ぶが `restoreEditSavedBuffer()` は呼ばない。
+   統一したくなるが、挙動を変えないことを優先して手を付けていない。
+
+### 検証
+
+全93テストクラスを個別JVMで実行し、ベースラインと `diff` で完全一致を確認。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし（いずれも仕様判断未決のため修正禁止）。
+
+### 次に着手すべき候補（更新）
+
+第1弾の候補はすべて完了した（1.＝第2弾、2.＝第3弾、`processNormalKey()` の分割＝第4弾、
+3.＝第5弾）。次の候補は `EditorCanvas`（1,863行・119フィールド・setter 25個）と
+`Main`（1,282行）だが、いずれも公開APIやGUI配線に触れるため影響範囲が広い（第5弾末尾を参照）。
+
+## ModalEditor 神クラス解体リファクタリング 第3弾（2026-07-27）— :コマンドの表化
+
+第1弾の「次に着手すべき候補」2. を実施した。手順（着手前の全クラスベースライン取得 → 1抽出1コミット →
+Phase 完了時にベースラインとの `diff` ゼロを機械的に確認 → 公開シグネチャ不変）は第1〜2弾と同じ。
+
+### 何が問題だったか
+
+`executeCommand()` は 96行・**35分岐の if-else 連鎖**で、`cmd.equals(...)` の完全一致判定と
+`cmd.startsWith(...)` の前置一致判定が交互に現れていた。そのため「どの分岐が先に来るか」が
+暗黙の仕様になっており、コマンドを1つ足すたびに連鎖のどこへ差し込むべきかを読み解く必要があった。
+
+### 何をしたか
+
+- **`CommandRegistry`（新設）**: 「完全一致をすべて調べる → 前置一致を登録順に調べる →
+  見つからなければ false を返す」という振り分けの仕組みだけを持つ。個々のコマンドが
+  何をするかは知らないため、`ModalEditor` 抜きで単体テストできる。
+- **`ModalEditor.buildCommandRegistry()`**: 「どんなコマンドが存在するか」の一覧。
+  `r.on(this::saveAll, "wa", "wall")` のように別名をまとめて宣言でき、
+  用途ごとにコメントで区切った表として読める。**コマンド追加は分岐の挿入ではなく表への1行追加**になった。
+- `:q` / `:wq` / `:pr` / `:pr?` のインラインだったブロックは `closeCurrentPane()` /
+  `saveAndCloseCurrentPane()` / `pinProjectRoot()` / `reportProjectRoot()` として名前を付けて切り出した。
+
+### 並び替えの安全性をどう担保したか（次の担当者が最も気にすべき点）
+
+元の連鎖は完全一致と前置一致が交互だったが、新実装は**完全一致を全部先に**調べる。
+これが挙動を変えないことを、着手前に次の4点で機械的に検証した。
+
+1. 完全一致のコマンド名35個はすべて一意（重複なし）
+2. **完全一致の名前は1つも空白を含まず、前置一致の接頭辞はすべて空白で終わる**
+   → 完全一致の名前が前置一致にマッチすることはありえず、前置一致する文字列が
+     完全一致の名前と等しくなることもありえない（＝両集合は provably disjoint）
+3. 前置一致どうしで、一方が他方の接頭辞になっているものは無い
+   （`"grep! "` と `"grep "` は互いに接頭辞ではない。ただし登録順は元の順序どおり維持した）
+4. 引数の切り出しは全11接頭辞で `substring(接頭辞の長さ).trim()` に統一されている
+
+さらに移行後、正規表現で表を機械的に読み出し、**元の35個の完全一致名と11個の接頭辞が
+過不足なく登録されている**ことを確認した（欠落・追加ともゼロ）。
+
+### 意図的に維持した順序
+
+- **`:s` 置換（`handleSubstituteCommand`）は表より前**。範囲指定（`%`・`'<,'>`・`N,M`）や
+  可変の区切り文字を持ち他と形が違うため、表には載せず専用の述語のまま最初に判定する。
+  なお `sPart_isSubstitute()` は2文字目が英数字なら false を返すので、`:sp`/`:split` を
+  横取りすることはない（この性質に依存している）。
+- **行番号ジャンプ（`\d+`）と unknown command は表より後**。どのコマンド名にも一致しなかった
+  場合の最後の受け皿という位置づけを保つため。
+- **`":grep! "` は `":grep "` より先に登録**。前置一致は登録順に評価されるため
+  （実際には互いに接頭辞ではないので順序に依存しないが、元の意図を残した）。
+
+### テスト
+
+`test/dev/javatexteditor/editor/CommandRegistryTest.java`（新設・12アサーション）。
+別名の共有・引数の trim・空引数・登録順評価・完全一致と前置一致が混ざらないこと・後勝ち登録を検証。
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致（既知FAIL の増減なし）。
+
+## ModalEditor 神クラス解体リファクタリング 第4弾（2026-07-27）— processNormalKey の分割
+
+単一メソッドとして本プロジェクト最大だった `processNormalKey()`（**356行**）を分割した。
+手順（着手前の全クラスベースライン取得 → 1スライス1コミット → Phase 完了時に `diff` ゼロを確認 →
+公開シグネチャ不変）は第1〜3弾と同じ。**356行 → 100行**になった。
+
+### 3スライスの内訳
+
+| スライス | 切り出した内容 | 行数 |
+|---|---|---|
+| 4-1 | `handleNormalModeInterrupt()` — 画面に出ているもので意味が決まる割り込みキー（疑似バッファを閉じる/ジャンプする Enter・q・Esc、Ctrl+U/Ctrl+P、マクロ記録終了の q）。11個の早期 return | 約80行 |
+| 4-2 | `handlePendingSequence()` — `dd`/`yy`/`gg`/`gu`/`gU`/`g~`/`gr`/`gv`/`r`/`zz`/`[g`/`[d`/`s`系/`\f`/`\g`/`\a`系/`SPC`系の2打鍵目以降。41個の早期 return | 132行 |
+| 4-3 | 60ケースの switch のうち複数行だった19ケースに名前を付け、対応表として読める形にした | 約60行 |
+
+### 早期 return の順序制約をどう扱ったか（次の担当者が最も気にすべき点）
+
+このメソッドは早期 return の**並び順そのものが仕様**である。分割にあたっては
+「連続した領域をまるごと1つの boolean メソッドへ移す」方式に限定し、**個々の分岐を並べ替えていない**。
+判定順が変わらないことを構造的に保証するのが狙い。
+
+- `handleNormalModeInterrupt()` の11個の return はすべて「横取りして処理した」→ `return true`、
+  末尾に `return false` を追加。
+- `handlePendingSequence()` の41個の return も同様。入口で `pendingSequence` を空に戻す既存の挙動を
+  そのまま維持しているため、「どの分岐にも当たらなければ保留は破棄され、押されたキーは通常のキーとして
+  扱われる」という Vim 同等の落下挙動は変わらない。3打鍵目を待つ分岐（`gu`・`\a`・`SPC g` 等）が
+  `pendingSequence` を改めて設定してから true を返す点も同じ。
+- 順序に意味がある箇所（マクロ終了の `q` は `pendingSequence` の途中状態に関わらず最優先／
+  `*compile*`/`*run*` の Esc は通常の Esc 処理より前／`seq.equals("gu")` 等の3打鍵目の完了判定は
+  2打鍵目の遷移判定より先）は、それぞれの Javadoc に**なぜその順序でなければならないか**を明記した。
+
+### `enterVisualMode()` に隠れていた既存の非対称性
+
+`v` / `V` / `Ctrl+V` の3ケースを1メソッドに統合する際、**`V`（行選択）だけは `anchorCol` を
+更新しない**という既存の挙動があることが分かった（行選択は列を持たないため）。条件付きで維持し、
+コメントで理由を明記してある。この挙動が変わっていないことは、リフレクションで
+`anchorRow`/`anchorCol` を直接覗くプローブを**リファクタ前後の両バイナリで実行**し、
+3モードすべて同一の結果（`v`→列を更新 / `V`→据え置き / `Ctrl+V`→列を更新）であることを確認した。
+ここを「3つとも同じだろう」と単純化すると `V` の選択範囲が静かに壊れるので注意すること。
+
+### 8つの `*.pending` ケースの集約
+
+`macro.record` / `macro.play` / `goto` / `diag` / `screen.center` / `split` / `leader` / `filesearch` の
+8ケースはいずれも「`pendingSequence` と `statusMessage` を組で設定する」という同一形だったため、
+`beginSequence(sequence, indicator)` へ集約した。多打鍵シーケンスを追加するときはこれを呼ぶ。
+
+### 検証
+
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし（いずれも仕様判断未決のため修正禁止）。
+
+## ModalEditor 神クラス解体リファクタリング 第5弾（2026-07-27）— 疑似モード群
+
+第1弾の「次に着手すべき候補」3.（FILER/TELESCOPE/FILESEARCH/IMPORT_SELECT/CLASSPATH_INPUT の
+疑似モード群）を実施した。手順は第1〜4弾と同じ。
+
+### 計画時の仮説は外れた（重要な記録）
+
+第1弾では「5つの `processXxxKey()` はいずれも `KeymapRegistry` をバイパスする同型の構造なので、
+共通のインタフェース（例: `ModalScreen`）へ寄せられる可能性がある」と記録していたが、
+**実際に5つを読み比べたところ、この仮説は成り立たなかった**。実態は次の3種類に分かれる。
+
+| 種別 | 該当 | 形 |
+|---|---|---|
+| 1行入力プロンプト | `processSearchKey` / `processFileSearchKey` / `processClasspathInputKey` | Esc・Backspace・Enter・印字可能文字の4分岐だけ |
+| 一覧選択のみ | `processImportSelectKey` | 自由入力なし。Esc・Enter・上下移動だけ |
+| 入力＋一覧のハイブリッド | `processTelescopeKey` / `processFilerKey` | 打鍵ごとに絞り込み再実行、Ctrl+D 等の固有キーあり |
+
+これらを1つのインタフェースに押し込むと、実装クラスの大半のメソッドが空になるか、
+分岐フラグを持つことになり、かえって読みにくくなる。**共通インタフェース化は見送った。**
+代わりに、種別をまたいで実際に重複していた2つの塊だけを抽出した。
+
+### 実際に抽出したもの
+
+1. **`handleTextPromptKey(keyCode, keyChar, input, onCancel, onCommit)`** — 上表「1行入力プロンプト」の
+   3つは分岐の順序まで一致する完全な重複だった。画面ごとに違うのは「どの入力欄か」
+   「取り消したら何をするか」「確定したら何をするか」の3点だけなので、それだけを引数で受け取る。
+   3箇所にあった Backspace の空チェックが1箇所になった。
+   `\f`/`\g` の bang 処理は `runFileSearch()` として名前を付けて切り出した。
+2. **`isSelectNextKey` / `isSelectPrevKey`（Ctrl+N・Ctrl+P / ↓・↑）と
+   `isVimNextKey` / `isVimPrevKey`（j / k）** — 一覧移動キーの判定が5画面10箇所に重複していた。
+   **あえて2組に分けたのが要点**: `j`/`k` を移動キーに使えるのは自由入力のない画面だけで、
+   telescope や FILER の検索モードでは `j` は文字入力として扱わなければならない
+   （移動に割り当てると "j" を含む名前を検索できなくなる）。
+   分けたことで、どの画面が `j`/`k` を受け付けるかが呼び出し側の
+   `isSelectNextKey(...) || isVimNextKey(...)` という式そのもので読めるようになった。
+   従来はコメントを読まないと区別できなかった。
+
+### 検証
+
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし。
+
+### 次に着手すべき候補
+
+`ModalEditor` 側の大きな重複はこれで一巡した。残るのは別クラスになる。
+
+1. **`EditorCanvas`（1,863行・private フィールド119個・public setter 25個・draw 系メソッド17個）**。
+   `syncCanvas()` が毎キー入力ごとに25個の setter を26回呼ぶ構造で、描画状態の受け渡しを
+   値オブジェクト（`SelectionView`/`CompletionView`/`TelescopeView`/`DiagnosticsView` 等）へ
+   束ねる余地がある。ただし setter は `Main` と `EditorCanvasTest`(51)・`RobotKeyInputTest`・
+   `KeyboardSimulationTest` から使われる**公開API**であり、第1〜5弾で守ってきた
+   「公開シグネチャは変更しない」ルールと正面から衝突する。着手するなら、
+   旧 setter を委譲として残す移行期間を設けるか、ルールの一時的な緩和をユーザーと合意すること。
+2. **`Main`（1,282行）** — `PaneTree` / `GlobalKeyDispatcher` / `BuildRunner`(F10–12) /
+   `IndexBootstrap` へ分けられる。ただし GUI 配線は自動テストできない既知のギャップがあるため、
+   純粋ロジックを先に抜くこと。
+
+## EditorCanvas リファクタリング 第6弾（2026-07-27）— 描画状態の値オブジェクト化
+
+`EditorCanvas`（1,863行・private フィールド119個・public setter 25個）に着手した。
+**ユーザーの明示的な選択により「旧 setter を委譲として残す移行期間を設ける」方式を採用**している
+（第5弾末尾で提示した2案のうちの①）。これにより第1〜5弾の「公開シグネチャは変更しない」ルールは
+そのまま維持され、既存の呼び出し側（`Main`・`EditorCanvasTest`・`RobotKeyInputTest`・
+`KeyboardSimulationTest`・各 Preview）は1行も変えずに動く。
+
+### 抽出した3つの値オブジェクト（`dev.javatexteditor.ui`）
+
+| レコード | まとめた対象 | 旧API |
+|---|---|---|
+| `CompletionView` | 補完ポップアップの6フィールド | `setCompletionState(6引数)` → `setCompletionView()` へ委譲 |
+| `TelescopeView` | 候補一覧オーバーレイの6フィールド | `setTelescopeState(6引数)` → `setTelescopeView()` へ委譲 |
+| `SelectionView` | 選択範囲の3 boolean + 4座標 | 旧5メソッドは据え置き。`setSelectionView()` を新設 |
+
+`CompletionView` / `TelescopeView` は**内部表現もレコードに置き換えた**（フィールド6個→1個）。
+描画側にあった `completionActive && !completionLabels.isEmpty()` のような組み合わせ条件は
+`hasVisibleItems()`、範囲チェック付きの種別取得は `kindAt(i)` としてレコード側に集約した。
+
+### `SelectionView` だけ内部表現を置き換えていない理由（重要）
+
+`visualMode` / `visualLineMode` / `visualBlockMode` の3 boolean は本来
+`Kind`（NONE/CHARACTER/LINE/BLOCK）という1つの4状態の値であり、enum 化したくなる。
+**しかし内部表現の置き換えは見送った。**
+
+理由: 既存の `setVisualMode` / `setVisualLineMode` / `setVisualBlockMode` / `clearSelection` は
+互いに独立した部分更新として呼ばれており、`EditorCanvasTest` が**実際に順序を入れ替えて**
+呼んでいる（`setVisualLineMode(true)` → `setVisualMode(true)` の逆順、
+`clearSelection()` の後に `setVisualMode(false)` など）。
+これらを4状態の列挙へ写す変換は呼び出し順によって解釈が割れる。しかも当該テストは
+**描画が例外なく完了することしか確認しない smoke test** であり、誤った変換を検出できない。
+「変換を間違えても気づけない」状況で内部表現を変えるのは割に合わないと判断した。
+
+内部表現を enum 化する場合は、先に `EditorCanvasTest` を「描いた結果の選択範囲を検証する」
+テストへ作り替えること。それなしに着手してはならない。
+
+### 挙動同一性の確認方法
+
+`SelectionView` は上記のとおりテストが値を検証しないため、
+**`EditorCanvas` の選択関連7フィールドをリフレクションで直接覗くプローブを
+リファクタ前後の両バイナリで実行**し、NORMAL / `v` / `V` / `Ctrl+V` の4モードすべてで
+完全に同一（選択なし時に座標が -1 になる点まで一致）であることを確認した。
+第4弾の `anchorCol` 検証と同じ手法。
+
+なお、この種のプローブを書く際は **`main` の末尾に `System.exit(0)` を必ず入れること**。
+`EditorCanvas` のコンストラクタがステータス行アニメ用の Swing Timer を start するため、
+入れないと JVM が終了しない（REFACTORING_PLAN P-23 と同じ現象）。
+
+### 検証
+
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし。
+
+### 次に着手すべき候補
+
+1. ~~**`EditorCanvas` の残り**~~ → **✅ 第7弾で完了**（下記参照）
+2. **`Main`（1,282行）**: `PaneTree` / `GlobalKeyDispatcher` / `BuildRunner`(F10–12) /
+   `IndexBootstrap` へ分けられる。GUI 配線は自動テストできない既知のギャップがあるため、
+   純粋ロジックを先に抜くこと。
+
+## EditorCanvas リファクタリング 第7弾（2026-07-27）— 再描画のまとめとガター幅の集約
+
+第6弾末尾で「描画タイミングを変える変更はテストで検出できないため、着手するなら目視確認の手段を
+用意すること」と条件を付けていた項目。**その手段（ピクセル単位の描画比較）を先に用意してから**着手した。
+
+### 先に用意した検証手段: 描画結果のピクセルハッシュ比較
+
+`EditorCanvas` は `BufferedImage` へ直接 `paint()` できる（`EditorCanvasTest` と同じ方式で、
+Xvfb もディスプレイも不要）。これを使い、NORMAL / INSERT / VISUAL / VISUAL LINE / VISUAL BLOCK /
+COMMAND / SEARCH / DIAGNOSTICS / LIGHT+WRAP の9シナリオを描画してピクセルを SHA-256 で
+ハッシュ化するプローブを作り、**リファクタ前後の両バイナリで実行して完全一致を確認**した。
+
+**この種の検証を行う人が必ず踏む落とし穴が2つある。**
+
+1. **ステータス行は実行ごとに描画が変わる。** 歩行キャラクターのアニメーションが
+   `System.currentTimeMillis() - animStartMs` で位置を決めるため、同一ビルドでも実行のたびに
+   ハッシュが変わる。**本文領域だけ**（画像の下端48pxを除く）をハッシュ対象にすることで決定的になる
+   （同一ビルド3回で同一ハッシュになることを確認してから使うこと）。
+   コマンド行の内容はステータス行にあるため、必要なら `getCommandLineText()` で別途検証する。
+2. **`ModalEditor` の既定テーマは `DARK_MODE`、`EditorCanvas` 側の既定は `LIGHT_MODE`。**
+   `syncCanvas()` が前者を push するので、テーマ切替を検証するシナリオで `DARK_MODE` を
+   指定しても no-op になる。当初これに気づかず、別シナリオとハッシュが一致したことで発覚した。
+   テーマ差を見たいなら `LIGHT_MODE` を指定すること。
+
+### 実施した2件
+
+1. **`gutterWidthFor(charWidth)`** — 「診断が無ければ幅0、あればマーカー2セル分」というガター幅の
+   規則が本文描画・カーソル描画・折り返し計算の3箇所に同じ式で書かれていた。描画位置がずれないために
+   3箇所は必ず同じ値でなければならないため、1箇所に集約した。
+2. **再描画のまとめ（`batchUpdate`）** — 各 setter が個別に `repaint()` を呼ぶため、
+   `syncCanvas()`（1キー入力につき1度）が**10回**の再描画を予約していた。
+   `batchUpdate(Runnable)` を新設し、実行中は `updateBatchDepth` を立てて個々の setter は
+   `requestRepaint()`（まとめ中は予約しない）を呼ぶようにした。`syncCanvas()` の本体を
+   これで包み、**1キー入力あたりの再描画予約が 10回 → 1回**になった（計測プローブで実測）。
+   - Swing は次の描画までに予約をまとめるため**表示結果は元から同じ**であり、これは性能改善ではなく
+     「1回の更新は1回の再描画」という意図をコードに表すための変更である。
+   - ステータス行アニメの `repaintStatusLine()` は領域指定版 `repaint(x,y,w,h)` を使うため
+     この仕組みとは無関係（アニメは従来どおり30fpsで動く）。
+   - `syncCanvas()` の本体はすべてラムダ内に入るため、ローカル変数のキャプチャ問題は生じない。
+
+### 検証
+
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし。
+加えて上記のピクセルハッシュ9シナリオが前後で完全一致。
+
+### 次に着手すべき候補
+
+~~**`Main`（1,282行）**~~ → **✅ 第8弾で純粋ロジック部分を完了**（下記参照）。
+`EditorCanvas` 側に残る改善余地としては `paintContent()` から17個の draw 系メソッドへの
+分岐の整理があるが、描画順序の入れ替えは上記ピクセル比較で検出できるので、
+着手するならその手段を再利用すること。
+
+## Main リファクタリング 第8弾（2026-07-27）— 純粋ロジックの切り出し
+
+第7弾末尾の指針「GUI 配線は自動テストできないため、**純粋ロジックを先に抜くこと**」に従い、
+`Main`（1,282行）から Swing に依存しない3つの塊だけを抜いた。
+`Main` は 1,282行 → 1,189行。
+
+### 抽出した3クラス（すべて新規テスト付き）
+
+| クラス | 内容 | テスト |
+|---|---|---|
+| `PaneTree` | 画面分割のツリー構造（`PaneNode`/`Leaf`/`Split`）と `allLeaves`/`splitLeaf`/`removeLeaf` | `PaneTreeTest`（14） |
+| `ui.DisplayMetrics` | 起動時の拡大率・フォントセル・ウィンドウサイズの算出 | `DisplayMetricsTest`（10） |
+| `BufferRegistry` | 開いたファイルの一覧（SPC+b / Ctrl+U / Ctrl+P の巡回対象） | `BufferRegistryTest`（8） |
+
+**`PaneTree` の抽出が最も価値が大きい**: 分割・ペインクローズのロジックは
+「GUI 依存だからテストできない」と見なされ**これまでテストが1件も無かった**が、
+実際には `JSplitPane` を組み立てるのは `Main.buildComponent()` の役目であり、
+ツリー操作自体は Swing に一切依存しない純粋ロジックだった。
+操作はどれもリーフの中身を見ず参照の同一性だけで対象を探すため、
+`new Leaf(null, null)` を並べるだけで構造を検証できる。
+
+`DisplayMetrics` も同様に「画面情報を調べる処理」（`Main` に残した）と
+「そこから倍率とサイズを計算する処理」（切り出した）が混ざっていたため、
+分けることで実ディスプレイなしに検証できるようになった。
+
+### 意図的に統合しなかったもの（重要）
+
+**拡張子による言語判定が3種類あるが、これらは統合してはならない。**
+一見重複に見えるが、対象とする拡張子の集合が用途ごとに異なる。
+
+| 判定 | 対象拡張子 | 用途 |
+|---|---|---|
+| `Main.isCBuffer` | `.c` `.h` のみ | F10/F11/F12 のCツールチェーン振り分け・C診断 |
+| `ModalEditor.isCFilePath` | `.c` `.h` `.cc` `.cpp` `.cxx` `.hpp` `.hh` `.hxx` | Shift+K の定義ジャンプ |
+| `ui.SourceLanguage.detect` | 上と同じ広い集合 | 構文ハイライト |
+
+統合すると C++ ファイルが C コンパイラへ回される等、挙動が変わる。
+
+### 手を付けなかった箇所
+
+F10/F11/F12 のビルド・実行群（`triggerCompile`/`doCompile`/`runJavaClass`/
+`runCExecutable`/`startRunOutputReader` 等、約230行）は `Main` の static 状態
+（`PROJECT_BUILDER`・`runningProcess`・`pendingRunExtraClasspath`）と EDT ディスパッチに
+深く結びついており、切り出しても子プロセス起動と GUI 反映は自動テストできない
+（既知のギャップ）。純粋ロジックが尽きた時点で止める方針に従い、今回は対象外とした。
+同様に `KeyboardFocusManager` のグローバルディスパッチャ・`refreshCallbacks` の配線も残している。
+
+### 検証
+
+全97テストクラス（新規3クラス含む）を個別JVMで実行し、既存94クラスの結果が
+着手前ベースラインと `diff` で完全一致。既知FAIL は `ScrollTest` 2件・
+`ModalEditorTest` 1件のみで増減なし。
+加えて描画結果のピクセルハッシュ（9シナリオ）が変更前と完全一致することを確認した。
