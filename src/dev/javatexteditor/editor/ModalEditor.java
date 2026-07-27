@@ -559,7 +559,23 @@ public class ModalEditor {
     // NORMALモード処理
     // -------------------------------------------------------------------------
 
-    private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+    /**
+     * 通常のキー処理より先に横取りしなければならないキーを処理する。
+     *
+     * <p>ここに並ぶのはいずれも「いま画面に何が出ているか」で意味が決まるキーである。
+     * 疑似バッファ（jdk-source・{@code *cd候補*}・{@code *e候補*}・{@code *grep*}・
+     * ファイル名検索結果・{@code *compile*}/{@code *run*}）を閉じたり、その行へジャンプしたりする
+     * Enter / q / Esc と、バッファ切り替えの Ctrl+U / Ctrl+P、そしてマクロ記録終了の q。
+     *
+     * <p><b>並び順には意味がある。</b>とくにマクロ記録終了の q は、多打鍵シーケンス
+     * （{@code pendingSequence}）の途中状態に関わらず最優先で効く必要があり、
+     * {@code *compile*}/{@code *run*} の Esc は「保留シーケンスを破棄する」通常の Esc 処理より
+     * 前になければならない。並べ替える場合は vim-macro-recording スキルと
+     * CLAUDE.md の該当節を確認すること。
+     *
+     * @return 横取りして処理したら true（呼び出し側は直ちに return する）
+     */
+    private boolean handleNormalModeInterrupt(int keyCode, char keyChar, int modifiers) {
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
 
         // Ctrl+U: :bprev相当 / Ctrl+P: :bnext相当。
@@ -576,7 +592,7 @@ public class ModalEditor {
             } else {
                 statusMessage = "これ以上前のバッファはありません";
             }
-            return;
+            return true;
         }
         if (ctrlDown && keyCode == KeyEvent.VK_P) {
             if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
@@ -586,45 +602,45 @@ public class ModalEditor {
             } else {
                 statusMessage = "これ以上次のバッファはありません";
             }
-            return;
+            return true;
         }
 
         // jdk-source 疑似バッファ: q で元バッファに戻る
         if (inJdkSourceBuffer && keyChar == 'q') {
             closeJdkSourceBuffer();
-            return;
+            return true;
         }
 
         // *cd候補* 疑似バッファ: Enter で選択、q でキャンセルして元バッファへ戻る
         if (cdSelectionActive && keyCode == KeyEvent.VK_ENTER) {
             applySelectedCdCandidate();
-            return;
+            return true;
         }
         if (cdSelectionActive && keyChar == 'q') {
             cancelCdSelection();
-            return;
+            return true;
         }
 
         // *e候補* 疑似バッファ: Enter で選択、q でキャンセルして元バッファへ戻る
         if (edSelectionActive && keyCode == KeyEvent.VK_ENTER) {
             applySelectedEditCandidate();
-            return;
+            return true;
         }
         if (edSelectionActive && keyChar == 'q') {
             cancelEditSelection();
-            return;
+            return true;
         }
 
         // grep 結果バッファ: Enter でその行の結果ファイルへジャンプ
         if (grepResults != null && keyCode == KeyEvent.VK_ENTER) {
             jumpToGrepResult();
-            return;
+            return true;
         }
 
         // ファイル名検索結果バッファ: Enter でそのファイルを開く
         if (fileNameResults != null && keyCode == KeyEvent.VK_ENTER) {
             jumpToFileNameResult();
-            return;
+            return true;
         }
 
         // マクロ記録中の q: 多打鍵シーケンス（pendingSequence）の途中状態に関わらず
@@ -632,14 +648,20 @@ public class ModalEditor {
         if (macros.isRecording() && keyChar == 'q') {
             stopMacroRecording();
             pendingSequence = "";
-            return;
+            return true;
         }
 
         // *compile* / *run* 疑似バッファ: Esc で表示前の元バッファに戻る
         if (outputBufferActive && keyCode == KeyEvent.VK_ESCAPE) {
             closeOutputBuffer();
-            return;
+            return true;
         }
+        return false;
+    }
+
+    private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+        // 画面に出ているものによって意味が決まる割り込みキーを先に処理する
+        if (handleNormalModeInterrupt(keyCode, keyChar, modifiers)) return;
 
         // Esc: NORMALモードでは既定では何も割り当てられていないが、
         // 連続2回押すと検索ハイライトを強制的にクリアする。
