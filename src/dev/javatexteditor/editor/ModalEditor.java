@@ -289,19 +289,15 @@ public class ModalEditor {
     private List<String> cdCandidates = List.of(); // 候補ディレクトリ名（末尾 "/" は含まない）
     private String cdCandidateParentPart = ""; // 補完対象パスのうち末尾ディレクトリ名より前の部分（区切り文字含む）
     private boolean cdSelectionActive = false; // true の間は *cd候補* 疑似バッファを表示中
-    private UndoablePieceTable cdSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
-    private String cdSavedFilePath = null;
-    private int cdSavedCursorRow = 0;
-    private int cdSavedCursorCol = 0;
+    /** *cd候補* 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash cdStash = new PseudoBufferStash();
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
     // :e タブ補完状態（:cd と同じく一時退避→復元パターン）
     private List<String> edCandidates = List.of(); // 候補ファイル/ディレクトリ名（末尾 "/" はディレクトリのみ）
     private String edCandidateParentPart = "";
     private boolean edSelectionActive = false;
-    private UndoablePieceTable edSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
-    private String edSavedFilePath = null;
-    private int edSavedCursorRow = 0;
-    private int edSavedCursorCol = 0;
+    /** *e候補* 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash edStash = new PseudoBufferStash();
     private String edSavedCommandText = "";
     // filer モード状態（\f/\g/telescope と同じ疑似バッファ表示。saved* は元バッファの一時退避）
     private List<DirEntry> filerEntries = List.of();
@@ -1607,10 +1603,7 @@ public class ModalEditor {
      * 現在編集中のバッファは cdSaved* に退避し、Enter で選択 / q でキャンセルすると復元する。
      */
     private void openCdCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
-        cdSavedBuffer = buffer;
-        cdSavedFilePath = currentFilePath;
-        cdSavedCursorRow = cursorRow;
-        cdSavedCursorCol = cursorCol;
+        saveToStash(cdStash);
         cdSavedCommandText = originalCmd;
         cdCandidates = candidates;
         cdCandidateParentPart = parentPart;
@@ -1658,14 +1651,9 @@ public class ModalEditor {
     }
 
     private void restoreCdSavedBuffer() {
-        buffer = cdSavedBuffer != null ? cdSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = cdSavedFilePath;
-        cursorRow = cdSavedCursorRow;
-        cursorCol = cdSavedCursorCol;
+        restoreFromStash(cdStash);
         resetSearchAndResultState();
         cdSelectionActive = false;
-        cdSavedBuffer = null;
-        cdSavedFilePath = null;
         cdSavedCommandText = "";
     }
 
@@ -1736,10 +1724,7 @@ public class ModalEditor {
     }
 
     private void openEditCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
-        edSavedBuffer = buffer;
-        edSavedFilePath = currentFilePath;
-        edSavedCursorRow = cursorRow;
-        edSavedCursorCol = cursorCol;
+        saveToStash(edStash);
         edSavedCommandText = originalCmd;
         edCandidates = candidates;
         edCandidateParentPart = parentPart;
@@ -1796,14 +1781,9 @@ public class ModalEditor {
     }
 
     private void restoreEditSavedBuffer() {
-        buffer = edSavedBuffer != null ? edSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = edSavedFilePath;
-        cursorRow = edSavedCursorRow;
-        cursorCol = edSavedCursorCol;
+        restoreFromStash(edStash);
         resetSearchAndResultState();
         edSelectionActive = false;
-        edSavedBuffer = null;
-        edSavedFilePath = null;
         edSavedCommandText = "";
     }
 
