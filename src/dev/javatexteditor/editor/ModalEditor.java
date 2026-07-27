@@ -40,7 +40,6 @@ import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
 import dev.javatexteditor.ui.Theme;
 import java.awt.event.KeyEvent;
-import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -1578,7 +1577,7 @@ public class ModalEditor {
             return; // cd 以外のコマンドでは補完しない
         }
 
-        String expanded = expandHome(pathStr);
+        String expanded = UserPathResolver.expandHome(pathStr);
         int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
         String parentPart = sepIdx >= 0 ? expanded.substring(0, sepIdx + 1) : "";
         String prefix = sepIdx >= 0 ? expanded.substring(sepIdx + 1) : expanded;
@@ -1721,7 +1720,7 @@ public class ModalEditor {
             return;
         }
 
-        String expanded = expandHome(pathStr);
+        String expanded = UserPathResolver.expandHome(pathStr);
         int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
         String parentPart = sepIdx >= 0 ? expanded.substring(0, sepIdx + 1) : "";
         String prefix = sepIdx >= 0 ? expanded.substring(sepIdx + 1) : expanded;
@@ -1972,12 +1971,7 @@ public class ModalEditor {
      * 追加クラスパス入力（F10/F11/F12）専用。resolveRelativeToProjectRoot() の getBuildRoot() 版。
      */
     private String resolveRelativeToBuildRoot(String pathSpec) {
-        String expanded = expandHome(pathSpec);
-        Path target = Path.of(expanded);
-        if (target.isAbsolute()) {
-            return target.toString();
-        }
-        return getBuildRoot().resolve(expanded).toAbsolutePath().toString();
+        return UserPathResolver.resolveAgainst(getBuildRoot(), pathSpec);
     }
 
     // -------------------------------------------------------------------------
@@ -2960,12 +2954,7 @@ public class ModalEditor {
      * ファイルを開く経路がいずれも絶対パスを currentFilePath に格納するのと形式を揃えるため）。
      */
     private String resolveRelativeToProjectRoot(String pathSpec) {
-        String expanded = expandHome(pathSpec);
-        Path target = Path.of(expanded);
-        if (target.isAbsolute()) {
-            return target.toString();
-        }
-        return getProjectRoot().resolve(expanded).toAbsolutePath().toString();
+        return UserPathResolver.resolveAgainst(getProjectRoot(), pathSpec);
     }
 
     /**
@@ -4820,23 +4809,9 @@ public class ModalEditor {
         cursorCol = 0;
     }
 
-    /**
-     * 先頭の {@code ~} をホームディレクトリに展開する。OSに関係なく {@code ~}・{@code ~/...}・{@code ~\...} を認識する。
-     * {@code Path.resolve()} は絶対パスを渡すとそれをそのまま返す仕様のため、展開後は resolve に委ねてよい。
-     */
-    private static String expandHome(String pathStr) {
-        if (pathStr.equals("~")) {
-            return System.getProperty("user.home", "");
-        }
-        if (pathStr.startsWith("~/") || pathStr.startsWith("~\\")) {
-            return System.getProperty("user.home", "") + File.separator + pathStr.substring(2);
-        }
-        return pathStr;
-    }
-
     private void changeDirectory(String pathStr) {
         try {
-            pathStr = expandHome(pathStr);
+            pathStr = UserPathResolver.expandHome(pathStr);
             Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
             if (changeWdCallback == null) {
                 statusMessage = "E: working directory handler not set";
