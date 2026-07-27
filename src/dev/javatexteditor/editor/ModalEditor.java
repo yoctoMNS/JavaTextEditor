@@ -350,15 +350,11 @@ public class ModalEditor {
 
     // 入力補完状態（INSERT モード内で管理）
     private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
-    private boolean completionActive = false;
-    private java.util.List<dev.javatexteditor.analysis.CompletionItem> completionItems = java.util.List.of();
-    private int completionSelectedIdx = 0;
-    private String completionPrefix = "";
+    private final CompletionPopupState completion = new CompletionPopupState();
     // 単語補完（Alt+/）: 作業ディレクトリ配下の全単語・クラス名・変数名等から補完する。
     // Ctrl+N は INSERT モードで Emacs 式「カーソル下移動」に割り当て済み（keymap-conflict-resolution
     // スキル参照）のため、単語補完のトリガーは Alt+/ を使う。
     private dev.javatexteditor.analysis.WordIndex wordIndex = null;
-    private boolean completionIsWordMode = false; // true の間は recheckCompletion() が wordIndex を使う
     // Cバッファの入力補完（Ctrl+Space/Alt+/）向け: #include しているヘッダの識別子キャッシュ。
     // #include 行の構成（cHeaderWordsCacheKey）が変わらない限り再走査しない
     // （includedHeaderWords() はディスク走査を伴うため、通常のタイピングのたびに毎回呼ぶと重い）。
@@ -935,7 +931,7 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
-        // Ctrl+Space → 補完トリガー（completionActive 状態に関わらず再トリガー）
+        // Ctrl+Space → 補完トリガー（ポップアップが開いていても再トリガー）
         if ((modifiers & KeyEvent.CTRL_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SPACE) {
             triggerCompletion();
             syncCanvas();
@@ -951,36 +947,24 @@ public class ModalEditor {
         }
 
         // 補完ポップアップが開いているときのナビゲーションキー処理
-        if (completionActive) {
+        if (completion.isActive()) {
             boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
                 && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
-            if (ctrlOnly && keyCode == KeyEvent.VK_N) {
-                completionSelectedIdx = Math.min(completionSelectedIdx + 1,
-                                                 completionItems.size() - 1);
+            // 次候補へ: Ctrl+N（Emacs式）と ↓ は同じ意味
+            if ((ctrlOnly && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
+                completion.selectNext();
                 syncCompletionCanvas();
                 syncCanvas();
                 return;
             }
-            if (ctrlOnly && keyCode == KeyEvent.VK_P) {
-                completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
+            // 前候補へ: Ctrl+P（Emacs式）と ↑ は同じ意味
+            if ((ctrlOnly && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
+                completion.selectPrevious();
                 syncCompletionCanvas();
                 syncCanvas();
                 return;
             }
             switch (keyCode) {
-                case KeyEvent.VK_DOWN -> {
-                    completionSelectedIdx = Math.min(completionSelectedIdx + 1,
-                                                     completionItems.size() - 1);
-                    syncCompletionCanvas();
-                    syncCanvas();
-                    return;
-                }
-                case KeyEvent.VK_UP -> {
-                    completionSelectedIdx = Math.max(completionSelectedIdx - 1, 0);
-                    syncCompletionCanvas();
-                    syncCanvas();
-                    return;
-                }
                 case KeyEvent.VK_TAB, KeyEvent.VK_ENTER -> {
                     applyCompletion();
                     syncCanvas();
@@ -991,6 +975,7 @@ public class ModalEditor {
                     syncCanvas();
                     return;
                 }
+                default -> { /* それ以外のキーは通常の INSERT 処理へ落とす */ }
             }
         }
 
@@ -1238,32 +1223,24 @@ public class ModalEditor {
     /** 補完候補リストを有効化して canvas に反映する（4つのトリガ/再クエリ経路の共通末尾処理）。 */
     private void activateCompletion(String prefix,
             java.util.List<dev.javatexteditor.analysis.CompletionItem> items, boolean wordMode) {
-        completionPrefix      = prefix;
-        completionItems       = items;
-        completionSelectedIdx = 0;
-        completionActive      = true;
-        completionIsWordMode  = wordMode;
+        completion.openWith(prefix, items, wordMode);
         syncCompletionCanvas();
     }
 
     /** 補完ポップアップを閉じる。 */
     private void dismissCompletion() {
-        if (!completionActive) return;
-        completionActive = false;
-        completionItems  = java.util.List.of();
-        completionPrefix = "";
-        completionIsWordMode = false;
+        if (!completion.close()) return;
         syncCompletionCanvas();
     }
 
     /**
      * 文字を挿入・削除した後に補完候補を再クエリする。
      * インデックス未完了・候補なし・プレフィックスなしのときはサイレントに閉じる。
-     * completionActive の状態に関わらず常に呼んでよい。
-     * completionIsWordMode に応じて単語補完/シンボル補完のどちらを再クエリするか切り替える。
+     * ポップアップが開いているかどうかに関わらず常に呼んでよい。
+     * ポップアップの wordMode に応じて単語補完/シンボル補完のどちらを再クエリするか切り替える。
      */
     private void recheckCompletion() {
-        if (completionIsWordMode) {
+        if (completion.isWordMode()) {
             recheckWordCompletion();
             return;
         }
@@ -1272,15 +1249,15 @@ public class ModalEditor {
         if (!classReady && !wordReady) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
-            if (completionActive) dismissCompletion();
+            if (completion.isActive()) dismissCompletion();
             return;
         }
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryMergedCompletion(prefix);
         if (items.isEmpty()) {
-            if (completionActive) dismissCompletion();
+            if (completion.isActive()) dismissCompletion();
             return;
         }
-        // このメソッドは冒頭の completionIsWordMode ガードにより wordMode=false の文脈でしか到達しない
+        // このメソッドは冒頭の isWordMode() ガードにより wordMode=false の文脈でしか到達しない
         activateCompletion(prefix, items, false);
     }
 
@@ -1299,15 +1276,14 @@ public class ModalEditor {
             dismissCompletion();
             return;
         }
-        // このメソッドに到達する時点で completionIsWordMode == true（recheckCompletion 経由）
+        // このメソッドに到達する時点で wordMode == true（recheckCompletion 経由）
         activateCompletion(prefix, items, true);
     }
 
     /** 現在選択中の補完候補をバッファに適用する。 */
     private void applyCompletion() {
-        if (!completionActive || completionItems.isEmpty()) return;
-        dev.javatexteditor.analysis.CompletionItem item =
-            completionItems.get(completionSelectedIdx);
+        dev.javatexteditor.analysis.CompletionItem item = completion.selectedItem();
+        if (item == null) return;
         String label = item.label();
 
         // カーソル前の識別子プレフィックスを削除してラベルを挿入
@@ -1348,17 +1324,17 @@ public class ModalEditor {
     /** 補完状態を EditorCanvas に反映する。 */
     private void syncCompletionCanvas() {
         if (canvas == null) return;
-        if (!completionActive || completionItems.isEmpty()) {
+        if (completion.hasNoVisibleItems()) {
             canvas.setCompletionState(false,
                 java.util.List.of(), java.util.List.of(), 0, 0, 0);
             return;
         }
-        java.util.List<String> labels = completionItems.stream()
+        java.util.List<String> labels = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::label).toList();
-        java.util.List<String> kinds = completionItems.stream()
+        java.util.List<String> kinds = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::kind).toList();
         canvas.setCompletionState(true, labels, kinds,
-            completionSelectedIdx, cursorRow, cursorCol);
+            completion.selectedIdx(), cursorRow, cursorCol);
     }
 
     private static final java.util.Set<Character> CLOSING_PAIRS =
@@ -5062,8 +5038,8 @@ public class ModalEditor {
     public boolean isBinaryMode()         { return mode == Mode.BINARY; }
     public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
-    public boolean isCompletionActive()   { return completionActive; }
-    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completionItems; }
+    public boolean isCompletionActive()   { return completion.isActive(); }
+    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completion.items(); }
     public boolean isCdSelectionActive()  { return cdSelectionActive; }
     public List<String> getCdCandidates() { return cdCandidates; }
     public boolean isEditSelectionActive() { return edSelectionActive; }
