@@ -9,6 +9,7 @@ import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.SourceAnalyzer;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.EditorCanvas;
+import dev.javatexteditor.ui.FontChoice;
 import dev.javatexteditor.ui.MiscFixedBold9x15;
 import dev.javatexteditor.ui.Theme;
 import java.awt.Color;
@@ -702,7 +703,8 @@ public class Main {
             Leaf cur     = active[0];
             Leaf newLeaf = createLeaf(cur.editor().getText(),
                                       cur.editor().getCurrentFilePath(),
-                                      cur.canvas().getCellW(), cur.canvas().getCellH());
+                                      cur.canvas().getCellW(), cur.canvas().getCellH(),
+                                      cur.editor().getTheme(), cur.editor().getFontChoice());
             shareBufferWithSplit(cur, newLeaf);
             root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
             active[0] = newLeaf;
@@ -714,7 +716,8 @@ public class Main {
             Leaf cur     = active[0];
             Leaf newLeaf = createLeaf(cur.editor().getText(),
                                       cur.editor().getCurrentFilePath(),
-                                      cur.canvas().getCellW(), cur.canvas().getCellH());
+                                      cur.canvas().getCellW(), cur.canvas().getCellH(),
+                                      cur.editor().getTheme(), cur.editor().getFontChoice());
             shareBufferWithSplit(cur, newLeaf);
             root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
             active[0] = newLeaf;
@@ -735,9 +738,9 @@ public class Main {
         newLeaf.editor().setCursor(source.editor().getCursorRow(), source.editor().getCursorCol());
     }
 
-    /** 新しいリーフを生成してコールバックを設定する（既定のフォントセルサイズを使用）。 */
+    /** 新しいリーフを生成してコールバックを設定する（既定のフォントセルサイズ・テーマ・フォントを使用）。 */
     private static Leaf createLeaf(String text, String path) {
-        return createLeaf(text, path, initialCellW, initialCellH);
+        return createLeaf(text, path, initialCellW, initialCellH, Theme.DARK_MODE, FontChoice.MISC_FIXED);
     }
 
     /**
@@ -746,10 +749,24 @@ public class Main {
      * 独立に変更可能。あくまで「分割直後の初期値」を揃えるだけ）。
      */
     private static Leaf createLeaf(String text, String path, int cellW, int cellH) {
+        return createLeaf(text, path, cellW, cellH, Theme.DARK_MODE, FontChoice.MISC_FIXED);
+    }
+
+    /**
+     * 新しいリーフを生成してコールバックを設定する。:split/:vsplit時は分割元ペインの
+     * カラーテーマ・フォント（:color/:font コマンドで変更済みの値）も引き継ぐ
+     * （cellW/cellHの引き継ぎと同じ「分割直後の初期値を揃える」考え方。以後は各ペインで
+     * 独立に :color/:font を実行できる）。
+     */
+    private static Leaf createLeaf(String text, String path, int cellW, int cellH,
+                                    Theme theme, FontChoice fontChoice) {
         EditorCanvas canvas = new EditorCanvas();
         canvas.setInitialCellSize(cellW, cellH);
-        canvas.setTheme(Theme.DARK_MODE);
+        canvas.setTheme(theme);
+        canvas.setFontChoice(fontChoice);
         ModalEditor editor = new ModalEditor(text, path, canvas);
+        editor.setTheme(theme);
+        editor.setFontChoice(fontChoice);
         setupCompileAnalysis(editor, canvas);
         // IME（日本語入力等）が確定した文字列を、KEY_TYPEDの1文字コミットと同じ経路で挿入する。
         // 変換中の未確定文字列自体は EditorCanvas 側でカーソル位置にオーバーレイ表示される。

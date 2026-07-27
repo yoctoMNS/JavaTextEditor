@@ -38,7 +38,7 @@ import java.awt.image.BufferedImage;
  * 1グリフ = 2バイト/行 × 15行 = 30バイト（幅9pxは(9+7)/8=2バイトに切り上げて
  * パディングされ、MSBが左端ピクセル）。
  */
-public final class MiscFixedBold9x15 {
+public final class MiscFixedBold9x15 implements MonoFont {
 
     public static final int BASE_CELL_W = 9;
     public static final int BASE_CELL_H = 15;

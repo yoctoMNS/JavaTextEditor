@@ -36,6 +36,8 @@ import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.EditorCanvas;
+import dev.javatexteditor.ui.FontChoice;
+import dev.javatexteditor.ui.Theme;
 import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
@@ -242,6 +244,13 @@ public class ModalEditor {
     // grep/telescope/FILER/:e/:w は従来どおり getProjectRoot()（:cd 現在ディレクトリ）を使う。
     // セッション中のみ保持し永続化しない（起動時 null）。上書きは再度 :pr を打つだけでよい。
     private Path projectRootOverride = null;
+    // :color コマンドで切り替えるカラーテーマ。既定はダークモード（従来のMain.java側の
+    // 固定値と同じ）。canvas への実際の反映は syncCanvas() が毎回行う（EditorCanvas.setTheme()
+    // 側で値が変わっていない場合はグリフキャッシュを再構築しないガードを持つため、
+    // 未変更時に呼んでも1キー入力ごとの負荷は増えない）。
+    private Theme theme = Theme.DARK_MODE;
+    // :font コマンドで切り替える半角ASCIIフォント。既定はMiscFixed（:font 0）。
+    private FontChoice fontChoice = FontChoice.MISC_FIXED;
     private final FileNameSearcher fileNameSearcher = new FileNameSearcher();
     private final StringBuilder fileSearchBuffer = new StringBuilder();
     private FileSearchType fileSearchType = FileSearchType.NAME;
@@ -2524,6 +2533,10 @@ public class ModalEditor {
             wrapEnabled = true;
         } else if (cmd.equals("nowrap")) {
             wrapEnabled = false;
+        } else if (cmd.startsWith("font ")) {
+            applyFontCommand(cmd.substring(5).trim());
+        } else if (cmd.startsWith("color ")) {
+            applyColorCommand(cmd.substring(6).trim());
         } else if (cmd.equals("pwd")) {
             statusMessage = getProjectRoot().toString();
         } else if (cmd.equals("pr")) {
@@ -2566,6 +2579,38 @@ public class ModalEditor {
             jumpToLineNumber(Integer.parseInt(cmd));
         } else {
             statusMessage = "E: unknown command '" + cmd + "'";
+        }
+    }
+
+    /**
+     * :font 0（MiscFixed、既定）/ :font 1（IBM Plex Mono）で半角ASCIIフォントを切り替える。
+     * 実際の描画への反映は syncCanvas() の canvas.setFontChoice() 経由。
+     */
+    private void applyFontCommand(String arg) {
+        if (arg.equals("0")) {
+            fontChoice = FontChoice.MISC_FIXED;
+            statusMessage = "font: Misc Fixed";
+        } else if (arg.equals("1")) {
+            fontChoice = FontChoice.IBM_PLEX_MONO;
+            statusMessage = "font: IBM Plex Mono";
+        } else {
+            statusMessage = "E: usage :font 0 (Misc Fixed) | :font 1 (IBM Plex Mono)";
+        }
+    }
+
+    /**
+     * :color 0（ダークモード）/ :color 1（ライトモード）でカラーテーマを切り替える。
+     * 実際の描画への反映は syncCanvas() の canvas.setTheme() 経由。
+     */
+    private void applyColorCommand(String arg) {
+        if (arg.equals("0")) {
+            theme = Theme.DARK_MODE;
+            statusMessage = "color: dark mode";
+        } else if (arg.equals("1")) {
+            theme = Theme.LIGHT_MODE;
+            statusMessage = "color: light mode";
+        } else {
+            statusMessage = "E: usage :color 0 (dark) | :color 1 (light)";
         }
     }
 
@@ -4984,6 +5029,11 @@ public class ModalEditor {
             canvas.setLanguage(dev.javatexteditor.ui.SourceLanguage.detect(currentFilePath));
             canvas.setText(canvasCachedText, canvasCachedLines);
             canvas.setWrapEnabled(wrapEnabled);
+            // :font/:color コマンドで変更された値を反映する。値が変化していない場合は
+            // EditorCanvas.setTheme()/setFontChoice() 側のガードによりグリフキャッシュの
+            // 破棄は起きないため、1キー入力ごとに呼んでも問題ない。
+            canvas.setTheme(theme);
+            canvas.setFontChoice(fontChoice);
             java.util.Set<Integer> errorLines;
             if (outputErrorLinesOwner == buffer) {
                 errorLines = outputErrorLines;
@@ -5072,6 +5122,12 @@ public class ModalEditor {
     public String getText()            { return buffer.getText(); }
     /** テスト用: syncCanvas() のテキストキャッシュが再構築された回数（軽量化 Phase 2）。 */
     public long getCanvasTextRebuildCount() { return canvasTextRebuildCount; }
+    /** :color コマンドで切り替える現在のカラーテーマ。:split で新ペインへ引き継ぐ際にも使う。 */
+    public Theme getTheme() { return theme; }
+    public void setTheme(Theme theme) { this.theme = theme; }
+    /** :font コマンドで切り替える現在のフォント。:split で新ペインへ引き継ぐ際にも使う。 */
+    public FontChoice getFontChoice() { return fontChoice; }
+    public void setFontChoice(FontChoice fontChoice) { this.fontChoice = fontChoice; }
     public boolean isWrapEnabled()     { return wrapEnabled; }
     public int getCursorRow()          { return cursorRow; }
     public int getCursorCol()          { return cursorCol; }
