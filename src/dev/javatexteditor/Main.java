@@ -7,6 +7,7 @@ import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.ImportSuggester;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.SourceAnalyzer;
+import dev.javatexteditor.app.SetupBootstrap;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.DisplayMetrics;
 import dev.javatexteditor.ui.EditorCanvas;
@@ -28,7 +29,6 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -50,7 +50,8 @@ public class Main {
 
     public static void main(String[] args) {
         // セットアップ未完了なら自動実行（バックグラウンド）
-        runSetupIfNeeded();
+        // Main.class を渡すのは、切り出し前と同じ基準でパスを解決するため（SetupBootstrap の Javadoc 参照）
+        SetupBootstrap.runIfNeeded(Main.class);
 
         // プロジェクトルートを引数のファイルの親ディレクトリか user.dir から決定
         String initialPath = (args.length > 0) ? args[0] : null;
@@ -1099,91 +1100,5 @@ public class Main {
             return "Java Text Editor — ~/" + rel.toString().replace('\\', '/');
         } catch (IllegalArgumentException ignored) {}
         return "Java Text Editor — " + wd;
-    }
-
-    /**
-     * lib/src.zip または lib/openjdk-native/ が存在しない場合、
-     * セットアップスクリプトをバックグラウンドスレッドで自動実行する。
-     * エディタの起動は待たずに続行する。
-     */
-    private static void runSetupIfNeeded() {
-        Path libDir = resolveLibDir();
-        boolean hasSrcZip    = Files.exists(libDir.resolve("src.zip"));
-        boolean hasNativeSrc = Files.isDirectory(libDir.resolve("openjdk-native"));
-        if (hasSrcZip && hasNativeSrc) return;
-
-        Thread.ofVirtual().name("setup-auto").start(() -> {
-            String os = System.getProperty("os.name", "").toLowerCase();
-            boolean isWindows = os.contains("win");
-            Path scriptDir = resolveScriptDir();
-            Path script = isWindows
-                ? scriptDir.resolve("setup.bat")
-                : scriptDir.resolve("setup.sh");
-
-            if (!Files.exists(script)) {
-                System.err.println("[setup] Script not found: " + script);
-                return;
-            }
-
-            System.out.println("[setup] Running " + script.getFileName() + " in background...");
-            try {
-                ProcessBuilder pb = isWindows
-                    ? new ProcessBuilder("cmd.exe", "/c", script.toString())
-                    : new ProcessBuilder("bash", script.toString());
-                pb.directory(scriptDir.getParent().toFile());
-                pb.redirectErrorStream(true);
-                Process proc = pb.start();
-                // 子プロセス（cmd.exe/xcopy/git 等）の出力はOSのネイティブエンコーディング
-                // （Windowsではコンソールのコードページ、日本語版なら通常 CP932）でバイト列化される。
-                // JDK 18+ の既定文字セットは JEP 400 により常に UTF-8 になっているため、
-                // InputStreamReader をそのまま使うと非ASCII文字（日本語のシステムメッセージ等）が
-                // 文字化けする。native.encoding（無ければ sun.jnu.encoding）で明示的にデコードする。
-                String nativeEncodingName = System.getProperty("native.encoding",
-                    System.getProperty("sun.jnu.encoding", "UTF-8"));
-                java.nio.charset.Charset nativeEncoding;
-                try {
-                    nativeEncoding = java.nio.charset.Charset.forName(nativeEncodingName);
-                } catch (Exception e) {
-                    nativeEncoding = java.nio.charset.Charset.defaultCharset();
-                }
-                try (var reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(proc.getInputStream(), nativeEncoding))) {
-                    reader.lines().forEach(line -> System.out.println("[setup] " + line));
-                }
-                int exit = proc.waitFor();
-                if (exit == 0) {
-                    System.out.println("[setup] Done.");
-                } else {
-                    System.err.println("[setup] Exited with code " + exit);
-                }
-            } catch (Exception e) {
-                System.err.println("[setup] Failed: " + e.getMessage());
-            }
-        });
-    }
-
-    private static Path resolveLibDir() {
-        try {
-            var url = Main.class.getProtectionDomain().getCodeSource().getLocation();
-            if (url != null) {
-                Path code = Paths.get(url.toURI());
-                Path dir = Files.isDirectory(code) ? code : code.getParent();
-                for (int i = 0; i < 4; i++) {
-                    if (dir == null) break;
-                    Path candidate = dir.resolve("lib");
-                    if (Files.isDirectory(candidate)) return candidate;
-                    // lib がなくても返す（初回は存在しないのが普通）
-                    if (Files.isDirectory(dir.resolve("scripts"))) return dir.resolve("lib");
-                    dir = dir.getParent();
-                }
-            }
-        } catch (Exception ignored) {}
-        return Path.of("lib");
-    }
-
-    private static Path resolveScriptDir() {
-        return dev.javatexteditor.analysis.CodeSourceLocator
-                .findUpward(Main.class, "scripts", 4, Files::isDirectory)
-                .orElse(Path.of("scripts"));
     }
 }
