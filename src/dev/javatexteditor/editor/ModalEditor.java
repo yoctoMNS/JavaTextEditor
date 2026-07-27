@@ -19,6 +19,7 @@ import dev.javatexteditor.classfile.ClassFileFormatException;
 import dev.javatexteditor.classfile.ClassFileFormatter;
 import dev.javatexteditor.classfile.ClassFileParser;
 import dev.javatexteditor.classfile.MnemonicFormatter;
+import dev.javatexteditor.markdown.MarkdownRenderer;
 import dev.javatexteditor.projectbuild.BuildDiagnostic;
 import dev.javatexteditor.projectbuild.BuildResult;
 import dev.javatexteditor.refactor.RenameRefactorer;
@@ -348,6 +349,19 @@ public class ModalEditor {
     // false = Java ソース（クラス本体）。K の native シンボル探索(A)を誤って
     // Javaソース閲覧中に発動させない（"gc" が "argc(" に誤マッチする等）ためのガード。
     private boolean jdkSourceIsNative = false;
+
+    // Markdownビューア（:view/:markコマンド。.mdバッファに限り読み取り専用プレビューへトグルする）。
+    // classfileビューア（classFileBufferOwner）と同じ「currentFilePathをnullにする読み取り専用
+    // プレビュー」方式を採用した。jdk-source疑似バッファの「currentFilePath=titleのまま」方式は
+    // あえて踏襲しない: あちらはJDK/nativeソースという別ファイルの参照なので:wしても実ファイルは
+    // 壊れないが、こちらは編集中の実.mdファイルそのものをレンダリング後のテキストで上書きして
+    // しまう実害があるため。markdownViewOwner は「この buffer インスタンスが :view 用に作られた
+    // ものか」を参照一致で判定するための目印（binaryModeOwner/classFileBufferOwnerと同じ設計）。
+    private UndoablePieceTable markdownViewSavedBuffer = null;
+    private String markdownViewSavedFilePath = null;
+    private int markdownViewSavedCursorRow = 0;
+    private int markdownViewSavedCursorCol = 0;
+    private UndoablePieceTable markdownViewOwner = null;
 
     // 入力補完状態（INSERT モード内で管理）
     private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
@@ -2515,6 +2529,10 @@ public class ModalEditor {
             openTutorial();
         } else if (cmd.equals("nimo")) {
             showClassFileMnemonic();
+        } else if (cmd.equals("view")) {
+            enterMarkdownView();
+        } else if (cmd.equals("mark")) {
+            exitMarkdownView();
         } else if (cmd.equals("main") || cmd.startsWith("main ")) {
             executeMain(cmd.equals("main") ? "" : cmd.substring(5).trim());
         } else if (cmd.startsWith("grep! ")) {
@@ -5268,6 +5286,67 @@ public class ModalEditor {
         } catch (ClassFileFormatException e) {
             statusMessage = "E: failed to disassemble: " + e.getMessage();
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Markdownビューア（:view/:mark。.mdバッファに限り読み取り専用の閲覧ビューへトグルする）
+    // -------------------------------------------------------------------------
+
+    /** currentFilePathの拡張子が.md/.markdownの場合のみtrue（isJavaBuffer/isCBufferと同じ規約）。 */
+    private boolean isMarkdownBuffer() {
+        if (currentFilePath == null) return false;
+        String lower = currentFilePath.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".md") || lower.endsWith(".markdown");
+    }
+
+    /**
+     * :view — Markdownファイルに限り、現在のバッファをMarkdownRendererによる読み取り専用の
+     * 閲覧ビューへ差し替える。元のソース・ファイルパス・カーソル位置はmarkdownViewSaved*へ退避し、
+     * :markで復元する（jdk-source疑似バッファと同じ「一時退避→復元」パターン）。
+     */
+    private void enterMarkdownView() {
+        if (markdownViewOwner == buffer) {
+            statusMessage = "already in markdown view (:mark でソースに戻る)";
+            return;
+        }
+        if (!isMarkdownBuffer()) {
+            statusMessage = "E: not a markdown (.md) file";
+            return;
+        }
+        markdownViewSavedBuffer = buffer;
+        markdownViewSavedFilePath = currentFilePath;
+        markdownViewSavedCursorRow = cursorRow;
+        markdownViewSavedCursorCol = cursorCol;
+        String fileName = Path.of(currentFilePath).getFileName().toString();
+        String rendered = MarkdownRenderer.render(fileName, markdownViewSavedBuffer.getText());
+        buffer = new UndoablePieceTable(rendered);
+        // 読み取り専用プレビュー: currentFilePathをnullにすることで:wを「no file name」エラーへ
+        // 自然にフォールバックさせ、実.mdファイルへの誤保存（レンダリング後テキストでの上書き）を
+        // 構造的に防止する（classfileビューアと同じ安全設計。上記フィールド宣言のコメント参照）。
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        clearSearchHighlights();
+        cursorRow = 0;
+        cursorCol = 0;
+        markdownViewOwner = buffer;
+        statusMessage = "markdown preview (:mark でソースに戻る)";
+    }
+
+    /** :mark — :viewで開いた閲覧ビューから元のMarkdownソースへ戻る。 */
+    private void exitMarkdownView() {
+        if (markdownViewOwner != buffer) {
+            statusMessage = "E: not in markdown view";
+            return;
+        }
+        buffer = markdownViewSavedBuffer != null ? markdownViewSavedBuffer : new UndoablePieceTable("");
+        currentFilePath = markdownViewSavedFilePath;
+        cursorRow = markdownViewSavedCursorRow;
+        cursorCol = markdownViewSavedCursorCol;
+        markdownViewOwner = null;
+        markdownViewSavedBuffer = null;
+        clearSearchHighlights();
+        statusMessage = "source view";
     }
 
     public void showCompileResult(BuildResult result) {

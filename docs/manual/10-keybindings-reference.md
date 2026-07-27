@@ -114,6 +114,7 @@
 | `:main <target>` | launcherエントリポイントへジャンプ | [Java開発支援](04-java-tooling.md) |
 | `:s/pat/repl/[flags]` `:%s...` `:N,Ms...` `:'<,'>s...` | Vim式置換コマンド | [モーダル編集](02-modal-editing.md#置換コマンドs) |
 | `:tutor` `:tutorial` | チュートリアルを開く | [チュートリアル](08-tutorial.md) |
+| `:view` / `:mark` | Markdown閲覧ビューへ切替/ソース表示へ戻る | [Markdownビューア](12-markdown-viewer.md) |
 
 ## VISUAL / VISUAL LINE モード
 
