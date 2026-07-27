@@ -1004,6 +1004,38 @@ public class ModalEditor {
     // INSERTモード処理
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // 一覧を上下に動かすキーの判定
+    // （補完ポップアップ・telescope・FILER・import 候補選択で共通。
+    //   j/k を使ってよいかは画面によって違うので、別のメソッドに分けてある）
+    // -------------------------------------------------------------------------
+
+    /** 次の項目へ: Ctrl+N（Emacs式）または ↓。どの一覧画面でも使える。 */
+    private static boolean isSelectNextKey(int keyCode, boolean ctrlDown) {
+        return (ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN;
+    }
+
+    /** 前の項目へ: Ctrl+P（Emacs式）または ↑。どの一覧画面でも使える。 */
+    private static boolean isSelectPrevKey(int keyCode, boolean ctrlDown) {
+        return (ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP;
+    }
+
+    /**
+     * 次の項目へ: Vim 式の {@code j}。
+     *
+     * <p><b>自由入力のない一覧でのみ使ってよい。</b>telescope や FILER の検索モードのように
+     * 打ち込んだ文字で絞り込む画面では、{@code j} は文字入力として扱う必要があるため
+     * 移動キーに割り当ててはならない（"j" を含む名前を検索できなくなる）。
+     */
+    private static boolean isVimNextKey(char keyChar, boolean ctrlDown) {
+        return !ctrlDown && keyChar == 'j';
+    }
+
+    /** 前の項目へ: Vim 式の {@code k}。{@link #isVimNextKey} と同じ制約がある。 */
+    private static boolean isVimPrevKey(char keyChar, boolean ctrlDown) {
+        return !ctrlDown && keyChar == 'k';
+    }
+
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
         // Ctrl+Space → 補完トリガー（ポップアップが開いていても再トリガー）
         if ((modifiers & KeyEvent.CTRL_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SPACE) {
@@ -1025,14 +1057,14 @@ public class ModalEditor {
             boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
                 && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
             // 次候補へ: Ctrl+N（Emacs式）と ↓ は同じ意味
-            if ((ctrlOnly && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
+            if (isSelectNextKey(keyCode, ctrlOnly)) {
                 completion.selectNext();
                 syncCompletionCanvas();
                 syncCanvas();
                 return;
             }
             // 前候補へ: Ctrl+P（Emacs式）と ↑ は同じ意味
-            if ((ctrlOnly && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
+            if (isSelectPrevKey(keyCode, ctrlOnly)) {
                 completion.selectPrevious();
                 syncCompletionCanvas();
                 syncCanvas();
@@ -2115,12 +2147,8 @@ public class ModalEditor {
         // Ctrl+N / Ctrl+P、および矢印キー(↓↑)でリスト移動
         // クエリに自由入力があるため j/k は文字入力として扱う必要があり、移動キーには割り当てない。
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
-        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) {
-            moveTelescope(1); return;
-        }
-        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
-            moveTelescope(-1); return;
-        }
+        if (isSelectNextKey(keyCode, ctrlDown)) { moveTelescope(1);  return; }
+        if (isSelectPrevKey(keyCode, ctrlDown)) { moveTelescope(-1); return; }
         // BufferPicker 中に Ctrl+D: 選択バッファをレジストリから削除（クローズ）。
         // 'd'/'D' はいずれも自由入力（バッファ名フィルタ）に使うため文字キーには割り当てず、
         // Ctrl+N/Ctrl+P と同じ修飾キー方式にした（大文字 D だと "D" を含むファイル名を検索できなく
@@ -4902,8 +4930,8 @@ public class ModalEditor {
                 return;
             }
             // 自由入力(検索クエリ)があるため j/k は文字入力として扱い、移動キーには割り当てない。
-            if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN) { moveSelection(1);  return; }
-            if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP)   { moveSelection(-1); return; }
+            if (isSelectNextKey(keyCode, ctrlDown)) { moveSelection(1);  return; }
+            if (isSelectPrevKey(keyCode, ctrlDown)) { moveSelection(-1); return; }
             if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ' && !ctrlDown) {
                 filerQuery.append(keyChar);
                 filerFiltered = DirectoryLister.filterEntries(filerEntries, filerQuery.toString());
@@ -4920,8 +4948,8 @@ public class ModalEditor {
                 return;
             }
             // 自由入力のない一覧表示中は j/k(Vim式)・矢印キー・Ctrl+N/Pのいずれでも移動できる。
-            if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN || (!ctrlDown && keyChar == 'j')) { moveSelection(1);  return; }
-            if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP   || (!ctrlDown && keyChar == 'k')) { moveSelection(-1); return; }
+            if (isSelectNextKey(keyCode, ctrlDown) || isVimNextKey(keyChar, ctrlDown)) { moveSelection(1);  return; }
+            if (isSelectPrevKey(keyCode, ctrlDown) || isVimPrevKey(keyChar, ctrlDown)) { moveSelection(-1); return; }
             if (keyChar == '/') {
                 filerSearchMode = true;
                 filerQuery.setLength(0);
@@ -5690,11 +5718,11 @@ public class ModalEditor {
             return;
         }
         // 自由入力のない選択専用画面のため j/k(Vim式)も移動キーとして使える。
-        if ((ctrlDown && keyCode == KeyEvent.VK_N) || keyCode == KeyEvent.VK_DOWN || (!ctrlDown && keyChar == 'j')) {
+        if (isSelectNextKey(keyCode, ctrlDown) || isVimNextKey(keyChar, ctrlDown)) {
             if (importSelectIdx < importSelectFqns.size() - 1) importSelectIdx++;
             return;
         }
-        if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP || (!ctrlDown && keyChar == 'k')) {
+        if (isSelectPrevKey(keyCode, ctrlDown) || isVimPrevKey(keyChar, ctrlDown)) {
             if (importSelectIdx > 0) importSelectIdx--;
             return;
         }
