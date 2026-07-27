@@ -194,6 +194,8 @@ public class ModalEditor {
     // project-wide-search: grep 結果バッファ
     /** OSのシステムクリップボードとの読み書き（Ctrl+Shift+C / Ctrl+Shift+V）。 */
     private final SystemClipboardAccess systemClipboard = new SystemClipboardAccess();
+    /** COMMAND モードのコマンド名 → 処理の対応表（buildCommandRegistry() で組み立てる）。 */
+    private final CommandRegistry commands = buildCommandRegistry();
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
     private Path grepBaseDir = null; // grepResults の各 filePath() が相対的な起点ディレクトリ
@@ -2397,100 +2399,122 @@ public class ModalEditor {
     }
 
     private void executeCommand(String cmd) {
-        if (handleSubstituteCommand(cmd)) {
-            // 置換コマンドとして処理済み
-        } else if (cmd.equals("wa") || cmd.equals("wall")) {
-            saveAll();
-        } else if (cmd.equals("w")) {
-            saveToFile(currentFilePath);
-        } else if (cmd.startsWith("w ")) {
-            String path = cmd.substring(2).trim();
-            saveToFile(path); // 成功時、絶対パスへの currentFilePath 更新は saveToFile 内で行う
-        } else if (cmd.equals("e") || cmd.equals("enew")) {
-            newBuffer();
-        } else if (cmd.startsWith("e ")) {
-            String path = cmd.substring(2).trim();
-            loadFromFile(resolveRelativeToProjectRoot(path));
-        } else if (cmd.equals("b")) {
-            toggleBinaryMode();
-        } else if (cmd.equals("tutor") || cmd.equals("Tutor") || cmd.equals("tutorial")) {
-            openTutorial();
-        } else if (cmd.equals("nimo")) {
-            showClassFileMnemonic();
-        } else if (cmd.equals("view")) {
-            enterMarkdownView();
-        } else if (cmd.equals("mark")) {
-            exitMarkdownView();
-        } else if (cmd.equals("main") || cmd.startsWith("main ")) {
-            executeMain(cmd.equals("main") ? "" : cmd.substring(5).trim());
-        } else if (cmd.startsWith("grep! ")) {
-            // bang付き: node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
-            String pattern = cmd.substring(6).trim();
-            executeGrep(pattern, getProjectRoot(), true);
-        } else if (cmd.startsWith("grep ")) {
-            String pattern = cmd.substring(5).trim();
-            executeGrep(pattern);
-        } else if (cmd.startsWith("rename ")) {
-            String args = cmd.substring(7).trim();
-            executeRename(args);
-        } else if (cmd.equals("oi") || cmd.equals("organize-imports")) {
-            organizeImports();
-        } else if (cmd.startsWith("remove-import ")) {
-            String fqn = cmd.substring("remove-import ".length()).trim();
-            executeRemoveImport(fqn);
-        } else if (cmd.equals("wrap")) {
-            wrapEnabled = true;
-        } else if (cmd.equals("nowrap")) {
-            wrapEnabled = false;
-        } else if (cmd.startsWith("font ")) {
-            applyFontCommand(cmd.substring(5).trim());
-        } else if (cmd.startsWith("fs ")) {
-            applyFontSizeCommand(cmd.substring(3).trim());
-        } else if (cmd.startsWith("color ")) {
-            applyColorCommand(cmd.substring(6).trim());
-        } else if (cmd.equals("pwd")) {
-            statusMessage = getProjectRoot().toString();
-        } else if (cmd.equals("pr")) {
-            // :pr — その時点の :cd 現在ディレクトリを F10/F11/F12 用プロジェクトルートとして記憶する。
-            // 別ディレクトリで再度 :pr を打てば上書きされる。セッション終了時に破棄（永続化しない）。
-            projectRootOverride = getProjectRoot();
-            statusMessage = "project root: " + projectRootOverride;
-        } else if (cmd.equals("pr?")) {
-            // :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。
-            statusMessage = (projectRootOverride != null)
-                ? "project root: " + projectRootOverride
-                : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
-        } else if (cmd.startsWith("cd ")) {
-            changeDirectory(cmd.substring(3).trim());
-        } else if (cmd.equals("bnext") || cmd.equals("bn")) {
-            switchToRelativeBuffer(+1);
-        } else if (cmd.equals("bprev") || cmd.equals("bp")) {
-            switchToRelativeBuffer(-1);
-        } else if (cmd.equals("sp") || cmd.equals("split")) {
-            if (splitVerticalCallback != null) splitVerticalCallback.run();
-        } else if (cmd.equals("vs") || cmd.equals("vsplit") || cmd.equals("vsp")) {
-            if (splitHorizontalCallback != null) splitHorizontalCallback.run();
-        } else if (cmd.equals("qa") || cmd.equals("qall")) {
-            quitAll(false);
-        } else if (cmd.equals("qa!") || cmd.equals("qall!")) {
-            quitAll(true);
-        } else if (cmd.equals("q")) {
-            if (closeBlockedCallback != null) {
-                closeBlockedCallback.run();
-            } else {
-                exitCallback.run();
-            }
-        } else if (cmd.equals("wq")) {
-            if (closeBlockedCallback != null) {
-                closeBlockedCallback.run();
-            } else if (saveToFile(currentFilePath)) {
-                exitCallback.run();
-            }
-        } else if (cmd.matches("\\d+")) {
+        // :s 置換だけは他と形が違う（範囲指定・区切り文字が可変）ため、表ではなく専用の述語で最初に判定する。
+        if (handleSubstituteCommand(cmd)) return;
+        if (commands.dispatch(cmd)) return;
+        // どのコマンド名にも一致しなかった場合の最後の受け皿: :42 のような行番号ジャンプ
+        if (cmd.matches("\\d+")) {
             jumpToLineNumber(Integer.parseInt(cmd));
-        } else {
-            statusMessage = "E: unknown command '" + cmd + "'";
+            return;
         }
+        statusMessage = "E: unknown command '" + cmd + "'";
+    }
+
+    /**
+     * COMMAND モードのコマンド表を組み立てる。
+     *
+     * <p>ここは「どんなコマンドが存在するか」の一覧であり、振り分けの仕組み自体は
+     * {@link CommandRegistry} が持つ。コマンドを追加するときは分岐を書き足すのではなく、
+     * この表に1行足す。
+     *
+     * <p>完全一致（空白を含まない名前）と前置一致（空白で終わる接頭辞）は決して同じ文字列に
+     * マッチしないため、両者の並び順は結果に影響しない。
+     * 一方 <b>前置一致どうしは登録順が評価順になる</b>点に注意すること。
+     */
+    private CommandRegistry buildCommandRegistry() {
+        CommandRegistry r = new CommandRegistry();
+
+        // --- 保存・終了 ---
+        r.on(this::saveAll,                          "wa", "wall");
+        r.on(() -> saveToFile(currentFilePath),      "w");
+        r.on(() -> quitAll(false),                   "qa", "qall");
+        r.on(() -> quitAll(true),                    "qa!", "qall!");
+        r.on(this::closeCurrentPane,                 "q");
+        r.on(this::saveAndCloseCurrentPane,          "wq");
+        r.onPrefix("w ", path -> saveToFile(path)); // 成功時の currentFilePath 更新は saveToFile 内
+
+        // --- バッファを開く・切り替える ---
+        r.on(this::newBuffer,                        "e", "enew");
+        r.on(this::toggleBinaryMode,                 "b");
+        r.on(this::openTutorial,                     "tutor", "Tutor", "tutorial");
+        r.on(() -> switchToRelativeBuffer(+1),       "bnext", "bn");
+        r.on(() -> switchToRelativeBuffer(-1),       "bprev", "bp");
+        r.onPrefix("e ", path -> loadFromFile(resolveRelativeToProjectRoot(path)));
+
+        // --- 表示の切り替え ---
+        r.on(this::showClassFileMnemonic,            "nimo");
+        r.on(this::enterMarkdownView,                "view");
+        r.on(this::exitMarkdownView,                 "mark");
+        r.on(() -> wrapEnabled = true,               "wrap");
+        r.on(() -> wrapEnabled = false,              "nowrap");
+        r.onPrefix("font ",  this::applyFontCommand);
+        r.onPrefix("fs ",    this::applyFontSizeCommand);
+        r.onPrefix("color ", this::applyColorCommand);
+
+        // --- ペイン分割 ---
+        r.on(() -> runIfPresent(splitVerticalCallback),   "sp", "split");
+        r.on(() -> runIfPresent(splitHorizontalCallback), "vs", "vsplit", "vsp");
+
+        // --- 検索・リファクタリング ---
+        // ":grep! " は ":grep " より先に登録する必要がある（前置一致は登録順に評価されるため）
+        r.onPrefix("grep! ", pattern -> executeGrep(pattern, getProjectRoot(), true));
+        r.onPrefix("grep ",   this::executeGrep);
+        r.onPrefix("rename ", this::executeRename);
+
+        // --- import 整理 ---
+        r.on(this::organizeImports,                  "oi", "organize-imports");
+        r.onPrefix("remove-import ", this::executeRemoveImport);
+
+        // --- 作業ディレクトリ・プロジェクトルート ---
+        r.on(() -> statusMessage = getProjectRoot().toString(), "pwd");
+        r.on(this::pinProjectRoot,                   "pr");
+        r.on(this::reportProjectRoot,                "pr?");
+        r.onPrefix("cd ", this::changeDirectory);
+
+        // --- JDK/javac の起動点へジャンプ ---
+        r.on(() -> executeMain(""),                  "main");
+        r.onPrefix("main ", this::executeMain);
+
+        return r;
+    }
+
+    /** コールバックが配線されていれば実行する（分割系は GUI 側から注入される）。 */
+    private void runIfPresent(Runnable callback) {
+        if (callback != null) callback.run();
+    }
+
+    /** :q — 現在のペインを閉じる。閉じられない事情がある場合は closeBlockedCallback に委ねる。 */
+    private void closeCurrentPane() {
+        if (closeBlockedCallback != null) {
+            closeBlockedCallback.run();
+        } else {
+            exitCallback.run();
+        }
+    }
+
+    /** :wq — 保存に成功したときだけ現在のペインを閉じる。 */
+    private void saveAndCloseCurrentPane() {
+        if (closeBlockedCallback != null) {
+            closeBlockedCallback.run();
+        } else if (saveToFile(currentFilePath)) {
+            exitCallback.run();
+        }
+    }
+
+    /**
+     * :pr — その時点の :cd 現在ディレクトリを F10/F11/F12 用プロジェクトルートとして記憶する。
+     * 別ディレクトリで再度 :pr を打てば上書きされる。セッション終了時に破棄（永続化しない）。
+     */
+    private void pinProjectRoot() {
+        projectRootOverride = getProjectRoot();
+        statusMessage = "project root: " + projectRootOverride;
+    }
+
+    /** :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。 */
+    private void reportProjectRoot() {
+        statusMessage = (projectRootOverride != null)
+            ? "project root: " + projectRootOverride
+            : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
     }
 
     /**
