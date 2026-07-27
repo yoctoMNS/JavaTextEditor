@@ -8,6 +8,7 @@ import dev.javatexteditor.analysis.ImportSuggester;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.SourceAnalyzer;
 import dev.javatexteditor.editor.ModalEditor;
+import dev.javatexteditor.ui.DisplayMetrics;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
 import dev.javatexteditor.ui.MiscFixedBold9x15;
@@ -167,12 +168,9 @@ public class Main {
     private static int initialCellW = MiscFixedBold9x15.BASE_CELL_W;
     private static int initialCellH = MiscFixedBold9x15.BASE_CELL_H;
 
-    /** design baseline: フルHD(1920px幅)でBASE_CELL_W/Hがちょうど良い大きさになる想定 */
-    private static final double BASELINE_SCREEN_WIDTH_PX = 1920.0;
-
     /**
-     * 指定ディスプレイの物理解像度（OSのHiDPIスケーリングも加味）に応じて、
-     * ベースラインからの拡大率を算出する。縮小はしない（下限は等倍）。
+     * 指定ディスプレイの物理解像度（OSのHiDPIスケーリングも加味）を調べ、拡大率を求める。
+     * 実際の倍率計算は {@link DisplayMetrics#scaleForWidth} が行い、ここは画面情報の取得だけを担う。
      */
     private static double computeDisplayScale(GraphicsConfiguration gc) {
         double scaleX;
@@ -181,31 +179,24 @@ public class Main {
         } catch (Exception e) {
             scaleX = 1.0;
         }
-        double physicalWidthPx = gc.getBounds().width * scaleX;
-        double scale = physicalWidthPx / BASELINE_SCREEN_WIDTH_PX;
-        return Math.max(1.0, Math.min(2.5, scale));
+        return DisplayMetrics.scaleForWidth(gc.getBounds().width * scaleX);
     }
 
     private static int[] computeInitialCellSize(double scale) {
-        int w = (int) Math.round(MiscFixedBold9x15.BASE_CELL_W * scale);
-        int h = (int) Math.round(MiscFixedBold9x15.BASE_CELL_H * scale);
-        return new int[] { w, h };
+        return DisplayMetrics.cellSize(scale);
     }
 
     /**
      * フォントセルサイズと同じ倍率でウィンドウサイズも拡大する。
-     * これをしないと、文字は大きくなるのに表示行数・桁数の見た目上の割合が変わり、
-     * スプラッシュ画面やステータスラインがウィンドウ下端からはみ出す。
-     * 画面の利用可能領域（タスクバー等を除く）を超えないようクランプする。
+     * ここでは画面の利用可能領域（タスクバー等を除く）を調べ、クランプ計算は
+     * {@link DisplayMetrics#windowSize} に任せる。
      */
     private static int[] computeInitialWindowSize(GraphicsConfiguration gc, double scale) {
-        int w = (int) Math.round(WINDOW_WIDTH * scale);
-        int h = (int) Math.round(WINDOW_HEIGHT * scale);
         Rectangle screen = gc.getBounds();
         java.awt.Insets insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
-        int maxW = screen.width  - insets.left - insets.right;
-        int maxH = screen.height - insets.top  - insets.bottom;
-        return new int[] { Math.min(w, maxW), Math.min(h, maxH) };
+        return DisplayMetrics.windowSize(WINDOW_WIDTH, WINDOW_HEIGHT, scale,
+            screen.width  - insets.left - insets.right,
+            screen.height - insets.top  - insets.bottom);
     }
 
     private static GraphicsConfiguration detectMouseScreen() {
