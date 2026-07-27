@@ -83,12 +83,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private static final Color SEARCH_HIGHLIGHT_COLOR = new Color(0xFF, 0xE0, 0x00, 0x90);
 
     // 入力補完ポップアップ状態
-    private boolean completionActive = false;
-    private List<String> completionLabels = List.of();
-    private List<String> completionKinds  = List.of();
-    private int completionSelectedIdx = 0;
-    private int completionAnchorRow = 0;
-    private int completionAnchorCol = 0;
+    private CompletionView completion = CompletionView.hidden();
 
     // telescope オーバーレイ状態
     private boolean telescopeActive = false;
@@ -538,15 +533,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * 入力補完ポップアップの状態をセットする。
      * labels / kinds は CompletionItem のリストから変換して渡す。
      */
+    /** 補完ポップアップの描画状態をまとめて差し替える。 */
+    public void setCompletionView(CompletionView view) {
+        this.completion = (view != null) ? view : CompletionView.hidden();
+        repaint();
+    }
+
+    /**
+     * 補完ポップアップの状態をセットする。
+     *
+     * <p>移行期間中の委譲。新しい呼び出しは {@link #setCompletionView(CompletionView)} を使うこと。
+     * 既存の呼び出し側との互換のために残してある。
+     */
     public void setCompletionState(boolean active, List<String> labels, List<String> kinds,
                                    int selectedIdx, int anchorRow, int anchorCol) {
-        this.completionActive       = active;
-        this.completionLabels       = (labels != null) ? List.copyOf(labels)  : List.of();
-        this.completionKinds        = (kinds  != null) ? List.copyOf(kinds)   : List.of();
-        this.completionSelectedIdx  = selectedIdx;
-        this.completionAnchorRow    = anchorRow;
-        this.completionAnchorCol    = anchorCol;
-        repaint();
+        setCompletionView(new CompletionView(active, labels, kinds, selectedIdx, anchorRow, anchorCol));
     }
 
     public void setTelescopeState(boolean active, String title, String query,
@@ -1003,7 +1004,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         // 本文（数十万行規模になりうる）の再描画を丸ごとスキップし、ステータス行だけ塗り直す。
         Rectangle clip = g2.getClipBounds();
         boolean statusLineOnly = clip != null && !showSplash && !telescopeActive
-            && !(completionActive && !completionLabels.isEmpty())
+            && !completion.hasVisibleItems()
             && clip.y >= getHeight() - lineHeight - 8;
         if (statusLineOnly) {
             g2.setColor(theme.background);
@@ -1097,7 +1098,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         }
 
         // 8. 入力補完ポップアップ（telescope より前面）
-        if (completionActive && !completionLabels.isEmpty()) {
+        if (completion.hasVisibleItems()) {
             drawCompletionPopup(g2, charWidth, lineHeight, gutterWidth);
         }
 
@@ -1197,7 +1198,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * テキスト本体より前面・telescope より後面に描画される。
      */
     private void drawCompletionPopup(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
-        if (completionLabels.isEmpty()) return;
+        if (completion.labels().isEmpty()) return;
 
         int cw = cellW;
         int fh = lineHeight;
@@ -1206,29 +1207,29 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         // 最長ラベル幅を計算してポップアップ幅を決定
         int maxLabelW = 0;
-        for (String label : completionLabels) {
+        for (String label : completion.labels()) {
             maxLabelW = Math.max(maxLabelW, uiTextWidth(label, cw));
         }
         int popupW = kindW + maxLabelW + pad * 3;
-        int popupH = completionLabels.size() * fh + pad * 2;
+        int popupH = completion.labels().size() * fh + pad * 2;
 
         // カーソル行の文字列でセルオフセットを計算（全角対応）
         String[] lines = cachedLines;
         int anchorScreenRow;
         int popupX;
         if (wrapEnabled) {
-            int[] pos = wrapScreenPosition(lines, completionAnchorRow, completionAnchorCol, charWidth, gutterWidth);
+            int[] pos = wrapScreenPosition(lines, completion.anchorRow(), completion.anchorCol(), charWidth, gutterWidth);
             if (pos != null) {
                 anchorScreenRow = pos[0];
                 popupX = pos[1];
             } else {
-                anchorScreenRow = completionAnchorRow - scrollRow;
+                anchorScreenRow = completion.anchorRow() - scrollRow;
                 popupX = gutterWidth;
             }
         } else {
-            String anchorLine = (completionAnchorRow < lines.length) ? lines[completionAnchorRow] : "";
-            int cellOffset = cellsForCol(anchorLine, completionAnchorCol);
-            anchorScreenRow = completionAnchorRow - scrollRow;
+            String anchorLine = (completion.anchorRow() < lines.length) ? lines[completion.anchorRow()] : "";
+            int cellOffset = cellsForCol(anchorLine, completion.anchorCol());
+            anchorScreenRow = completion.anchorRow() - scrollRow;
             popupX = gutterWidth + cellOffset * charWidth - scrollCol * charWidth;
         }
         int popupY = (anchorScreenRow + 1) * lineHeight; // カーソル行の下
@@ -1253,21 +1254,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.drawRect(popupX, popupY, popupW, popupH);
 
         // 各候補を描画
-        for (int i = 0; i < completionLabels.size(); i++) {
+        for (int i = 0; i < completion.labels().size(); i++) {
             int iy = popupY + pad + (i + 1) * fh;
             int rowTop = popupY + pad + i * fh;
-            String kind = (i < completionKinds.size()) ? completionKinds.get(i) : "";
+            String kind = completion.kindAt(i);
 
-            if (i == completionSelectedIdx) {
+            if (i == completion.selectedIdx()) {
                 g2.setColor(theme.accent);
                 g2.fillRect(popupX + 1, rowTop, popupW - 2, fh);
                 // kind ラベル（選択行）
                 drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.background);
-                drawUiText(g2, completionLabels.get(i), popupX + pad + kindW, iy, cw, fh, theme.background);
+                drawUiText(g2, completion.labels().get(i), popupX + pad + kindW, iy, cw, fh, theme.background);
             } else {
                 // kind ラベルをアクセント色で
                 drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.accent);
-                drawUiText(g2, completionLabels.get(i), popupX + pad + kindW, iy, cw, fh, theme.foreground);
+                drawUiText(g2, completion.labels().get(i), popupX + pad + kindW, iy, cw, fh, theme.foreground);
             }
         }
     }

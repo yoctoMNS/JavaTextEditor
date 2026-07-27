@@ -1431,16 +1431,15 @@ public class ModalEditor {
     private void syncCompletionCanvas() {
         if (canvas == null) return;
         if (completion.hasNoVisibleItems()) {
-            canvas.setCompletionState(false,
-                java.util.List.of(), java.util.List.of(), 0, 0, 0);
+            canvas.setCompletionView(dev.javatexteditor.ui.CompletionView.hidden());
             return;
         }
         java.util.List<String> labels = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::label).toList();
         java.util.List<String> kinds = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::kind).toList();
-        canvas.setCompletionState(true, labels, kinds,
-            completion.selectedIdx(), cursorRow, cursorCol);
+        canvas.setCompletionView(new dev.javatexteditor.ui.CompletionView(
+            true, labels, kinds, completion.selectedIdx(), cursorRow, cursorCol));
     }
 
     private static final java.util.Set<Character> CLOSING_PAIRS =
