@@ -659,6 +659,159 @@ public class ModalEditor {
         return false;
     }
 
+    /**
+     * {@code dd}/{@code yy}/{@code gg}/{@code gu}/{@code gU}/{@code g~}/{@code gr}/{@code gv}/
+     * {@code r}/{@code zz}/{@code [g}/{@code [d}/{@code s}系（ペイン操作）/{@code \\f}/{@code \\g}/
+     * {@code \\a}系/{@code SPC}系といった多打鍵シーケンスの2打鍵目以降を処理する。
+     *
+     * <p>入口で保留中のシーケンスを取り出して {@code pendingSequence} を空に戻すため、
+     * どの分岐にも当たらなかった場合は「保留は破棄され、押されたキーは通常のキーとして扱われる」
+     * という Vim と同じ挙動になる（＝false を返して呼び出し側の通常処理へ落とす）。
+     * 3打鍵目を待つ分岐（{@code gu}・{@code \\a}・{@code SPC g} 等）は
+     * {@code pendingSequence} を改めて設定してから true を返す。
+     *
+     * <p><b>判定の並び順には意味がある。</b>{@code seq.equals("gu")} のような3打鍵目の完了判定は、
+     * その下にある2打鍵目の遷移判定より必ず先に置くこと。{@code prev} は {@code seq.charAt(0)} なので
+     * {@code seq} が "g" でも "gu" でも同じ 'g' になり、順序を入れ替えると3打鍵目を
+     * 2打鍵目として誤って再度保留してしまう（{@code \\a} も同じ理由）。
+     *
+     * @return シーケンスが成立して処理したら true
+     */
+    private boolean handlePendingSequence(int keyCode, char keyChar) {
+        if (!pendingSequence.isEmpty()) {
+            String seq = pendingSequence;
+            pendingSequence = "";
+            statusMessage = "";
+            char prev = seq.charAt(0);
+            if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return true; }
+            if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return true; }
+            // q{register}: マクロ記録開始（小文字=新規, 大文字=既存レジスタへ追記）
+            if (prev == 'q') {
+                if (Character.isLetter(keyChar)) {
+                    startMacroRecording(keyChar);
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return true;
+            }
+            // @{register} / @@: マクロ再生
+            if (prev == '@') {
+                if (keyChar == '@') {
+                    replayLastMacro();
+                } else if (Character.isLetter(keyChar)) {
+                    playMacro(Character.toLowerCase(keyChar));
+                } else {
+                    statusMessage = "無効なレジスタです";
+                }
+                return true;
+            }
+            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return true; }
+            if (prev == 'g' && keyChar == 'r') { goToReferences(false); return true; }
+            // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
+            if (prev == 'g' && keyChar == 'R') { goToReferences(true); return true; }
+            // gv: 直前の Visual 選択（種別・範囲）を再選択する
+            if (prev == 'g' && keyChar == 'v') { restoreLastVisual(); return true; }
+            // gu/gU/g~: 大文字小文字変換。yy/dd と同じ doubled-letter 方式で行全体に適用する
+            // （operator-pending モーションは②modal-editing-engineでスコープ外のため、3打鍵目は
+            // 常に同じ文字の繰り返しのみを受け付ける）。
+            // 3打鍵目の完了判定（seq.equals("gu") 等）を先に置くこと: prev は seq.charAt(0) であり
+            // seq="g"/"gu" のどちらでも 'g' になるため、下の2打鍵目の遷移判定を先に置くと
+            // 3打鍵目の 'u'/'U'/'~' を「2打鍵目」として誤って再度 pending 状態に戻してしまう。
+            if (seq.equals("gu") && keyChar == 'u') { applyCaseToLines(cursorRow, cursorRow, CaseOp.LOWER); return true; }
+            if (seq.equals("gU") && keyChar == 'U') { applyCaseToLines(cursorRow, cursorRow, CaseOp.UPPER); return true; }
+            if (seq.equals("g~") && keyChar == '~') { applyCaseToLines(cursorRow, cursorRow, CaseOp.TOGGLE); return true; }
+            if (seq.equals("g") && keyChar == 'u') { pendingSequence = "gu"; statusMessage = "gu-"; return true; }
+            if (seq.equals("g") && keyChar == 'U') { pendingSequence = "gU"; statusMessage = "gU-"; return true; }
+            if (seq.equals("g") && keyChar == '~') { pendingSequence = "g~"; statusMessage = "g~-"; return true; }
+            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
+                if (splitHorizontalCallback != null) splitHorizontalCallback.run();
+                return true;
+            }
+            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_S, 's')) {
+                if (splitVerticalCallback != null) splitVerticalCallback.run();
+                return true;
+            }
+            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_H, 'h') || matches(keyCode, keyChar, KeyEvent.VK_K, 'k'))) {
+                if (movePanePrevCallback != null) movePanePrevCallback.run();
+                return true;
+            }
+            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_L, 'l') || matches(keyCode, keyChar, KeyEvent.VK_J, 'j'))) {
+                if (movePaneNextCallback != null) movePaneNextCallback.run();
+                return true;
+            }
+            // r の2打目: キーマップ解決を経由せず、押された文字をそのまま置換文字として使う
+            // （VISUAL BLOCK の r と同じパターン。Esc によるキャンセルは上のESC早期分岐が
+            // pendingSequence を "ESC" で上書きすることで既に処理済みのため、ここでは扱わない）
+            if (prev == 'r') {
+                if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+                    replaceCharAtCursor(keyChar, pendingReplaceCount);
+                }
+                pendingReplaceCount = 1;
+                return true;
+            }
+            // \a+?: \a の3打鍵目（getter/setter生成）。\g（grep検索）とは別プレフィックスにするため、
+            // \gg/\gs/\gd ではなく \ag/\as/\ad にした（SPC g g/s/d と同じ generateGetter 等を再利用）。
+            // seq.equals("\\a") の判定は下の prev == '\\' 判定より先に置く必要がある
+            // （gu/gU/g~ と同じ理由: prev は seq.charAt(0) のため \a の3打鍵目でも '\\' に一致してしまう）。
+            if (seq.equals("\\a")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return true; }
+                // マッチしない場合は通常処理へ
+            }
+            // \f: ファイル名検索, \g: ファイル内容grep, \a: getter/setter生成プレフィックス（2打鍵目）
+            if (prev == '\\') {
+                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { enterFileSearch(FileSearchType.GREP); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_A, 'a')) { pendingSequence = "\\a"; statusMessage = "\\a-"; return true; }
+                // マッチしない場合は通常処理へ
+            }
+            // [g / [d: 診断ジャンプシーケンス
+            if (seq.equals("[")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { jumpToNextDiagnostic(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { jumpToPrevDiagnostic(); return true; }
+                // マッチしない場合は通常処理へ
+            }
+            // zz: カーソル行をviewport中央にスクロール（zt/zbは未実装のためzのみ受け付ける）
+            if (prev == 'z' && matches(keyCode, keyChar, KeyEvent.VK_Z, 'z')) { centerCursorLineInViewport(); return true; }
+            // SPC+g+? シーケンス（SPC+g の2打鍵の後）
+            if (seq.equals(" g")) {
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return true; }
+                // マッチしない場合は通常処理へ
+            } else if (seq.equals(" i")) {
+                // SPC+i+? シーケンス（import 操作）
+                if (matches(keyCode, keyChar, KeyEvent.VK_O, 'o')) { organizeImports(); return true; }
+                // マッチしない場合は通常処理へ
+            } else if (prev == ' ') {
+                // SPC キー: 1打鍵目
+                if (matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return true; }
+                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) {
+                    pendingSequence = " g";
+                    statusMessage = "SPC-g-";
+                    return true;
+                }
+                if (matches(keyCode, keyChar, KeyEvent.VK_I, 'i')) {
+                    pendingSequence = " i";
+                    statusMessage = "SPC-i-";
+                    return true;
+                }
+                // SPC+f: telescope file picker
+                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterTelescope("files"); return true; }
+                // SPC+/: telescope grep
+                if (keyChar == '/') { enterTelescope("grep"); return true; }
+                // SPC+b: telescope buffers
+                if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); return true; }
+            }
+            // シーケンスが成立しなかった場合は落下してキーを通常処理
+        }
+        return false;
+    }
+
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
         // 画面に出ているものによって意味が決まる割り込みキーを先に処理する
         if (handleNormalModeInterrupt(keyCode, keyChar, modifiers)) return;
@@ -677,138 +830,8 @@ public class ModalEditor {
             return;
         }
 
-        // 2打鍵シーケンス（yy / dd）の処理
-        if (!pendingSequence.isEmpty()) {
-            String seq = pendingSequence;
-            pendingSequence = "";
-            statusMessage = "";
-            char prev = seq.charAt(0);
-            if (prev == 'y' && matches(keyCode, keyChar, KeyEvent.VK_Y, 'y')) { yankCurrentLine(); return; }
-            if (prev == 'd' && matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { deleteCurrentLine(); return; }
-            // q{register}: マクロ記録開始（小文字=新規, 大文字=既存レジスタへ追記）
-            if (prev == 'q') {
-                if (Character.isLetter(keyChar)) {
-                    startMacroRecording(keyChar);
-                } else {
-                    statusMessage = "無効なレジスタです";
-                }
-                return;
-            }
-            // @{register} / @@: マクロ再生
-            if (prev == '@') {
-                if (keyChar == '@') {
-                    replayLastMacro();
-                } else if (Character.isLetter(keyChar)) {
-                    playMacro(Character.toLowerCase(keyChar));
-                } else {
-                    statusMessage = "無効なレジスタです";
-                }
-                return;
-            }
-            if (prev == 'g' && matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { moveFileStart(); return; }
-            if (prev == 'g' && keyChar == 'r') { goToReferences(false); return; }
-            // gR（Shift+R）: bang付き。node_modules 等のデフォルトスキップ対象も含め全ファイルを検索する
-            if (prev == 'g' && keyChar == 'R') { goToReferences(true); return; }
-            // gv: 直前の Visual 選択（種別・範囲）を再選択する
-            if (prev == 'g' && keyChar == 'v') { restoreLastVisual(); return; }
-            // gu/gU/g~: 大文字小文字変換。yy/dd と同じ doubled-letter 方式で行全体に適用する
-            // （operator-pending モーションは②modal-editing-engineでスコープ外のため、3打鍵目は
-            // 常に同じ文字の繰り返しのみを受け付ける）。
-            // 3打鍵目の完了判定（seq.equals("gu") 等）を先に置くこと: prev は seq.charAt(0) であり
-            // seq="g"/"gu" のどちらでも 'g' になるため、下の2打鍵目の遷移判定を先に置くと
-            // 3打鍵目の 'u'/'U'/'~' を「2打鍵目」として誤って再度 pending 状態に戻してしまう。
-            if (seq.equals("gu") && keyChar == 'u') { applyCaseToLines(cursorRow, cursorRow, CaseOp.LOWER); return; }
-            if (seq.equals("gU") && keyChar == 'U') { applyCaseToLines(cursorRow, cursorRow, CaseOp.UPPER); return; }
-            if (seq.equals("g~") && keyChar == '~') { applyCaseToLines(cursorRow, cursorRow, CaseOp.TOGGLE); return; }
-            if (seq.equals("g") && keyChar == 'u') { pendingSequence = "gu"; statusMessage = "gu-"; return; }
-            if (seq.equals("g") && keyChar == 'U') { pendingSequence = "gU"; statusMessage = "gU-"; return; }
-            if (seq.equals("g") && keyChar == '~') { pendingSequence = "g~"; statusMessage = "g~-"; return; }
-            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_V, 'v')) {
-                if (splitHorizontalCallback != null) splitHorizontalCallback.run();
-                return;
-            }
-            if (prev == 's' && matches(keyCode, keyChar, KeyEvent.VK_S, 's')) {
-                if (splitVerticalCallback != null) splitVerticalCallback.run();
-                return;
-            }
-            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_H, 'h') || matches(keyCode, keyChar, KeyEvent.VK_K, 'k'))) {
-                if (movePanePrevCallback != null) movePanePrevCallback.run();
-                return;
-            }
-            if (prev == 's' && (matches(keyCode, keyChar, KeyEvent.VK_L, 'l') || matches(keyCode, keyChar, KeyEvent.VK_J, 'j'))) {
-                if (movePaneNextCallback != null) movePaneNextCallback.run();
-                return;
-            }
-            // r の2打目: キーマップ解決を経由せず、押された文字をそのまま置換文字として使う
-            // （VISUAL BLOCK の r と同じパターン。Esc によるキャンセルは上のESC早期分岐が
-            // pendingSequence を "ESC" で上書きすることで既に処理済みのため、ここでは扱わない）
-            if (prev == 'r') {
-                if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-                    replaceCharAtCursor(keyChar, pendingReplaceCount);
-                }
-                pendingReplaceCount = 1;
-                return;
-            }
-            // \a+?: \a の3打鍵目（getter/setter生成）。\g（grep検索）とは別プレフィックスにするため、
-            // \gg/\gs/\gd ではなく \ag/\as/\ad にした（SPC g g/s/d と同じ generateGetter 等を再利用）。
-            // seq.equals("\\a") の判定は下の prev == '\\' 判定より先に置く必要がある
-            // （gu/gU/g~ と同じ理由: prev は seq.charAt(0) のため \a の3打鍵目でも '\\' に一致してしまう）。
-            if (seq.equals("\\a")) {
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
-                // マッチしない場合は通常処理へ
-            }
-            // \f: ファイル名検索, \g: ファイル内容grep, \a: getter/setter生成プレフィックス（2打鍵目）
-            if (prev == '\\') {
-                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterFileSearch(FileSearchType.NAME); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { enterFileSearch(FileSearchType.GREP); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_A, 'a')) { pendingSequence = "\\a"; statusMessage = "\\a-"; return; }
-                // マッチしない場合は通常処理へ
-            }
-            // [g / [d: 診断ジャンプシーケンス
-            if (seq.equals("[")) {
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { jumpToNextDiagnostic(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { jumpToPrevDiagnostic(); return; }
-                // マッチしない場合は通常処理へ
-            }
-            // zz: カーソル行をviewport中央にスクロール（zt/zbは未実装のためzのみ受け付ける）
-            if (prev == 'z' && matches(keyCode, keyChar, KeyEvent.VK_Z, 'z')) { centerCursorLineInViewport(); return; }
-            // SPC+g+? シーケンス（SPC+g の2打鍵の後）
-            if (seq.equals(" g")) {
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) { generateGetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_S, 's')) { generateSetter(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_D, 'd')) { generateGetterAndSetter(); return; }
-                // マッチしない場合は通常処理へ
-            } else if (seq.equals(" i")) {
-                // SPC+i+? シーケンス（import 操作）
-                if (matches(keyCode, keyChar, KeyEvent.VK_O, 'o')) { organizeImports(); return; }
-                // マッチしない場合は通常処理へ
-            } else if (prev == ' ') {
-                // SPC キー: 1打鍵目
-                if (matches(keyCode, keyChar, KeyEvent.VK_H, 'h')) { moveLineStartNonBlank(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_L, 'l')) { moveLineEnd(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_K, 'k')) { moveFileStart(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_J, 'j')) { moveFileEnd(); return; }
-                if (matches(keyCode, keyChar, KeyEvent.VK_G, 'g')) {
-                    pendingSequence = " g";
-                    statusMessage = "SPC-g-";
-                    return;
-                }
-                if (matches(keyCode, keyChar, KeyEvent.VK_I, 'i')) {
-                    pendingSequence = " i";
-                    statusMessage = "SPC-i-";
-                    return;
-                }
-                // SPC+f: telescope file picker
-                if (matches(keyCode, keyChar, KeyEvent.VK_F, 'f')) { enterTelescope("files"); return; }
-                // SPC+/: telescope grep
-                if (keyChar == '/') { enterTelescope("grep"); return; }
-                // SPC+b: telescope buffers
-                if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); return; }
-            }
-            // シーケンスが成立しなかった場合は落下してキーを通常処理
-        }
+        // dd / yy / gg / gu / \a / SPC などの多打鍵シーケンス。成立しなければ通常のキー処理へ落ちる
+        if (handlePendingSequence(keyCode, keyChar)) return;
 
         // r の count 前置き（例: "3r"）。Visual '>'/'<' の visualCountBuffer と同じ方式で、
         // digit以外のキーが来たら次の行で無条件に破棄される（consumeNormalCount()）。
