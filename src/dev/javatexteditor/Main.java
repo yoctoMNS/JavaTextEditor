@@ -7,6 +7,9 @@ import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.ImportSuggester;
 import dev.javatexteditor.analysis.JdkClassIndex;
 import dev.javatexteditor.analysis.SourceAnalyzer;
+import dev.javatexteditor.app.CBuildRunner;
+import dev.javatexteditor.app.JavaBuildRunner;
+import dev.javatexteditor.app.RunningProcessHolder;
 import dev.javatexteditor.app.SetupBootstrap;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.DisplayMetrics;
@@ -229,9 +232,9 @@ public class Main {
                             if (edBuild.isNormalMode()) {
                                 boolean c = isCBuffer(edBuild);
                                 switch (e.getKeyCode()) {
-                                    case KeyEvent.VK_F10 -> { if (c) triggerCompileC(edBuild, canvasBuild); else triggerCompile(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F11 -> { if (c) triggerRunC(edBuild, canvasBuild); else triggerRun(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F12 -> { if (c) triggerCompileAndRunC(edBuild, canvasBuild); else triggerCompileAndRun(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F10 -> { if (c) C_BUILD_RUNNER.triggerCompile(edBuild, canvasBuild); else JAVA_BUILD_RUNNER.triggerCompile(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F11 -> { if (c) C_BUILD_RUNNER.triggerRun(edBuild, canvasBuild); else JAVA_BUILD_RUNNER.triggerRun(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F12 -> { if (c) C_BUILD_RUNNER.triggerCompileAndRun(edBuild, canvasBuild); else JAVA_BUILD_RUNNER.triggerCompileAndRun(edBuild, canvasBuild); }
                                 }
                             }
                             pressedHandled[0] = true;
@@ -325,22 +328,20 @@ public class Main {
     // -------------------------------------------------------------------------
     // F10/F11/F12: プロジェクト全体のコンパイル・実行
     // -------------------------------------------------------------------------
-    private static final dev.javatexteditor.projectbuild.ProjectBuilder PROJECT_BUILDER =
-        new dev.javatexteditor.projectbuild.ProjectBuilder();
-    private static final dev.javatexteditor.projectbuild.MainClassFinder MAIN_CLASS_FINDER =
-        new dev.javatexteditor.projectbuild.MainClassFinder();
+    // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
+    // Java版・C版が1つを共有する（言語をまたいだ多重実行防止。RunningProcessHolder の Javadoc 参照）。
+    private static final RunningProcessHolder RUNNING_PROCESS = new RunningProcessHolder();
+    private static final JavaBuildRunner JAVA_BUILD_RUNNER = new JavaBuildRunner(
+        new dev.javatexteditor.projectbuild.ProjectBuilder(),
+        new dev.javatexteditor.projectbuild.MainClassFinder(),
+        RUNNING_PROCESS);
     // C版のプロジェクトビルダ（gcc/clang/cc を外部起動。詳細は CProjectBuilder 参照）。
-    private static final dev.javatexteditor.projectbuild.CProjectBuilder C_PROJECT_BUILDER =
-        new dev.javatexteditor.projectbuild.CProjectBuilder();
+    private static final CBuildRunner C_BUILD_RUNNER = new CBuildRunner(
+        new dev.javatexteditor.projectbuild.CProjectBuilder(),
+        RUNNING_PROCESS);
     // C版の1ファイル診断アナライザ（gcc -fsyntax-only）。
     private static final dev.javatexteditor.analysis.CCompileAnalyzer C_COMPILE_ANALYZER =
         new dev.javatexteditor.analysis.CCompileAnalyzer();
-    // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
-    private static Process runningProcess = null;
-    // F11でmainクラスが複数見つかりtelescope選択待ちの間、選択確定後の実行まで
-    // ユーザーが入力した追加クラスパスを持ち越すための一時保存（onRunMainClassSelectedコールバックは
-    // createLeaf内で固定で1回だけ登録されるため、選択待ちの間はここに置くしかない）。
-    private static List<Path> pendingRunExtraClasspath = List.of();
 
     // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
@@ -623,244 +624,6 @@ public class Main {
         editor.setStatusMessage("#include " + n + "件 追加しました");
     }
 
-    /**
-     * F10: 追加クラスパス（複数ディレクトリ、カンマ区切り）を尋ねてからプロジェクト全体を
-     * コンパイルし、*compile* 疑似バッファに結果を表示する。Escなら追加クラスパスなしで続行する。
-     */
-    private static void triggerCompile(ModalEditor editor, EditorCanvas canvas) {
-        editor.enterClasspathInput("F10",
-            extraClasspath -> doCompile(editor, canvas, extraClasspath, null));
-    }
-
-    /** F11: bin/ に .class がなければ拒否し、あれば追加クラスパスを尋ねて main クラスを解決・実行する。 */
-    private static void triggerRun(ModalEditor editor, EditorCanvas canvas) {
-        Path projectRoot = editor.getBuildRoot();
-        if (!PROJECT_BUILDER.hasCompiledClasses(projectRoot)) {
-            editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
-            return;
-        }
-        editor.enterClasspathInput("F11",
-            extraClasspath -> resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath));
-    }
-
-    /**
-     * F12: 追加クラスパスを尋ねてからコンパイルし、成功した場合のみ同じ追加クラスパスで
-     * main クラスを解決して実行する。
-     */
-    private static void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
-        editor.enterClasspathInput("F12", extraClasspath -> {
-            Path projectRoot = editor.getBuildRoot();
-            doCompile(editor, canvas, extraClasspath, result -> {
-                if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath);
-            });
-        });
-    }
-
-    /**
-     * F10/F12共通のコンパイル実行部。onDone は完了後にEDT上で呼ばれる（null可）。
-     * javacが診断を報告するたび *compile* 疑似バッファへリアルタイムに追記する。
-     */
-    private static void doCompile(ModalEditor editor, EditorCanvas canvas, List<Path> extraClasspath,
-            java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
-        editor.beginCompileOutput();
-        editor.syncCanvas();
-        Path projectRoot = editor.getBuildRoot();
-        Thread.ofVirtual().start(() -> {
-            dev.javatexteditor.projectbuild.BuildResult result =
-                PROJECT_BUILDER.compile(projectRoot, extraClasspath, diag ->
-                    SwingUtilities.invokeLater(() -> {
-                        editor.appendCompileDiagnostic(diag);
-                        editor.syncCanvas();
-                    }));
-            SwingUtilities.invokeLater(() -> {
-                editor.finishCompileOutput(result);
-                editor.syncCanvas();
-                if (onDone != null) onDone.accept(result);
-            });
-        });
-    }
-
-    /**
-     * main メソッドを持つクラスを索引から探し、1件なら即実行、複数なら telescope-picker で選ばせる
-     * （{@link ModalEditor#setOnRunMainClassSelected} 経由で選択結果が {@link #runJavaClass} に届く）。
-     */
-    private static void resolveAndRunMainClass(
-            ModalEditor editor, EditorCanvas canvas, Path projectRoot, List<Path> extraClasspath) {
-        editor.setStatusMessage("mainクラスを検索中...");
-        Thread.ofVirtual().start(() -> {
-            List<String> mainClasses = MAIN_CLASS_FINDER.findMainClasses(projectRoot);
-            SwingUtilities.invokeLater(() -> {
-                if (mainClasses.isEmpty()) {
-                    editor.setStatusMessage("run: mainメソッドを持つクラスが見つかりません");
-                } else if (mainClasses.size() == 1) {
-                    runJavaClass(editor, canvas, projectRoot, mainClasses.get(0), extraClasspath);
-                } else {
-                    pendingRunExtraClasspath = extraClasspath;
-                    editor.enterMainClassPicker(mainClasses);
-                }
-            });
-        });
-    }
-
-    /**
-     * bin/（常にデフォルトで含まれる）＋ユーザー指定の追加クラスパスで別プロセスとして java を起動する。
-     * 実行中プロセスがまだ生きていれば destroy() してから起動し直す（多重実行を避けるため）。
-     * 標準出力/標準エラーは別々のスレッドで読み取り、*run* 疑似バッファへ1行ずつリアルタイムに
-     * 追記する（標準エラー由来の行は赤字表示。EditorCanvas.setErrorLines参照）。
-     */
-    private static void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn,
-            List<Path> extraClasspath) {
-        if (runningProcess != null && runningProcess.isAlive()) {
-            runningProcess.destroy();
-        }
-        Path binDir = PROJECT_BUILDER.binDirFor(projectRoot);
-        StringBuilder classpath = new StringBuilder(binDir.toString());
-        for (Path p : extraClasspath) {
-            classpath.append(java.io.File.pathSeparatorChar).append(p);
-        }
-        String command = "java -cp " + classpath + " " + fqcn;
-        editor.beginRunOutput(command, fqcn);
-        editor.syncCanvas();
-        Thread.ofVirtual().start(() -> {
-            int exitCode;
-            try {
-                ProcessBuilder pb = new ProcessBuilder("java", "-cp", classpath.toString(), fqcn);
-                pb.directory(projectRoot.toFile());
-                Process process = pb.start();
-                runningProcess = process;
-                Thread stdoutReader = startRunOutputReader(process.getInputStream(), editor, false);
-                Thread stderrReader = startRunOutputReader(process.getErrorStream(), editor, true);
-                exitCode = process.waitFor();
-                stdoutReader.join();
-                stderrReader.join();
-            } catch (IOException e) {
-                SwingUtilities.invokeLater(() ->
-                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            int finalExitCode = exitCode;
-            SwingUtilities.invokeLater(() -> {
-                editor.finishRunOutput(fqcn, finalExitCode);
-                editor.syncCanvas();
-            });
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // F10/F11/F12 の C 版（gcc/clang/cc を外部起動）。Java 版と同じ *compile*/*run*
-    // 疑似バッファ・ストリーミング表示・多重実行防止（runningProcess）を再利用する。
-    // Java 版と異なりクラスパス入力プロンプト（enterClasspathInput）は挟まず直接コンパイルする
-    // （C にはクラスパスの概念がないため）。
-    // -------------------------------------------------------------------------
-
-    /** F10（C）: projectRoot 配下の全 .c を gcc で1実行ファイルにコンパイルし *compile* に表示する。 */
-    private static void triggerCompileC(ModalEditor editor, EditorCanvas canvas) {
-        doCompileC(editor, canvas, null);
-    }
-
-    /** F11（C）: 実行ファイルが無ければ拒否し、あれば実行する。 */
-    private static void triggerRunC(ModalEditor editor, EditorCanvas canvas) {
-        Path projectRoot = editor.getBuildRoot();
-        if (!C_PROJECT_BUILDER.hasExecutable(projectRoot)) {
-            editor.setStatusMessage("run: 実行ファイルがありません。先にF10でコンパイルしてください");
-            return;
-        }
-        runCExecutable(editor, canvas, projectRoot);
-    }
-
-    /** F12（C）: コンパイル→成功時のみ実行。 */
-    private static void triggerCompileAndRunC(ModalEditor editor, EditorCanvas canvas) {
-        doCompileC(editor, canvas, result -> {
-            if (result.success()) runCExecutable(editor, canvas, editor.getBuildRoot());
-        });
-    }
-
-    /** F10/F12（C）共通のコンパイル実行部。diagnostic をリアルタイムに *compile* へ追記する。 */
-    private static void doCompileC(ModalEditor editor, EditorCanvas canvas,
-            java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
-        editor.beginCompileOutput();
-        editor.syncCanvas();
-        Path projectRoot = editor.getBuildRoot();
-        Thread.ofVirtual().start(() -> {
-            dev.javatexteditor.projectbuild.BuildResult result =
-                C_PROJECT_BUILDER.compile(projectRoot, diag ->
-                    SwingUtilities.invokeLater(() -> {
-                        editor.appendCompileDiagnostic(diag);
-                        editor.syncCanvas();
-                    }));
-            SwingUtilities.invokeLater(() -> {
-                editor.finishCompileOutput(result);
-                editor.syncCanvas();
-                if (onDone != null) onDone.accept(result);
-            });
-        });
-    }
-
-    /**
-     * F11（C）: コンパイル済みの実行ファイルを別プロセスとして起動し、標準出力/標準エラーを
-     * *run* 疑似バッファへリアルタイム表示する（runJavaClass の C 版）。
-     */
-    private static void runCExecutable(ModalEditor editor, EditorCanvas canvas, Path projectRoot) {
-        if (runningProcess != null && runningProcess.isAlive()) {
-            runningProcess.destroy();
-        }
-        Path executable = C_PROJECT_BUILDER.executableFor(projectRoot);
-        String command = executable.toString();
-        editor.beginRunOutput(command, executable.getFileName().toString());
-        editor.syncCanvas();
-        Thread.ofVirtual().start(() -> {
-            int exitCode;
-            try {
-                ProcessBuilder pb = new ProcessBuilder(executable.toString());
-                pb.directory(projectRoot.toFile());
-                Process process = pb.start();
-                runningProcess = process;
-                Thread stdoutReader = startRunOutputReader(process.getInputStream(), editor, false);
-                Thread stderrReader = startRunOutputReader(process.getErrorStream(), editor, true);
-                exitCode = process.waitFor();
-                stdoutReader.join();
-                stderrReader.join();
-            } catch (IOException e) {
-                SwingUtilities.invokeLater(() ->
-                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            int finalExitCode = exitCode;
-            SwingUtilities.invokeLater(() -> {
-                editor.finishRunOutput(executable.getFileName().toString(), finalExitCode);
-                editor.syncCanvas();
-            });
-        });
-    }
-
-    /**
-     * 実行中プロセスの標準出力/標準エラーを1行読むたび *run* 疑似バッファへリアルタイム反映する
-     * 読み取り専用スレッドを起動する（isError=trueなら標準エラー由来として赤字表示される）。
-     */
-    private static Thread startRunOutputReader(java.io.InputStream in, ModalEditor editor, boolean isError) {
-        Thread t = Thread.ofVirtual().unstarted(() -> {
-            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(in))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String finalLine = line;
-                    SwingUtilities.invokeLater(() -> {
-                        editor.appendRunOutputLine(finalLine, isError);
-                        editor.syncCanvas();
-                    });
-                }
-            } catch (IOException ignored) {
-            }
-        });
-        t.start();
-        return t;
-    }
-
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
     private static void setupSplitCallbacks(
             JFrame frame, PaneTree.PaneNode[] root, PaneTree.Leaf[] active, PaneTree.Leaf leaf) {
@@ -957,7 +720,7 @@ public class Main {
         editor.setOnFileOpened(BUFFER_REGISTRY::register);
         editor.setOnBufferDelete(BUFFER_REGISTRY::unregister);
         editor.setOnRunMainClassSelected(
-            fqcn -> runJavaClass(editor, canvas, editor.getBuildRoot(), fqcn, pendingRunExtraClasspath));
+            fqcn -> JAVA_BUILD_RUNNER.runSelectedMainClass(editor, canvas, editor.getBuildRoot(), fqcn));
         if (COMPLETION_INDEX != null) {
             editor.setCompletionIndex(COMPLETION_INDEX);
         }
