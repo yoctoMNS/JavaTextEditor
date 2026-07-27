@@ -365,9 +365,7 @@ public class ModalEditor {
     private String cHeaderWordsCacheKey = null;
     private java.util.Set<String> cHeaderWordsCache = java.util.Set.of();
     // バッファ履歴（Ctrl+U で前へ・Ctrl+P で次へ）
-    private record BufferSnapshot(String text, String filePath, int row, int col) {}
-    private final List<BufferSnapshot> bufferHistory = new ArrayList<>();
-    private int historyIdx = -1; // -1 = 未初期化（最初の pushBuffer で初期化）
+    private final BufferHistory history = new BufferHistory();
     // Shift+K で定義ジャンプする直前の位置（Shift+J で一つ前に戻るため）
     private BufferSnapshot lastJumpOrigin = null;
 
@@ -393,8 +391,7 @@ public class ModalEditor {
     }
 
     private void initHistory() {
-        bufferHistory.add(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
-        historyIdx = 0;
+        history.initializeWith(new BufferSnapshot(buffer.getText(), currentFilePath, 0, 0));
         lastNotifiedBufferVersion = buffer.getVersion();
     }
 
@@ -588,8 +585,8 @@ public class ModalEditor {
         if (ctrlDown && keyCode == KeyEvent.VK_U) {
             if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
                 switchToRelativeBuffer(-1);
-            } else if (historyIdx > 0) {
-                restoreBuffer(historyIdx - 1);
+            } else if (history.hasPrevious()) {
+                restoreBuffer(history.previousIndex());
             } else {
                 statusMessage = "これ以上前のバッファはありません";
             }
@@ -598,8 +595,8 @@ public class ModalEditor {
         if (ctrlDown && keyCode == KeyEvent.VK_P) {
             if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
                 switchToRelativeBuffer(+1);
-            } else if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
-                restoreBuffer(historyIdx + 1);
+            } else if (history.hasNext()) {
+                restoreBuffer(history.nextIndex());
             } else {
                 statusMessage = "これ以上次のバッファはありません";
             }
@@ -3338,34 +3335,26 @@ public class ModalEditor {
         }
     }
 
-    /** 現在のバッファ状態を履歴に追加し historyIdx を末尾へ進める。 */
+    /** 現在のバッファ状態を履歴に追加する。 */
     private void pushBuffer() {
-        BufferSnapshot snap = new BufferSnapshot(
-            buffer.getText(), currentFilePath, cursorRow, cursorCol);
-        // 現在位置より後ろの履歴を切り捨て
-        if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
-            bufferHistory.subList(historyIdx + 1, bufferHistory.size()).clear();
-        }
-        bufferHistory.add(snap);
-        historyIdx = bufferHistory.size() - 1;
+        history.push(currentBufferSnapshot());
     }
 
     /** 履歴インデックス idx のバッファを復元する。 */
     private void restoreBuffer(int idx) {
-        // 現在のバッファ状態を現在の履歴スロットに上書き保存
-        if (historyIdx >= 0 && historyIdx < bufferHistory.size()) {
-            bufferHistory.set(historyIdx, new BufferSnapshot(
-                buffer.getText(), currentFilePath, cursorRow, cursorCol));
-        }
-        historyIdx = idx;
-        BufferSnapshot snap = bufferHistory.get(idx);
+        BufferSnapshot snap = history.moveTo(idx, currentBufferSnapshot());
         buffer = new UndoablePieceTable(snap.text());
         currentFilePath = snap.filePath();
         cursorRow = snap.row();
         cursorCol = snap.col();
         resetSearchAndResultState();
         String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[新規バッファ]";
-        statusMessage = label + " (" + (idx + 1) + "/" + bufferHistory.size() + ")";
+        statusMessage = label + " (" + (idx + 1) + "/" + history.size() + ")";
+    }
+
+    /** いま編集中の内容・ファイル・カーソル位置を1つの値として写し取る。 */
+    private BufferSnapshot currentBufferSnapshot() {
+        return new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
     }
 
     private void executeGrep(String pattern) {
@@ -5756,7 +5745,7 @@ public class ModalEditor {
      * メソッド名の上にカーソルがある場合は native メソッドのトレースも試みる。
      */
     private void lookupJdkDoc() {
-        BufferSnapshot before = new BufferSnapshot(buffer.getText(), currentFilePath, cursorRow, cursorCol);
+        BufferSnapshot before = currentBufferSnapshot();
 
         // C言語（.c/.h）バッファでは C 専用の定義ジャンプへ振り分ける（jdk-source 疑似バッファ内は除く）。
         if (isCFilePath(currentFilePath) && !inJdkSourceBuffer) {
