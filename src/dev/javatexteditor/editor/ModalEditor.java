@@ -39,18 +39,9 @@ import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
 import dev.javatexteditor.ui.Theme;
-import java.awt.Image;
-import java.awt.Toolkit;
-import java.awt.datatransfer.Clipboard;
-import java.awt.datatransfer.DataFlavor;
-import java.awt.datatransfer.StringSelection;
-import java.awt.datatransfer.Transferable;
-import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.KeyEvent;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -209,6 +200,8 @@ public class ModalEditor {
     // auto-import 完了時に「N件挿入済み」を表示するための挿入カウンタ
     private int importAppliedCount = 0;
     // project-wide-search: grep 結果バッファ
+    /** OSのシステムクリップボードとの読み書き（Ctrl+Shift+C / Ctrl+Shift+V）。 */
+    private final SystemClipboardAccess systemClipboard = new SystemClipboardAccess();
     private final ProjectSearcher projectSearcher = new ProjectSearcher();
     private List<SearchResult> grepResults = null; // null = 通常バッファ
     private Path grepBaseDir = null; // grepResults の各 filePath() が相対的な起点ディレクトリ
@@ -4546,97 +4539,37 @@ public class ModalEditor {
 
     /** 内部ヤンクレジスタとは独立に、指定テキストをOSのシステムクリップボードへコピーする。 */
     private void copyToSystemClipboard(String text) {
-        try {
-            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-            clipboard.setContents(new StringSelection(text), null);
-            statusMessage = text.length() + " bytes copied to clipboard";
-        } catch (Exception e) {
-            statusMessage = "E: clipboard copy failed: " + e.getMessage();
-        }
+        SystemClipboardAccess.CopyResult result = systemClipboard.copy(text);
+        statusMessage = result.isFailure()
+                ? "E: " + result.errorReason()
+                : text.length() + " bytes copied to clipboard";
     }
 
     /**
-     * システムクリップボードの内容をカーソル位置へ貼り付ける。文字列（stringFlavor）が
-     * 取得できればそのまま挿入する。ファイルマネージャ等でコピーしたファイル（javaFileListFlavor）
-     * の場合は絶対パスを1行1件で挿入する。画像（imageFlavor）・音声等の非テキストデータの場合は、
-     * ストリーム系 DataFlavor またはImageからエンコードした生バイト列を、ISO-8859-1
-     * （1バイト=1文字の可逆マッピング）でデコードしてバイト列そのものをバッファへ挿入する
-     * （getBytes(ISO_8859_1)で元のバイト列を復元可能）。
+     * システムクリップボードの内容をカーソル位置へ貼り付ける。
+     * 何が取れたか（文字列・ファイル一覧・画像等のバイナリ）の判別は
+     * {@link SystemClipboardAccess} が担い、ここでは「取れたテキストを挿入する」ことだけを行う。
      *
      * @param asNormalMode true の場合 NORMAL モードと同じカーソルクランプを行う（P相当）。
      *                     false の場合 INSERT モード中の挿入として扱い、クランプしない。
      */
     private void pasteFromSystemClipboard(boolean asNormalMode) {
-        Transferable contents;
-        try {
-            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-            contents = clipboard.getContents(null);
-        } catch (Exception e) {
-            // ヘッドレス環境等、システムクリップボードにそもそもアクセスできない場合
-            statusMessage = "E: clipboard unavailable: " + e.getMessage();
-            return;
+        switch (systemClipboard.read()) {
+            case SystemClipboardAccess.ReadResult.Content(String text) -> insertPastedText(text, asNormalMode);
+            case SystemClipboardAccess.ReadResult.Empty(String reason) -> statusMessage = reason;
+            case SystemClipboardAccess.ReadResult.Failure(String reason) -> statusMessage = "E: " + reason;
         }
-        if (contents == null) {
-            statusMessage = "clipboard is empty";
-            return;
-        }
-        String text;
-        try {
-            if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
-                text = (String) contents.getTransferData(DataFlavor.stringFlavor);
-            } else if (contents.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
-                text = readClipboardFilePaths(contents);
-            } else {
-                byte[] bytes = readClipboardBinary(contents);
-                if (bytes == null) {
-                    statusMessage = "unsupported clipboard content";
-                    return;
-                }
-                text = new String(bytes, StandardCharsets.ISO_8859_1);
-            }
-        } catch (UnsupportedFlavorException | IOException e) {
-            statusMessage = "E: clipboard paste failed: " + e.getMessage();
-            return;
-        }
-        if (text.isEmpty()) return;
+    }
 
+    /** 貼り付けたテキストをカーソル位置へ挿入し、カーソルを挿入後の末尾へ移動する。 */
+    private void insertPastedText(String text, boolean asNormalMode) {
+        if (text.isEmpty()) return;
         int offset = offsetOfCursor();
         buffer.insert(offset, text);
         moveCursorToOffset(offset + text.length());
         if (asNormalMode) {
             clampCursorForNormal();
         }
-    }
-
-    /** ファイルマネージャ等でコピーされたファイル一覧を、絶対パスを改行区切りにした文字列へ変換する。 */
-    @SuppressWarnings("unchecked")
-    private String readClipboardFilePaths(Transferable contents) throws UnsupportedFlavorException, IOException {
-        List<File> files = (List<File>) contents.getTransferData(DataFlavor.javaFileListFlavor);
-        return ClipboardBinaryCodec.joinFilePaths(files);
-    }
-
-    /**
-     * 文字列・ファイル一覧以外の DataFlavor（image/audio 等）から生バイト列を読み出す。
-     * ストリーム系 DataFlavor を優先し、見つからなければ imageFlavor（java.awt.Image、
-     * スクリーンショットツール等が公開する非ストリーム形式）をPNGへエンコードして返す。
-     * いずれも取得不能なら null。
-     */
-    private byte[] readClipboardBinary(Transferable contents) throws UnsupportedFlavorException, IOException {
-        for (DataFlavor flavor : contents.getTransferDataFlavors()) {
-            if (!InputStream.class.isAssignableFrom(flavor.getRepresentationClass())) continue;
-            try (InputStream in = (InputStream) contents.getTransferData(flavor)) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                in.transferTo(out);
-                return out.toByteArray();
-            }
-        }
-        if (contents.isDataFlavorSupported(DataFlavor.imageFlavor)) {
-            Object data = contents.getTransferData(DataFlavor.imageFlavor);
-            if (data instanceof Image image) {
-                return ClipboardBinaryCodec.encodeImageAsPng(image);
-            }
-        }
-        return null;
     }
 
     /** 行ヤンク: カーソル行の下に貼り付け、カーソルを貼り付け行へ移動 */
