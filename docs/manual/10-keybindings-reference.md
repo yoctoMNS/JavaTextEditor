@@ -110,6 +110,7 @@
 | `:rename <old> <new>` | 一括シンボルリネーム | [Java開発支援](04-java-tooling.md) |
 | `:oi` `:organize-imports` / `:remove-import <fqn>` | import整理/個別削除 | [Java開発支援](04-java-tooling.md) |
 | `:pwd` / `:cd <path>` | 作業ディレクトリ表示/変更 | [検索・ナビゲーション](03-search-and-navigation.md) |
+| `:font 0` `:font 1` / `:color 0` `:color 1` | 半角フォント(Misc Fixed/IBM Plex Mono)・カラーテーマ(ダーク/ライト)切替 | [編集支援機能](06-editing-features.md) |
 | `:main <target>` | launcherエントリポイントへジャンプ | [Java開発支援](04-java-tooling.md) |
 | `:s/pat/repl/[flags]` `:%s...` `:N,Ms...` `:'<,'>s...` | Vim式置換コマンド | [モーダル編集](02-modal-editing.md#置換コマンドs) |
 | `:tutor` `:tutorial` | チュートリアルを開く | [チュートリアル](08-tutorial.md) |

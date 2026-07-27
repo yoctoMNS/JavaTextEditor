@@ -114,14 +114,45 @@ rm -rf "$WORK_DIR"
 
 fi # JDK_SOURCES_READY
 
-# フォント本体（半角ASCIIの描画）は X11 misc-fixed Bold 9x15 のビットマップグリフを
-# MiscFixedBold9x15.java にソースへ直接埋め込んでいるため、外部ダウンロードは不要。
-# （かつて IBM Plex Mono Regular (TTF) を実行時ダウンロードしていたが、
-# ビットマップフォントへの回帰に伴いこのダウンロード処理自体を廃止した。
-# 詳細は .claude/skills/font-and-statusline-animation/SKILL.md 参照。）
+# ---- 4. IBM Plex Mono Regular (TTF) の取得 ----
+# :font 1 で選択できる半角ASCIIフォント（既定の :font 0 は MiscFixedBold9x15.java に
+# ビットマップとして直接埋め込み済みのためダウンロード不要）。SIL OFL 1.1 で配布されており、
+# ソース同梱ではなく実行時にダウンロードして lib/fonts/ に置く（lib/ は .gitignore 対象の
+# ため、src.zip/openjdk-native と同じ「外部リソースは setup.sh で取得」という既存の方針に
+# 合わせている）。
+FONTS_DIR="$LIB_DIR/fonts"
+FONT_TTF="$FONTS_DIR/IBMPlexMono-Regular.ttf"
+FONT_LICENSE="$FONTS_DIR/IBMPlexMono-OFL.txt"
+FONT_TTF_URL="https://raw.githubusercontent.com/IBM/plex/master/packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf"
+FONT_LICENSE_URL="https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt"
+
+if [ -f "$FONT_TTF" ]; then
+    echo "IBM Plex Mono Regular already exists: $FONT_TTF"
+else
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "WARNING: curl not found; skipping IBM Plex Mono Regular download."
+        echo "         :font 1 will fall back to a substitute monospace font."
+    else
+        echo "=== Downloading IBM Plex Mono Regular (SIL OFL 1.1) ==="
+        mkdir -p "$FONTS_DIR"
+        if curl -fsSL -o "$FONT_TTF.tmp" "$FONT_TTF_URL"; then
+            mv "$FONT_TTF.tmp" "$FONT_TTF"
+            echo "Saved: $FONT_TTF"
+        else
+            echo "WARNING: failed to download IBM Plex Mono Regular from $FONT_TTF_URL"
+            echo "         :font 1 will fall back to a substitute monospace font."
+            rm -f "$FONT_TTF.tmp"
+        fi
+        if [ -f "$FONT_TTF" ] && [ ! -f "$FONT_LICENSE" ]; then
+            curl -fsSL -o "$FONT_LICENSE" "$FONT_LICENSE_URL" \
+                || echo "WARNING: failed to download the OFL license text (non-fatal)."
+        fi
+    fi
+fi
 
 echo ""
 echo "=== Setup complete ==="
 [ -f "$SRC_ZIP" ]    && echo "  src.zip    : $SRC_ZIP"
 [ -d "$NATIVE_DIR" ] && echo "  native src : $NATIVE_DIR"
 [ -d "$HOTSPOT_DIR" ] && echo "  hotspot src: $HOTSPOT_DIR"
+[ -f "$FONT_TTF" ]   && echo "  font       : $FONT_TTF"

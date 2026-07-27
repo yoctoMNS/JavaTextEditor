@@ -120,10 +120,12 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         repaint();
     });
 
-    // 半角ASCIIは X11 misc-fixed Bold 9x15（実機xtermの `ps` 出力から特定した本物の
+    // 半角ASCIIは既定でX11 misc-fixed Bold 9x15（実機xtermの `ps` 出力から特定した本物の
     // ビットマップデータ）を cellW×cellH に合わせて縦横独立にニアレストネイバー拡縮して
-    // ラスタライズする（MiscFixedBold9x15参照）。
-    private final MiscFixedBold9x15 bitmapFont = MiscFixedBold9x15.INSTANCE;
+    // ラスタライズする（MiscFixedBold9x15参照）。:font コマンド（setFontChoice）で
+    // IbmPlexMonoFont（TTFベクター）へ切り替え可能。
+    private FontChoice fontChoice = FontChoice.MISC_FIXED;
+    private MonoFont bitmapFont = MiscFixedBold9x15.INSTANCE;
 
     // グリフキャッシュ: codePoint → レンダリング済み BufferedImage（透明背景・fg色）
     // セルサイズまたはテーマが変わったら invalidateGlyphCache() でクリアする
@@ -484,7 +486,27 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public void setCursor(int row, int col) { this.cursorRow = row; this.cursorCol = col; repaint(); }
     public void setCursorPositionLabel(String label) { this.cursorPositionLabel = label; repaint(); }
     public void setInsertMode(boolean insertMode) { this.insertMode = insertMode; repaint(); }
-    public void setTheme(Theme theme) { this.theme = theme; invalidateGlyphCache(); repaint(); }
+    public void setTheme(Theme theme) {
+        // syncCanvas() は1キー入力ごとに呼ばれるため、値が変化していない場合は
+        // グリフキャッシュを無駄に破棄しない（setFontChoice()と同じガード方式）。
+        if (this.theme == theme) return;
+        this.theme = theme;
+        invalidateGlyphCache();
+        repaint();
+    }
+    public Theme getTheme() { return theme; }
+
+    /** 半角ASCIIフォントを切り替える（:font コマンド）。両ペインから独立に設定可能。 */
+    public void setFontChoice(FontChoice fontChoice) {
+        if (this.fontChoice == fontChoice) return;
+        this.fontChoice = fontChoice;
+        this.bitmapFont = (fontChoice == FontChoice.IBM_PLEX_MONO)
+            ? IbmPlexMonoFont.INSTANCE
+            : MiscFixedBold9x15.INSTANCE;
+        invalidateGlyphCache();
+        repaint();
+    }
+    public FontChoice getFontChoice() { return fontChoice; }
     public void setScrollRow(int scrollRow) { this.scrollRow = Math.max(0, scrollRow); repaint(); }
     public int getScrollRow() { return scrollRow; }
     public void setScrollCol(int col) { this.scrollCol = Math.max(0, col); repaint(); }
