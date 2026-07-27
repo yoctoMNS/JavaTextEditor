@@ -309,10 +309,8 @@ public class ModalEditor {
     private int filerSelectedIdx = 0;
     private boolean filerSearchMode = false;
     private final StringBuilder filerQuery = new StringBuilder();
-    private UndoablePieceTable filerSavedBuffer = null; // 選択中に退避した元バッファの参照（共有バッファを保つため）
-    private String filerSavedFilePath = null;
-    private int filerSavedCursorRow = 0;
-    private int filerSavedCursorCol = 0;
+    /** FILER 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash filerStash = new PseudoBufferStash();
     // Mode.BINARY 状態（:b コマンドで任意のバッファと相互トグルする hexdump 編集モード）。
     // buffer 自体が「唯一の真実」（hexdumpテキストを直接1文字ずつ上書き編集する）ため、
     // 別途バイト配列をキャッシュしない。binaryByteCount のみバイト総数として保持し、
@@ -325,10 +323,8 @@ public class ModalEditor {
     private boolean binaryNibblePending = false; // true = 直前に高位4bitを入力済み、次の1桁で低位4bitを確定
 
     // jdk-source 疑似バッファ: K キーで開いた JDK ソース表示中に保持する情報
-    private UndoablePieceTable savedBuffer = null; // 元バッファの参照（共有バッファを保つため）
-    private String savedFilePath = null;         // 元バッファのファイルパス（null可）
-    private int savedCursorRow = 0;
-    private int savedCursorCol = 0;
+    /** jdk-source 疑似バッファ表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash jdkSourceStash = new PseudoBufferStash();
     private boolean inJdkSourceBuffer = false;   // true のとき q で元に戻る
     // true = 現在の jdk-source 疑似バッファは C/C++ ネイティブソース（.c/.cpp/.h やJNIスニペット）。
     // false = Java ソース（クラス本体）。K の native シンボル探索(A)を誤って
@@ -342,10 +338,8 @@ public class ModalEditor {
     // 壊れないが、こちらは編集中の実.mdファイルそのものをレンダリング後のテキストで上書きして
     // しまう実害があるため。markdownViewOwner は「この buffer インスタンスが :view 用に作られた
     // ものか」を参照一致で判定するための目印（binaryModeOwner/classFileBufferOwnerと同じ設計）。
-    private UndoablePieceTable markdownViewSavedBuffer = null;
-    private String markdownViewSavedFilePath = null;
-    private int markdownViewSavedCursorRow = 0;
-    private int markdownViewSavedCursorCol = 0;
+    /** Markdown 閲覧ビュー表示中に隠れている元のソース編集状態。 */
+    private final PseudoBufferStash markdownViewStash = new PseudoBufferStash();
     private UndoablePieceTable markdownViewOwner = null;
 
     // 入力補完状態（INSERT モード内で管理）
@@ -3282,6 +3276,20 @@ public class ModalEditor {
         }
     }
 
+    /** いま編集中の状態を退避置き場へ預ける（疑似バッファを開く直前に呼ぶ）。 */
+    private void saveToStash(PseudoBufferStash stash) {
+        stash.save(buffer, currentFilePath, cursorRow, cursorCol);
+    }
+
+    /** 退避置き場から元の編集状態へ戻す（疑似バッファを閉じるときに呼ぶ）。 */
+    private void restoreFromStash(PseudoBufferStash stash) {
+        buffer = stash.buffer();
+        currentFilePath = stash.filePath();
+        cursorRow = stash.cursorRow();
+        cursorCol = stash.cursorCol();
+        stash.clear();
+    }
+
     /** 現在のバッファ状態を履歴に追加する。 */
     private void pushBuffer() {
         history.push(currentBufferSnapshot());
@@ -4758,10 +4766,7 @@ public class ModalEditor {
                 statusMessage = "E: " + err;
                 return;
             }
-            filerSavedBuffer = buffer;
-            filerSavedFilePath = currentFilePath;
-            filerSavedCursorRow = cursorRow;
-            filerSavedCursorCol = cursorCol;
+            saveToStash(filerStash);
             enterFiler();
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
@@ -4771,12 +4776,7 @@ public class ModalEditor {
     /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */
     private void exitFiler() {
         mode = Mode.NORMAL;
-        buffer = filerSavedBuffer != null ? filerSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = filerSavedFilePath;
-        cursorRow = filerSavedCursorRow;
-        cursorCol = filerSavedCursorCol;
-        filerSavedBuffer = null;
-        filerSavedFilePath = null;
+        restoreFromStash(filerStash);
     }
 
     private void processFilerKey(int keyCode, char keyChar, int modifiers) {
@@ -5104,32 +5104,22 @@ public class ModalEditor {
 
     // *compile* / *run* 疑似バッファ表示前の元バッファへ Esc で戻るための退避状態。
     // jdk-source疑似バッファ（saved*/inJdkSourceBuffer）と同じ「一時退避→復元」パターン。
-    private UndoablePieceTable outputSavedBuffer = null;
-    private String outputSavedFilePath = null;
-    private int outputSavedCursorRow = 0;
-    private int outputSavedCursorCol = 0;
+    /** *compile* / *run* 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash outputStash = new PseudoBufferStash();
     private boolean outputBufferActive = false;
 
     /** F10/F11開始時に呼ぶ。既に *compile* / *run* 表示中（連続F10等）なら元の退避内容を保持したまま何もしない。 */
     private void saveBufferBeforeOutput() {
         if (outputBufferActive) return;
-        outputSavedBuffer = buffer;
-        outputSavedFilePath = currentFilePath;
-        outputSavedCursorRow = cursorRow;
-        outputSavedCursorCol = cursorCol;
+        saveToStash(outputStash);
         outputBufferActive = true;
     }
 
     /** Esc: *compile* / *run* 疑似バッファから表示前の元バッファへ戻る。 */
     private void closeOutputBuffer() {
         if (!outputBufferActive) return;
-        buffer = outputSavedBuffer != null ? outputSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = outputSavedFilePath;
-        cursorRow = outputSavedCursorRow;
-        cursorCol = outputSavedCursorCol;
+        restoreFromStash(outputStash);
         outputBufferActive = false;
-        outputSavedBuffer = null;
-        outputSavedFilePath = null;
         clearSearchHighlights();
         statusMessage = "";
     }
@@ -5189,12 +5179,9 @@ public class ModalEditor {
             statusMessage = "E: not a markdown (.md) file";
             return;
         }
-        markdownViewSavedBuffer = buffer;
-        markdownViewSavedFilePath = currentFilePath;
-        markdownViewSavedCursorRow = cursorRow;
-        markdownViewSavedCursorCol = cursorCol;
+        saveToStash(markdownViewStash);
         String fileName = Path.of(currentFilePath).getFileName().toString();
-        String rendered = MarkdownRenderer.render(fileName, markdownViewSavedBuffer.getText());
+        String rendered = MarkdownRenderer.render(fileName, markdownViewStash.buffer().getText());
         buffer = new UndoablePieceTable(rendered);
         // 読み取り専用プレビュー: currentFilePathをnullにすることで:wを「no file name」エラーへ
         // 自然にフォールバックさせ、実.mdファイルへの誤保存（レンダリング後テキストでの上書き）を
@@ -5215,12 +5202,8 @@ public class ModalEditor {
             statusMessage = "E: not in markdown view";
             return;
         }
-        buffer = markdownViewSavedBuffer != null ? markdownViewSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = markdownViewSavedFilePath;
-        cursorRow = markdownViewSavedCursorRow;
-        cursorCol = markdownViewSavedCursorCol;
+        restoreFromStash(markdownViewStash);
         markdownViewOwner = null;
-        markdownViewSavedBuffer = null;
         clearSearchHighlights();
         statusMessage = "source view";
     }
@@ -6298,10 +6281,7 @@ public class ModalEditor {
      */
     private void openJdkSourceBuffer(String title, String content, boolean isNative) {
         if (!inJdkSourceBuffer) {
-            savedBuffer = buffer;
-            savedFilePath = currentFilePath;
-            savedCursorRow = cursorRow;
-            savedCursorCol = cursorCol;
+            saveToStash(jdkSourceStash);
         }
         buffer = new UndoablePieceTable(content);
         currentFilePath = title;
@@ -6318,13 +6298,9 @@ public class ModalEditor {
     /** JDK ソース疑似バッファを閉じて元バッファに戻る。 */
     private void closeJdkSourceBuffer() {
         if (!inJdkSourceBuffer) return;
-        buffer = savedBuffer != null ? savedBuffer : new UndoablePieceTable("");
-        currentFilePath = savedFilePath;
-        cursorRow = savedCursorRow;
-        cursorCol = savedCursorCol;
+        restoreFromStash(jdkSourceStash);
         inJdkSourceBuffer = false;
         jdkSourceIsNative = false;
-        savedBuffer = null;
         clearSearchHighlights();
         setStatusMessage("Returned from JDK source");
     }
