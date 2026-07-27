@@ -87,26 +87,7 @@ public class Main {
     // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
     // -------------------------------------------------------------------------
-    private static final List<dev.javatexteditor.telescope.BufferPicker.BufferEntry> BUFFER_REGISTRY =
-        new ArrayList<>();
-
-    private static synchronized void registerBuffer(dev.javatexteditor.telescope.BufferPicker.BufferEntry entry) {
-        if (entry.filePath() == null) return;
-        // 同じパスが既にあれば重複登録しない
-        for (var e : BUFFER_REGISTRY) {
-            if (entry.filePath().equals(e.filePath())) return;
-        }
-        BUFFER_REGISTRY.add(entry);
-    }
-
-    private static synchronized void unregisterBuffer(dev.javatexteditor.telescope.BufferPicker.BufferEntry entry) {
-        if (entry.filePath() == null) return;
-        BUFFER_REGISTRY.removeIf(e -> entry.filePath().equals(e.filePath()));
-    }
-
-    private static synchronized List<dev.javatexteditor.telescope.BufferPicker.BufferEntry> getBufferRegistry() {
-        return new ArrayList<>(BUFFER_REGISTRY);
-    }
+    private static final BufferRegistry BUFFER_REGISTRY = new BufferRegistry();
 
     // -------------------------------------------------------------------------
     // ペインツリー
@@ -714,9 +695,9 @@ public class Main {
             task -> Thread.ofVirtual().name("binding-definition-lookup").start(task),
             SwingUtilities::invokeLater);
         editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
-        editor.setBufferListSupplier(Main::getBufferRegistry);
-        editor.setOnFileOpened(Main::registerBuffer);
-        editor.setOnBufferDelete(Main::unregisterBuffer);
+        editor.setBufferListSupplier(BUFFER_REGISTRY::entries);
+        editor.setOnFileOpened(BUFFER_REGISTRY::register);
+        editor.setOnBufferDelete(BUFFER_REGISTRY::unregister);
         editor.setOnRunMainClassSelected(
             fqcn -> runJavaClass(editor, canvas, editor.getBuildRoot(), fqcn, pendingRunExtraClasspath));
         if (COMPLETION_INDEX != null) {
@@ -907,7 +888,7 @@ public class Main {
             if (splash) firstLeaf.canvas().setShowSplash(true);
             // 初期ファイルをバッファレジストリに登録
             if (path != null) {
-                registerBuffer(new dev.javatexteditor.telescope.BufferPicker.BufferEntry(
+                BUFFER_REGISTRY.register(new dev.javatexteditor.telescope.BufferPicker.BufferEntry(
                     Path.of(path).getFileName().toString(), path));
             }
 
