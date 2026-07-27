@@ -109,6 +109,7 @@ project-root/
 | ㉗ | `vim-macro-recording` | Vim式マクロ（`q{register}`記録・`q`終了・`@{register}`再生・`@@`直前マクロ再実行・大文字レジスタ追記） | ✅ 完了（29/29テスト・記録は`processKey()`入口1箇所で生キーを捕捉・マクロ専用レジスタは既存の`yankRegister`とは独立・記録中の入れ子`@`呼び出しは展開せず呼び出し2キーのみ記録・`count`付き再生(`3@a`)は汎用count機構が存在しないためスコープ外） |
 | ㉘ | `vim-case-conversion` | Vim式大文字小文字変換（NORMALの`~`・`guu`/`gUU`/`g~~`、VISUAL/VISUAL_LINE/VISUAL_BLOCKの`u`/`U`/`~`） | ✅ 完了（23/23テスト・operator-pendingモーション（`guiw`等）は②の既存スコープ外判断を踏襲し未対応・doubled-letter方式のみ実装） |
 | ㉙ | `classfile-viewer` | `.class`ファイルを開いた際のJVM仕様通りの構造ビュー表示（マジックナンバー/定数プール/フィールド/メソッド/属性）・`:nimo`コマンドによるニーモニック（javap -c風）バイトコード逆アセンブル表示 | ✅ 完了（60/60テスト・`dev.javatexteditor.classfile`パッケージ新設・`readFileContentForBuffer`にマジックナンバー判定を追加・`:nimo`は`outputErrorLinesOwner`と同じ参照一致による自動失効パターン。`:b`コマンド（Mode.BINARY）とは別物の読み取り専用プレビューとしてマージ済み） |
+| ㉚ | `markdown-viewer` | `.md`/`.markdown`ファイルを開いた際は生ソースを表示し、`:view`コマンドで見出し下線・リスト正規化・インライン記法除去等を行う読み取り専用の閲覧ビューへ切り替え、`:mark`でソースへ戻す | ✅ 完了（98/98テスト・`dev.javatexteditor.markdown`パッケージ新設・`MarkdownRenderer`はSwing非依存の純粋ロジックで出力はASCII印字可能文字のみに限定・`classFileBufferOwner`と同じ参照一致による自動失効パターン・`currentFilePath`をnullにする読み取り専用プレビュー方式（jdk-source方式は不採用、理由はSKILL.md参照）） |
 
 ### 依存関係（Skillを作る順序の制約）
 
@@ -1100,3 +1101,47 @@ project-root/
   3テストメソッド/7アサーション）。単一候補自動挿入・複数候補選択（IMPORT_SELECT経由）の
   両方で、import挿入前に表示していた診断の行番号が、挿入後の実際のエラー行と一致するよう
   補正されることを検証。挿入対象がない場合（候補ゼロ）は診断行が変化しないことも確認。
+
+## Markdownビューア（`:view`/`:mark`）の新規実装（2026-07-27）
+
+「`.md`ファイルを開いたら最初はそのままのソースを表示し、`:view`コマンドでMarkdownファイルに
+限りViewerとして描画、`:mark`で元のソース表示に戻したい」という要望に基づく新規機能。詳細な
+設計判断は`.claude/skills/markdown-viewer/SKILL.md`に集約した。ここでは経緯と、確認が取れな
+かった箇所についてどう判断したかを記録する。
+
+- **実装前に`AskUserQuestion`で2点（①レンダリング方式をプレーン整形表示にするか色付きレンダ
+  リングにするか、②`:view`中を保存不可にするか）を確認しようとしたが、応答が得られなかった**。
+  CLAUDE.md「作業時の方針」の「既存のSkillの内容と矛盾する実装をしようとしている場合は、実装を
+  進める前にユーザーに確認すること」という原則と、本ファイル中の他の多くの機能（F10/F11/F12・
+  `:pr`・クリップボード・共有バッファ等）が実装前にユーザー確認を経ている慣行を踏まえ、双方の
+  質問とも**推奨案（選択肢の1番目）をそのまま採用して実装を進めた**。次にこの機能へ触れる開発者
+  は、ユーザーから別方針の指示があれば以下の決定を上書きしてよい。
+  1. **レンダリング方式はプレーン整形表示を採用**（色付きレンダリングは不採用）。理由:
+     このエディタの本文描画は等幅ビットマップフォントのグリッド描画で、フォントスタイル変更は
+     元々不可能。色分けは技術的には可能（構文ハイライト・error行と同じ`uiGlyphCache`機構で1文字
+     ごとに任意色を付けられる）だが、それには`SyntaxHighlighter`/`SourceLanguage`相当の新しい
+     トークン化・色付けロジックと`EditorCanvas`側の配線が別途必要になり、実装コストと変更範囲が
+     大きく増える。プレーン整形表示なら`MarkdownRenderer`が生成したテキストを既存の疑似バッファ
+     表示（`*grep*`/`*binary*`/`*class*`と同じ「buffer差し替え」パターン）にそのまま乗せるだけで
+     済み、`EditorCanvas`に一切手を入れずに実現できるため、こちらを選んだ。
+  2. **`:view`中は`:w`を不可にする方式を採用**（`:b`のように同じファイルパスのまま編集・保存
+     できる方式は不採用）。理由: `:view`はあくまで「読み取り専用のプレビュー」であり、誤って
+     `:w`すると実`.md`ファイルがレンダリング後のテキストで上書きされてしまう実害がある。
+     `.class`構造ビュー（classfile-viewer）と同じ「`currentFilePath`をnullにする」方式を踏襲した
+     （詳細・他方式との比較はSKILL.md「なぜ『読み取り専用プレビュー』をclassfile-viewer方式に
+     したか」節を参照）。
+- **出力する記号はASCII印字可能文字(0x20-0x7E)のみに限定した**。telescope選択行マーカーを
+  `"▸ "`から`"> "`へ変更した既存の教訓（`.claude/skills/gui-rendering-pipeline/SKILL.md`参照。
+  ビットマップフォント非対応文字はSwingフォールバック描画になり、`charCellWidth()`が想定する
+  セル幅とフォールバック描画の実際の幅がずれるリスクがある）を踏まえた判断。見出しの下線は
+  `=`/`-`、水平線は`-`、引用は`| `、箇条書きは`- `、タスクリストは`[ ]`/`[x]`で表現する。
+- **新規パッケージ`dev.javatexteditor.markdown`**（`MarkdownRenderer`のみ、Swing非依存の純粋
+  ロジック）。`ModalEditor`には`isMarkdownBuffer()`/`enterMarkdownView()`/`exitMarkdownView()`
+  と`markdownViewOwner`/`markdownViewSaved*`フィールドを追加し、`executeCommand()`に`:view`/
+  `:mark`を配線した。`Main.java`・`EditorCanvas.java`は無変更（Fキーのようなグローバルディス
+  パッチも不要で、既存のCOMMANDモード経由の疑似バッファパターンだけで完結する機能のため）。
+- **テスト**: `test/dev/javatexteditor/markdown/MarkdownRendererTest.java`（72テスト、純粋ロジ
+  ック）・`test/dev/javatexteditor/editor/MarkdownViewTest.java`（26テスト、`ModalEditor`統合。
+  `:view`/`:mark`往復でバッファ参照が同一オブジェクトのまま保たれること＝共有バッファ整合性を
+  含む）。既存のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件＝いずれも本変更前から
+  失敗、仕様判断未決のため修正禁止）を除き全PASS。
