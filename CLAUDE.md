@@ -1158,3 +1158,66 @@ project-root/
   `:view`/`:mark`往復でバッファ参照が同一オブジェクトのまま保たれること＝共有バッファ整合性を
   含む）。既存のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件＝いずれも本変更前から
   失敗、仕様判断未決のため修正禁止）を除き全PASS。
+
+## ModalEditor 神クラス解体リファクタリング 第1弾（2026-07-27）
+
+「プロジェクト全体のコードが大きくなりすぎて読みづらい。SOLID原則に沿った美しいクラス設計へ、
+ただし規模を小さく・デグレを起こさないよう慎重に」という依頼に基づく、`ModalEditor`（6,850行・
+355メソッドの神クラス）の段階的な解体。**今回は第1弾であり、まだ続きがある**（後述「次に着手すべき候補」）。
+
+### 進め方（次の担当者もこの手順を踏襲すること）
+
+1. **着手前に全テストのベースラインを取る**。`./scripts/test.sh` は1クラスでも落ちると途中で止まるため、
+   各テストクラスを個別JVM＋`timeout 180`で回し、クラスごとの合否を1ファイルに記録する方式を使った。
+   ベースライン（本リファクタリング開始時点、全91テストクラス）:
+   - 89クラス PASS
+   - `dev.javatexteditor.editor.ScrollTest` — 2件FAIL（Ctrl+Uの仕様変更にテストが未追従。
+     **仕様判断未決のため修正禁止**。既存の「既知の未接続・二重定義」6.・REFACTORING_PLAN U-7 参照）
+   - `dev.javatexteditor.editor.ModalEditorTest` — 1件FAIL（同じくベースラインからの既知FAIL）
+2. **1つの抽出につき1コミット**。抽出 → `./scripts/build.sh` → 影響範囲のテストクラスだけを個別実行 →
+   コミット、を繰り返す。中核状態に触れた回（バッファ履歴）と最終回だけ全91クラスを回し、
+   **ベースラインとの差分がゼロであること**を `diff` で機械的に確認した。
+3. **公開シグネチャは一切変更しない**。テスト側が `getYankType()` の文字列値や
+   `getSearchMatches()` の `List<int[]>` 型に依存しているため（REFACTORING_PLAN §1.5）。
+   今回の抽出はすべて「内部フィールドと private メソッドの移動」に留めてある。
+
+### 抽出したクラス（すべて `dev.javatexteditor.editor` パッケージ・package-private）
+
+| 新クラス | 抽出元の責務 | 主な改善点 |
+|---|---|---|
+| `SystemClipboardAccess` | OSクリップボードの読み書き（Ctrl+Shift+C / Ctrl+Shift+V） | 「何が取れたか」を sealed interface `ReadResult`（`Content`/`Empty`/`Failure`）で返す。`ModalEditor` 側は `switch` のパターンマッチ3行になり、「OSと話す処理」と「テキストを編集する処理」が分離された |
+| `MacroRecorder` | Vim式マクロの記録・再生（`q`/`@`/`@@`） | 散在していた状態7個を集約。再生は `KeyReplayer` 関数型インタフェース経由でキーを呼び出し側へ差し戻すため `ModalEditor` への逆依存がない。失敗理由は `PlayOutcome` enum で返し、日本語文言は `reportMacroOutcome()` 1箇所に集約 |
+| `UserPathResolver` | コマンド行のパス文字列 → 絶対パス | `resolveRelativeToProjectRoot()` と `resolveRelativeToBuildRoot()` は基準ディレクトリが違うだけの完全な重複だった。`resolveAgainst(baseDir, pathSpec)` 1本に統合 |
+| `BufferHistory` + `BufferSnapshot` | Ctrl+U/Ctrl+P の疑似バッファ履歴 | `historyIdx >= 0 && historyIdx < bufferHistory.size() - 1` のような境界条件の書き下しを `hasPrevious()`/`hasNext()` に置換。「現在位置より後ろを切り捨てる」「離れる直前の状態を書き戻す」という暗黙ルールを `push()`/`moveTo()` の内側へ隠蔽。`BufferSnapshot` は履歴とShift+Kの復帰点の2箇所で共有されるためトップレベル record へ昇格 |
+| `CompletionPopupState` | 補完ポップアップの状態（Ctrl+Space / Alt+/ 共通） | 5フィールドを毎回まとめて書き換える暗黙の不変条件を `openWith()`/`close()` に隠蔽。4箇所に重複していたクランプ式 `Math.min(idx+1, size-1)` を `selectNext()`/`selectPrevious()` へ集約。Ctrl+N と ↓、Ctrl+P と ↑ が完全に同一動作だったため4ブロック→2ブロックへ統合 |
+| `BufferTextSearch` | `/`・`n`・`N` の一致箇所計算 | 前方/後方でほぼ同一だった2つの走査ループを `selectNearest()` 1本に統合し、Vim互換の「ファイル端で折り返す」規則に名前を付けた。`{offset, length}` の `int[]` 表現は `getSearchMatches()` の公開シグネチャ維持のため**あえて record 化していない** |
+
+結果: `ModalEditor.java` は 6,850行 → 6,657行（-193行）。行数の減少幅より、
+**5つの状態クラスタが名前付きの型として独立し、`ModalEditor` から「フィールドを直接いじる」記述が消えたこと**が本質。
+
+### 意図的に手を付けなかった箇所（次の担当者が「直し忘れ」と誤解しないための記録）
+
+- **識別子プレフィックスの後方走査が3箇所に重複**（`extractCompletionPrefix()`／`prefixStartOffset()`／
+  `applyCompletion()` 内のループ）。CLAUDE.md 既存節「補完候補の並び順を Vim の i_CTRL-N に合わせる」で
+  **「3行の重複は早すぎる抽象化よりよい」という方針に従いあえて共通化しなかった**と明記済みの
+  記録済み設計判断のため、今回も覆さなかった。共通化する場合はユーザーに確認すること。
+- **`ScrollTest` 2件・`ModalEditorTest` 1件の既知FAIL**。仕様判断が未決のため「ついでに」直さない
+  （既存節「既知の未接続・二重定義」6. と同じ扱い）。
+- **`processNormalKey()`（約360行）・`executeCommand()`（約100行の if-else 連鎖）・`syncCanvas()`** 等の
+  巨大メソッド本体。分割にはモード遷移の意味論に踏み込む判断が必要で、今回の「小さく安全に」という
+  依頼の範囲を超えるため見送った。
+- **`EditorCanvas`（1,863行）・`Main`（1,282行）**。今回は最大の神クラス1つに絞った。
+
+### 次に着手すべき候補（優先度順）
+
+1. **`ModalEditor` の疑似バッファ退避・復元の5系統統一** — telescope／`:cd`候補／`:e`候補／FILER／
+   jdk-source が `xxxSaved*` フィールド群を各自持ち、`*compile*`/`*run*` はさらに別系統
+   （`outputSaved*`）。共通の `PseudoBufferStash` 型へ寄せられる可能性が高い。ただし既存節
+   「既知の未接続・二重定義」5.（2系統を重ねた場合の挙動は未定義・未テスト）に触れるため、
+   仕様を確定させてから着手すること。
+2. **`executeCommand()` の if-else 連鎖 → コマンド名 → ハンドラの `Map` 化**。`:wa`/`:qa` の
+   `equals` 完全一致判定と `startsWith` 判定が混在しており、追加順序に依存する暗黙の優先順位がある。
+   順序依存を壊さないことの検証が必須。
+3. **FILER／TELESCOPE／FILESEARCH／IMPORT_SELECT／CLASSPATH_INPUT の疑似モード群**。いずれも
+   `KeymapRegistry` をバイパスして `processXxxKey()` で直接キーを処理する同型の構造をしており、
+   共通のインタフェース（例: `ModalScreen`）へ寄せられる可能性がある。

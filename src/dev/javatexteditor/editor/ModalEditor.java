@@ -2335,14 +2335,7 @@ public class ModalEditor {
             return;
         }
 
-        String text = buffer.getText();
-        Matcher m = p.matcher(text);
-        List<int[]> matches = new ArrayList<>();
-        while (m.find()) {
-            int len = m.end() - m.start();
-            matches.add(new int[]{m.start(), len > 0 ? len : 1});
-        }
-
+        List<int[]> matches = BufferTextSearch.findAll(buffer.getText(), p);
         if (matches.isEmpty()) {
             statusMessage = "Pattern not found: " + pattern;
             searchMatches = List.of();
@@ -2352,31 +2345,8 @@ public class ModalEditor {
         }
 
         searchMatches = matches;
-        int cursorOffset = offsetOfCursor();
-
-        if (forward) {
-            currentMatchIdx = -1;
-            for (int i = 0; i < matches.size(); i++) {
-                if (matches.get(i)[0] > cursorOffset) {
-                    currentMatchIdx = i;
-                    break;
-                }
-            }
-            if (currentMatchIdx < 0) currentMatchIdx = 0; // wrap around
-        } else {
-            currentMatchIdx = -1;
-            for (int i = matches.size() - 1; i >= 0; i--) {
-                if (matches.get(i)[0] < cursorOffset) {
-                    currentMatchIdx = i;
-                    break;
-                }
-            }
-            if (currentMatchIdx < 0) currentMatchIdx = matches.size() - 1; // wrap around
-        }
-
-        moveCursorToOffset(searchMatches.get(currentMatchIdx)[0]);
-        statusMessage = "/" + pattern + "  [" + (currentMatchIdx + 1) + "/" + matches.size() + "]";
-        updateSearchHighlights();
+        currentMatchIdx = BufferTextSearch.selectNearest(matches, offsetOfCursor(), forward);
+        jumpToCurrentMatch(pattern);
     }
 
     /** n/N: 最後の検索方向（または逆方向）で次マッチへジャンプ。 */
@@ -2389,13 +2359,14 @@ public class ModalEditor {
             statusMessage = "E: no previous search pattern";
             return;
         }
-        if (forward) {
-            currentMatchIdx = (currentMatchIdx + 1) % searchMatches.size();
-        } else {
-            currentMatchIdx = (currentMatchIdx - 1 + searchMatches.size()) % searchMatches.size();
-        }
+        currentMatchIdx = BufferTextSearch.step(searchMatches, currentMatchIdx, forward);
+        jumpToCurrentMatch(lastSearchPattern);
+    }
+
+    /** 選択中の一致へカーソルを移動し、「/パターン [3/7]」形式の進捗をステータス行に出す。 */
+    private void jumpToCurrentMatch(String pattern) {
         moveCursorToOffset(searchMatches.get(currentMatchIdx)[0]);
-        statusMessage = "/" + lastSearchPattern + "  [" + (currentMatchIdx + 1) + "/" + searchMatches.size() + "]";
+        statusMessage = "/" + pattern + "  [" + (currentMatchIdx + 1) + "/" + searchMatches.size() + "]";
         updateSearchHighlights();
     }
 
