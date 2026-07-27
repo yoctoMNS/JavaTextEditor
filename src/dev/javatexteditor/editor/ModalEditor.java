@@ -1875,26 +1875,54 @@ public class ModalEditor {
     // SEARCHモード処理
     // -------------------------------------------------------------------------
 
-    private void processSearchKey(int keyCode, char keyChar) {
+    /**
+     * 1行のテキストを打ち込ませる疑似モード共通のキー処理。
+     * {@code /}（検索）・{@code \\f}/{@code \\g}（ファイル検索）・F10/F11/F12 の追加クラスパス入力が
+     * これに当たる。いずれも振る舞いは4つしかない。
+     *
+     * <ul>
+     *   <li>Esc — 取り消す</li>
+     *   <li>Backspace — 末尾を1文字消す（空なら何もしない）</li>
+     *   <li>Enter — 打ち込んだ内容を確定する</li>
+     *   <li>印字可能文字 — 書き足す</li>
+     * </ul>
+     *
+     * 画面ごとに違うのは「どの入力欄か」「取り消したら何をするか」「確定したら何をするか」の3点だけなので、
+     * それだけを引数で受け取る。
+     *
+     * @param input    打ち込み先の入力欄
+     * @param onCancel Esc が押されたときの処理
+     * @param onCommit Enter が押されたときの処理。入力欄の現在の内容が渡る（欄は消さない）
+     */
+    private void handleTextPromptKey(int keyCode, char keyChar, StringBuilder input,
+                                     Runnable onCancel, Consumer<String> onCommit) {
         if (keyCode == KeyEvent.VK_ESCAPE) {
-            searchBuffer.setLength(0);
-            mode = Mode.NORMAL;
-            clearSearchHighlights();
+            onCancel.run();
         } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (searchBuffer.length() > 0) {
-                searchBuffer.deleteCharAt(searchBuffer.length() - 1);
+            if (input.length() > 0) {
+                input.deleteCharAt(input.length() - 1);
             }
         } else if (keyCode == KeyEvent.VK_ENTER) {
-            String pattern = searchBuffer.toString();
-            mode = Mode.NORMAL;
-            if (!pattern.isEmpty()) {
+            onCommit.accept(input.toString());
+        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            input.append(keyChar);
+        }
+    }
+
+    private void processSearchKey(int keyCode, char keyChar) {
+        handleTextPromptKey(keyCode, keyChar, searchBuffer,
+            () -> {
+                searchBuffer.setLength(0);
+                mode = Mode.NORMAL;
+                clearSearchHighlights();
+            },
+            pattern -> {
+                mode = Mode.NORMAL;
+                if (pattern.isEmpty()) return;
                 lastSearchPattern = pattern;
                 lastSearchForward = true;
                 executeSearch(pattern, true);
-            }
-        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            searchBuffer.append(keyChar);
-        }
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -1909,30 +1937,28 @@ public class ModalEditor {
     }
 
     private void processFileSearchKey(int keyCode, char keyChar) {
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            fileSearchBuffer.setLength(0);
-            mode = Mode.NORMAL;
-        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (fileSearchBuffer.length() > 0) {
-                fileSearchBuffer.deleteCharAt(fileSearchBuffer.length() - 1);
-            }
-        } else if (keyCode == KeyEvent.VK_ENTER) {
-            String input = fileSearchBuffer.toString();
-            mode = Mode.NORMAL;
-            if (!input.isEmpty()) {
-                // 先頭が '!' なら bang 指定（\f! / \g!）: デフォルトスキップ対象を無視して全ファイル検索
-                boolean fullScan = input.startsWith("!");
-                String pattern = fullScan ? input.substring(1) : input;
-                if (!pattern.isEmpty()) {
-                    if (fileSearchType == FileSearchType.NAME) {
-                        executeFileNameSearch(pattern, fullScan);
-                    } else {
-                        executeGrep(pattern, getProjectRoot(), fullScan);
-                    }
-                }
-            }
-        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            fileSearchBuffer.append(keyChar);
+        handleTextPromptKey(keyCode, keyChar, fileSearchBuffer,
+            () -> {
+                fileSearchBuffer.setLength(0);
+                mode = Mode.NORMAL;
+            },
+            this::runFileSearch);
+    }
+
+    /**
+     * \f / \g で打ち込まれたパターンを実行する。
+     * 先頭が '!' なら bang 指定（\f! / \g!）で、デフォルトのスキップ対象も含めた全ファイル検索になる。
+     */
+    private void runFileSearch(String input) {
+        mode = Mode.NORMAL;
+        if (input.isEmpty()) return;
+        boolean fullScan = input.startsWith("!");
+        String pattern = fullScan ? input.substring(1) : input;
+        if (pattern.isEmpty()) return;
+        if (fileSearchType == FileSearchType.NAME) {
+            executeFileNameSearch(pattern, fullScan);
+        } else {
+            executeGrep(pattern, getProjectRoot(), fullScan);
         }
     }
 
@@ -1959,17 +1985,10 @@ public class ModalEditor {
     }
 
     private void processClasspathInputKey(int keyCode, char keyChar) {
-        if (keyCode == KeyEvent.VK_ESCAPE) {
-            finishClasspathInput(List.of());
-        } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
-            if (classpathInputBuffer.length() > 0) {
-                classpathInputBuffer.deleteCharAt(classpathInputBuffer.length() - 1);
-            }
-        } else if (keyCode == KeyEvent.VK_ENTER) {
-            finishClasspathInput(parseClasspathInput(classpathInputBuffer.toString()));
-        } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
-            classpathInputBuffer.append(keyChar);
-        }
+        handleTextPromptKey(keyCode, keyChar, classpathInputBuffer,
+            // Esc は「クラスパス追加をスキップする」の意味。コンパイル/実行そのものは中断しない
+            () -> finishClasspathInput(List.of()),
+            input -> finishClasspathInput(parseClasspathInput(input)));
     }
 
     private void finishClasspathInput(List<Path> extraClasspath) {
