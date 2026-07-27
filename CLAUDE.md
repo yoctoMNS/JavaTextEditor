@@ -1432,3 +1432,68 @@ Phase 完了時にベースラインとの `diff` ゼロを機械的に確認 �
 2. **`Main`（1,282行）** — `PaneTree` / `GlobalKeyDispatcher` / `BuildRunner`(F10–12) /
    `IndexBootstrap` へ分けられる。ただし GUI 配線は自動テストできない既知のギャップがあるため、
    純粋ロジックを先に抜くこと。
+
+## EditorCanvas リファクタリング 第6弾（2026-07-27）— 描画状態の値オブジェクト化
+
+`EditorCanvas`（1,863行・private フィールド119個・public setter 25個）に着手した。
+**ユーザーの明示的な選択により「旧 setter を委譲として残す移行期間を設ける」方式を採用**している
+（第5弾末尾で提示した2案のうちの①）。これにより第1〜5弾の「公開シグネチャは変更しない」ルールは
+そのまま維持され、既存の呼び出し側（`Main`・`EditorCanvasTest`・`RobotKeyInputTest`・
+`KeyboardSimulationTest`・各 Preview）は1行も変えずに動く。
+
+### 抽出した3つの値オブジェクト（`dev.javatexteditor.ui`）
+
+| レコード | まとめた対象 | 旧API |
+|---|---|---|
+| `CompletionView` | 補完ポップアップの6フィールド | `setCompletionState(6引数)` → `setCompletionView()` へ委譲 |
+| `TelescopeView` | 候補一覧オーバーレイの6フィールド | `setTelescopeState(6引数)` → `setTelescopeView()` へ委譲 |
+| `SelectionView` | 選択範囲の3 boolean + 4座標 | 旧5メソッドは据え置き。`setSelectionView()` を新設 |
+
+`CompletionView` / `TelescopeView` は**内部表現もレコードに置き換えた**（フィールド6個→1個）。
+描画側にあった `completionActive && !completionLabels.isEmpty()` のような組み合わせ条件は
+`hasVisibleItems()`、範囲チェック付きの種別取得は `kindAt(i)` としてレコード側に集約した。
+
+### `SelectionView` だけ内部表現を置き換えていない理由（重要）
+
+`visualMode` / `visualLineMode` / `visualBlockMode` の3 boolean は本来
+`Kind`（NONE/CHARACTER/LINE/BLOCK）という1つの4状態の値であり、enum 化したくなる。
+**しかし内部表現の置き換えは見送った。**
+
+理由: 既存の `setVisualMode` / `setVisualLineMode` / `setVisualBlockMode` / `clearSelection` は
+互いに独立した部分更新として呼ばれており、`EditorCanvasTest` が**実際に順序を入れ替えて**
+呼んでいる（`setVisualLineMode(true)` → `setVisualMode(true)` の逆順、
+`clearSelection()` の後に `setVisualMode(false)` など）。
+これらを4状態の列挙へ写す変換は呼び出し順によって解釈が割れる。しかも当該テストは
+**描画が例外なく完了することしか確認しない smoke test** であり、誤った変換を検出できない。
+「変換を間違えても気づけない」状況で内部表現を変えるのは割に合わないと判断した。
+
+内部表現を enum 化する場合は、先に `EditorCanvasTest` を「描いた結果の選択範囲を検証する」
+テストへ作り替えること。それなしに着手してはならない。
+
+### 挙動同一性の確認方法
+
+`SelectionView` は上記のとおりテストが値を検証しないため、
+**`EditorCanvas` の選択関連7フィールドをリフレクションで直接覗くプローブを
+リファクタ前後の両バイナリで実行**し、NORMAL / `v` / `V` / `Ctrl+V` の4モードすべてで
+完全に同一（選択なし時に座標が -1 になる点まで一致）であることを確認した。
+第4弾の `anchorCol` 検証と同じ手法。
+
+なお、この種のプローブを書く際は **`main` の末尾に `System.exit(0)` を必ず入れること**。
+`EditorCanvas` のコンストラクタがステータス行アニメ用の Swing Timer を start するため、
+入れないと JVM が終了しない（REFACTORING_PLAN P-23 と同じ現象）。
+
+### 検証
+
+全94テストクラスを個別JVMで実行し、着手前ベースラインと `diff` で完全一致。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし。
+
+### 次に着手すべき候補
+
+1. **`EditorCanvas` の残り**: `setText`/`setCursor`/`setScrollRow`/`setScrollCol`/`setWrapEnabled` 等の
+   ビューポート系も同様に束ねられる。また `syncCanvas()` が1キー入力ごとに setter を約26回呼び、
+   その都度 `repaint()` を呼んでいる（Swing が合体させるため実害は小さいが、
+   まとめて1回にする余地がある）。ただし**描画タイミングを変える変更はテストで検出できない**ため、
+   着手するなら目視確認の手段を用意すること。
+2. **`Main`（1,282行）**: `PaneTree` / `GlobalKeyDispatcher` / `BuildRunner`(F10–12) /
+   `IndexBootstrap` へ分けられる。GUI 配線は自動テストできない既知のギャップがあるため、
+   純粋ロジックを先に抜くこと。
