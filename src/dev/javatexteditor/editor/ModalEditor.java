@@ -2094,8 +2094,10 @@ public class ModalEditor {
         if ((ctrlDown && keyCode == KeyEvent.VK_P) || keyCode == KeyEvent.VK_UP) {
             moveTelescope(-1); return;
         }
-        // BufferPicker 中に 'd': 選択バッファをレジストリから削除
-        if (keyChar == 'd' && !ctrlDown && telescopePicker instanceof BufferPicker) {
+        // BufferPicker 中に Shift+D: 選択バッファをレジストリから削除（クローズ）。
+        // 小文字の 'd' は自由入力（バッファ名フィルタ）に使うため、大文字 'D' のみを専用アクションとして
+        // 割り当てる（小文字を使うと "d" を含むファイル名を検索できなくなってしまうため）。
+        if (keyChar == 'D' && !ctrlDown && telescopePicker instanceof BufferPicker) {
             if (!telescopeResults.isEmpty() && onBufferDelete != null) {
                 TelescopeItem item = telescopeResults.get(telescopeSelectedIdx);
                 onBufferDelete.accept(new BufferPicker.BufferEntry(item.display(), item.filePath()));
