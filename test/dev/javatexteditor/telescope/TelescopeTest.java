@@ -37,6 +37,8 @@ public class TelescopeTest {
         testModalEditorTelescopeQueryUpdate();
         testModalEditorTelescopeNavigation();
         testModalEditorTelescopeBackspace();
+        testBufferPickerCtrlDDeletesSelectedEntry();
+        testBufferPickerLetterDFiltersInsteadOfDeleting();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -229,6 +231,39 @@ public class TelescopeTest {
         editor.processKey(KeyEvent.VK_B, 'b', 0);
         editor.processKey(KeyEvent.VK_BACK_SPACE, KeyEvent.CHAR_UNDEFINED, 0);
         assertEquals("backspace removes last char", "a", editor.getTelescopeQuery());
+    }
+
+    static void testBufferPickerCtrlDDeletesSelectedEntry() {
+        java.util.List<BufferPicker.BufferEntry> registry = new java.util.ArrayList<>(List.of(
+            new BufferPicker.BufferEntry("Foo.java", "/foo"),
+            new BufferPicker.BufferEntry("Bar.java", "/bar")
+        ));
+        ModalEditor editor = makeEditor();
+        editor.setBufferListSupplier(() -> List.copyOf(registry));
+        editor.setOnBufferDelete(entry -> registry.removeIf(e -> e.filePath().equals(entry.filePath())));
+        editor.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        editor.processKey(KeyEvent.VK_B, 'b', 0);
+        assertEquals("2 entries before delete", 2, editor.getTelescopeResults().size());
+        editor.processKey(KeyEvent.VK_D, KeyEvent.CHAR_UNDEFINED, java.awt.event.InputEvent.CTRL_DOWN_MASK);
+        assertEquals("1 entry remains in registry", 1, registry.size());
+        assertEquals("1 entry remains in telescope results", 1, editor.getTelescopeResults().size());
+        assertTrue("still in telescope mode", editor.isTelescopeMode());
+    }
+
+    static void testBufferPickerLetterDFiltersInsteadOfDeleting() {
+        java.util.List<BufferPicker.BufferEntry> registry = new java.util.ArrayList<>(List.of(
+            new BufferPicker.BufferEntry("Foo.java", "/foo"),
+            new BufferPicker.BufferEntry("Bar.java", "/bar")
+        ));
+        ModalEditor editor = makeEditor();
+        editor.setBufferListSupplier(() -> List.copyOf(registry));
+        editor.setOnBufferDelete(entry -> registry.removeIf(e -> e.filePath().equals(entry.filePath())));
+        editor.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        editor.processKey(KeyEvent.VK_B, 'b', 0);
+        editor.processKey(KeyEvent.VK_D, 'd', 0);
+        editor.processKey(KeyEvent.VK_D, 'D', java.awt.event.InputEvent.SHIFT_DOWN_MASK);
+        assertEquals("lowercase/uppercase d does not delete", 2, registry.size());
+        assertEquals("d/D are appended to query", "dD", editor.getTelescopeQuery());
     }
 
     // ── Assertion helpers ────────────────────────────────────────────────────
