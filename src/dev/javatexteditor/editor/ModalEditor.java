@@ -595,12 +595,13 @@ public class ModalEditor {
         boolean ctrlDown = (modifiers & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0;
 
         // Ctrl+U: :bprev相当 / Ctrl+P: :bnext相当。
-        // 現在のバッファがファイルを持つ場合は switchToRelativeBuffer()（BUFFER_REGISTRY を
-        // 循環する本来の :bnext/:bprev 方式）を使う。ファイルパスを持たないバッファ（:tutor・:enew
-        // 等の疑似バッファ）は BUFFER_REGISTRY の対象外のため、従来の bufferHistory スナップショット
-        // 方式にフォールバックする（詳細は modal-editing-engine スキル参照）。
+        // 現在のバッファがファイルを持つ場合、または *compile* / *run* 疑似バッファを表示中の場合は
+        // switchToRelativeBuffer()（BUFFER_REGISTRY ＋ *compile* / *run* を合わせた統一バッファ一覧を
+        // 循環する本来の :bnext/:bprev 方式）を使う。それ以外のファイルパスを持たないバッファ
+        // （:tutor・:enew 等の疑似バッファ）は統一バッファ一覧の対象外のため、従来の bufferHistory
+        // スナップショット方式にフォールバックする（詳細は modal-editing-engine スキル参照）。
         if (ctrlDown && keyCode == KeyEvent.VK_U) {
-            if (currentFilePath != null) {
+            if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
                 switchToRelativeBuffer(-1);
             } else if (historyIdx > 0) {
                 restoreBuffer(historyIdx - 1);
@@ -610,7 +611,7 @@ public class ModalEditor {
             return;
         }
         if (ctrlDown && keyCode == KeyEvent.VK_P) {
-            if (currentFilePath != null) {
+            if (currentFilePath != null || isViewingPseudoOutputBuffer()) {
                 switchToRelativeBuffer(+1);
             } else if (historyIdx >= 0 && historyIdx < bufferHistory.size() - 1) {
                 restoreBuffer(historyIdx + 1);
@@ -666,7 +667,7 @@ public class ModalEditor {
             return;
         }
 
-        // *compile*/*run* 疑似バッファ: Esc で表示前の元バッファに戻る
+        // *compile* / *run* 疑似バッファ: Esc で表示前の元バッファに戻る
         if (outputBufferActive && keyCode == KeyEvent.VK_ESCAPE) {
             closeOutputBuffer();
             return;
@@ -2004,22 +2005,7 @@ public class ModalEditor {
         switch (pickerType) {
             case "files"   -> telescopePicker = new FilePicker(baseDir);
             case "grep"    -> telescopePicker = new GrepPicker(baseDir);
-            case "buffers" -> {
-                List<BufferPicker.BufferEntry> entries = new ArrayList<>(
-                    (bufferListSupplier != null) ? bufferListSupplier.get() : List.of());
-                // F10/F11/F12 の *compile*/*run* 疑似バッファは currentFilePath == null
-                // （ディスク上のファイルを持たない）ため BUFFER_REGISTRY 経由では管理できない。
-                // 直近の内容を lastCompileBufferText/lastRunBufferText にキャッシュしておき、
-                // SPC+b で常に選択肢に含める（選択時は openTelescopeSelection() でディスクではなく
-                // このキャッシュから復元する）。
-                if (lastCompileBufferText != null) {
-                    entries.add(new BufferPicker.BufferEntry("*compile*", PSEUDO_COMPILE_PATH));
-                }
-                if (lastRunBufferText != null) {
-                    entries.add(new BufferPicker.BufferEntry("*run*", PSEUDO_RUN_PATH));
-                }
-                telescopePicker = new BufferPicker(entries);
-            }
+            case "buffers" -> telescopePicker = new BufferPicker(allKnownBufferEntries());
             default -> { return; }
         }
         telescopePurpose = TelescopePurpose.NAVIGATE;
@@ -2113,13 +2099,20 @@ public class ModalEditor {
         // Ctrl+N/Ctrl+P と同じ修飾キー方式にした（大文字 D だと "D" を含むファイル名を検索できなく
         // なってしまうため。詳細は telescope-picker スキル参照）。
         if (ctrlDown && keyCode == KeyEvent.VK_D && telescopePicker instanceof BufferPicker) {
-            if (!telescopeResults.isEmpty() && onBufferDelete != null) {
+            if (!telescopeResults.isEmpty()) {
                 TelescopeItem item = telescopeResults.get(telescopeSelectedIdx);
-                onBufferDelete.accept(new BufferPicker.BufferEntry(item.display(), item.filePath()));
+                // *compile* / *run* はディスク上のファイルを持たずBUFFER_REGISTRY非対象のため、
+                // onBufferDelete（Main.BUFFER_REGISTRYからの除外）ではなくこのインスタンスの
+                // キャッシュ（lastCompileBufferText/lastRunBufferText）を直接クリアする。
+                if (PSEUDO_COMPILE_PATH.equals(item.filePath())) {
+                    lastCompileBufferText = null;
+                } else if (PSEUDO_RUN_PATH.equals(item.filePath())) {
+                    lastRunBufferText = null;
+                } else if (onBufferDelete != null) {
+                    onBufferDelete.accept(new BufferPicker.BufferEntry(item.display(), item.filePath()));
+                }
                 // リストを再取得して表示を更新
-                List<BufferPicker.BufferEntry> updated = bufferListSupplier != null
-                    ? bufferListSupplier.get() : List.of();
-                telescopePicker = new BufferPicker(updated);
+                telescopePicker = new BufferPicker(allKnownBufferEntries());
                 refreshTelescope();
             }
             return;
@@ -2156,79 +2149,56 @@ public class ModalEditor {
             if (onRunMainClassSelected != null) onRunMainClassSelected.accept(item.display());
             return;
         }
-        if (PSEUDO_COMPILE_PATH.equals(item.filePath()) || PSEUDO_RUN_PATH.equals(item.filePath())) {
-            String text = PSEUDO_COMPILE_PATH.equals(item.filePath())
-                ? lastCompileBufferText : lastRunBufferText;
-            if (text == null) return;
-            buffer = new UndoablePieceTable(text);
-            currentFilePath = null;
-            fileNameResults = null;
-            grepResults = null;
-            clearSearchHighlights();
-            cursorRow = 0;
-            cursorCol = 0;
-            statusMessage = "\"" + item.filePath() + "\" reopened";
-            return;
-        }
-        if (item.filePath() == null) return;
-        try {
-            Path target = Path.of(item.filePath());
-            FileLoadResult result = readFileContentForBuffer(target);
-            fileNameResults = null;
-            grepResults = null;
-            clearSearchHighlights();
-            if (result.classFileBytes() != null) {
-                buffer = new UndoablePieceTable(result.text());
-                currentFilePath = null;
-                cursorRow = 0;
-                cursorCol = 0;
-                statusMessage = "\"" + target.getFileName() + "\" [class, read-only preview]";
-            } else if (result.binary()) {
-                enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
-                statusMessage = "\"" + target.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
-            } else {
-                buffer = acquireBufferForOpen(target.toString(), result.text());
-                currentFilePath = target.toString();
-                cursorRow = Math.max(0, item.lineNumber());
-                cursorCol = 0;
-                statusMessage = "\"" + target.getFileName() + "\" opened";
-            }
-            trackClassFileBuffer(result);
-            if (result.classFileBytes() == null && onFileOpened != null) {
-                onFileOpened.accept(new BufferPicker.BufferEntry(target.getFileName().toString(), currentFilePath));
-            }
-        } catch (IOException e) {
-            statusMessage = "E: " + e.getMessage();
-        }
+        openBufferEntry(new BufferPicker.BufferEntry(item.display(), item.filePath()), item.lineNumber(), "opened");
     }
 
     /**
-     * Ctrl+U / Ctrl+P / :bprev / :bnext: バッファレジストリ内で delta 分移動したバッファを開く。
-     * 端（先頭/末尾）に達している場合はラップアラウンドせずそのまま留まる（vimの:bnext/:bprevと同じ）。
+     * SPC+b・Ctrl+U/Ctrl+P共通: bufferListSupplier（実ファイル、Main.BUFFER_REGISTRY由来）に
+     * 現在キャッシュ中の *compile* / *run* 疑似バッファ（実ファイルを持たずBUFFER_REGISTRY非対象）を
+     * 加えた、「一度でも開いたことのある全バッファ」の統一一覧を返す。
      */
-    private void switchToRelativeBuffer(int delta) {
-        if (bufferListSupplier == null) return;
-        List<BufferPicker.BufferEntry> entries = bufferListSupplier.get();
-        if (entries.size() <= 1) {
-            statusMessage = "他に開いているファイルバッファがありません";
-            return;
+    private List<BufferPicker.BufferEntry> allKnownBufferEntries() {
+        List<BufferPicker.BufferEntry> entries = new ArrayList<>(
+            (bufferListSupplier != null) ? bufferListSupplier.get() : List.of());
+        if (lastCompileBufferText != null) {
+            entries.add(new BufferPicker.BufferEntry("*compile*", PSEUDO_COMPILE_PATH));
         }
-        int currentIdx = -1;
-        for (int i = 0; i < entries.size(); i++) {
-            if (entries.get(i).filePath() != null &&
-                    entries.get(i).filePath().equals(currentFilePath)) {
-                currentIdx = i;
-                break;
+        if (lastRunBufferText != null) {
+            entries.add(new BufferPicker.BufferEntry("*run*", PSEUDO_RUN_PATH));
+        }
+        return entries;
+    }
+
+    /** 現在 buffer が *compile* / *run* 疑似バッファを表示中かどうか（Ctrl+U/Ctrl+Pの経路判定に使う）。 */
+    private boolean isViewingPseudoOutputBuffer() {
+        return compileBufferOwner == buffer || runBufferOwner == buffer;
+    }
+
+    /**
+     * 統一バッファ一覧内での「現在地」を表す識別子を返す。実ファイルは currentFilePath、
+     * *compile* / *run* 疑似バッファ表示中は PSEUDO_COMPILE_PATH/PSEUDO_RUN_PATH（owner参照一致で判定）。
+     * どちらでもなければ null（:enew・:tutor等、統一一覧の対象外の疑似バッファ）。
+     */
+    private String currentBufferEntryIdentity() {
+        if (currentFilePath != null) return currentFilePath;
+        if (compileBufferOwner == buffer) return PSEUDO_COMPILE_PATH;
+        if (runBufferOwner == buffer) return PSEUDO_RUN_PATH;
+        return null;
+    }
+
+    /**
+     * バッファエントリ（実ファイル、または *compile* / *run* 疑似バッファ）を実際に画面へ反映する
+     * 共通処理。SPC+b選択（openTelescopeSelection）とCtrl+U/Ctrl+P（switchToRelativeBuffer）の
+     * 両方から呼ぶ。lineNumber は実ファイルを開く際のジャンプ先行（0始まり、switchToRelativeBuffer
+     * からは常に0を渡す）。verb はステータスメッセージの末尾語（"opened"/"switched"）。
+     */
+    private void openBufferEntry(BufferPicker.BufferEntry target, int lineNumber, String verb) {
+        if (PSEUDO_COMPILE_PATH.equals(target.filePath()) || PSEUDO_RUN_PATH.equals(target.filePath())) {
+            if (restorePseudoOutputBuffer(target.filePath())) {
+                statusMessage = "\"" + target.filePath() + "\" reopened";
             }
-        }
-        int nextIdx = (currentIdx == -1)
-            ? (delta > 0 ? 0 : entries.size() - 1)
-            : Math.max(0, Math.min(entries.size() - 1, currentIdx + delta));
-        if (nextIdx == currentIdx) {
-            statusMessage = delta > 0 ? "これ以上次のバッファはありません" : "これ以上前のバッファはありません";
             return;
         }
-        BufferPicker.BufferEntry target = entries.get(nextIdx);
         if (target.filePath() == null) return;
         try {
             Path p = Path.of(target.filePath());
@@ -2248,9 +2218,9 @@ public class ModalEditor {
             } else {
                 buffer = acquireBufferForOpen(p.toString(), result.text());
                 currentFilePath = p.toString();
-                cursorRow = 0;
+                cursorRow = Math.max(0, lineNumber);
                 cursorCol = 0;
-                statusMessage = "\"" + p.getFileName() + "\" switched";
+                statusMessage = "\"" + p.getFileName() + "\" " + verb;
             }
             trackClassFileBuffer(result);
             if (result.classFileBytes() == null && onFileOpened != null) {
@@ -2259,6 +2229,36 @@ public class ModalEditor {
         } catch (IOException e) {
             statusMessage = "E: " + e.getMessage();
         }
+    }
+
+    /**
+     * Ctrl+U / Ctrl+P / :bprev / :bnext: 統一バッファ一覧（実ファイル＋*compile* / *run*）内で
+     * delta 分移動したバッファを開く。端（先頭/末尾）に達している場合はラップアラウンドせずそのまま
+     * 留まる（vimの:bnext/:bprevと同じ）。
+     */
+    private void switchToRelativeBuffer(int delta) {
+        List<BufferPicker.BufferEntry> entries = allKnownBufferEntries();
+        if (entries.size() <= 1) {
+            statusMessage = "他に開いているファイルバッファがありません";
+            return;
+        }
+        String identity = currentBufferEntryIdentity();
+        int currentIdx = -1;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).filePath() != null &&
+                    entries.get(i).filePath().equals(identity)) {
+                currentIdx = i;
+                break;
+            }
+        }
+        int nextIdx = (currentIdx == -1)
+            ? (delta > 0 ? 0 : entries.size() - 1)
+            : Math.max(0, Math.min(entries.size() - 1, currentIdx + delta));
+        if (nextIdx == currentIdx) {
+            statusMessage = delta > 0 ? "これ以上次のバッファはありません" : "これ以上前のバッファはありません";
+            return;
+        }
+        openBufferEntry(entries.get(nextIdx), 0, "switched");
     }
 
     /** telescope セッションを終了し、beginTelescopeSession() で退避した元バッファに戻す。 */
@@ -5232,7 +5232,7 @@ public class ModalEditor {
     /** テスト用: :pr で設定されたプロジェクトルート（未設定なら null）。 */
     public Path getProjectRootOverride() { return projectRootOverride; }
 
-    // F10/F11: *compile*/*run* 疑似バッファのリアルタイムログ表示用の状態。
+    // F10/F11: *compile* / *run* 疑似バッファのリアルタイムログ表示用の状態。
     // outputErrorLinesOwner は「この行番号集合がどの buffer インスタンスに対応するか」を
     // 参照一致で識別するためのフィールド。buffer は ~25箇所で `buffer = new UndoablePieceTable(...)`
     // と再代入されるため、逐一クリアするより「今の buffer と一致するときだけ有効」という
@@ -5250,14 +5250,46 @@ public class ModalEditor {
      * :grep/:rename と同じパターン（pushBuffer せず直接 buffer を差し替え、Ctrl+U 履歴には積まない）。
      * ERROR診断・エラーメッセージの行は赤字表示するため行番号を outputErrorLines に記録する。
      */
-    // F10/F11/F12: *compile*/*run* 疑似バッファは currentFilePath == null のためファイル経路の
+    // F10/F11/F12: *compile* / *run* 疑似バッファは currentFilePath == null のためファイル経路の
     // バッファ切替では追跡できない。SPC+b から常に再度開けるよう直近の内容をここにキャッシュする。
     private String lastCompileBufferText = null;
     private String lastRunBufferText = null;
     private static final String PSEUDO_COMPILE_PATH = "*compile*";
     private static final String PSEUDO_RUN_PATH = "*run*";
+    // 現在の buffer が *compile* / *run* 疑似バッファかどうかの識別用（outputErrorLinesOwner と同じ
+    // 「参照一致による自動失効」パターン）。統一バッファ一覧内でのCtrl+U/Ctrl+P現在地判定に使う
+    // （compile/runいずれの疑似バッファかを区別する必要があるため専用の2フィールドに分けている）。
+    private UndoablePieceTable compileBufferOwner = null;
+    private UndoablePieceTable runBufferOwner = null;
 
-    // *compile*/*run* 疑似バッファ表示前の元バッファへ Esc で戻るための退避状態。
+    /**
+     * Ctrl+U/Ctrl+P・SPC+b選択で *compile* / *run* 疑似バッファへ戻る共通処理。
+     * 実ファイルを持たないため readFileContentForBuffer() は使えず、キャッシュ済みの直近の内容
+     * （lastCompileBufferText/lastRunBufferText）から復元する。キャッシュが無ければ何もせずfalseを返す
+     * （Ctrl+Dで削除済み、または一度もF10/F11を実行していない場合）。
+     */
+    private boolean restorePseudoOutputBuffer(String path) {
+        boolean isCompile = PSEUDO_COMPILE_PATH.equals(path);
+        String text = isCompile ? lastCompileBufferText : lastRunBufferText;
+        if (text == null) return false;
+        buffer = new UndoablePieceTable(text);
+        currentFilePath = null;
+        grepResults = null;
+        fileNameResults = null;
+        clearSearchHighlights();
+        cursorRow = 0;
+        cursorCol = 0;
+        if (isCompile) {
+            compileBufferOwner = buffer;
+            runBufferOwner = null;
+        } else {
+            runBufferOwner = buffer;
+            compileBufferOwner = null;
+        }
+        return true;
+    }
+
+    // *compile* / *run* 疑似バッファ表示前の元バッファへ Esc で戻るための退避状態。
     // jdk-source疑似バッファ（saved*/inJdkSourceBuffer）と同じ「一時退避→復元」パターン。
     private UndoablePieceTable outputSavedBuffer = null;
     private String outputSavedFilePath = null;
@@ -5414,6 +5446,8 @@ public class ModalEditor {
         cursorCol = 0;
         outputErrorLines = errorRows;
         outputErrorLinesOwner = buffer;
+        compileBufferOwner = buffer;
+        runBufferOwner = null;
         statusMessage = result.success()
             ? "compile: success (" + result.fileCount() + " file(s))"
             : "compile: FAILED";
@@ -5438,6 +5472,8 @@ public class ModalEditor {
         fileNameResults = null;
         cursorRow = 0;
         cursorCol = 0;
+        runBufferOwner = buffer;
+        compileBufferOwner = null;
         statusMessage = "run: " + fqcn + " exited with code " + exitCode;
         // showCompileResult と同じ理由（バックグラウンドスレッド完了コールバックから呼ばれるため）で
         // syncCanvas() を明示的に呼ぶ。
@@ -5458,6 +5494,8 @@ public class ModalEditor {
         cursorCol = 0;
         outputErrorLines = new java.util.HashSet<>();
         outputErrorLinesOwner = buffer;
+        compileBufferOwner = buffer;
+        runBufferOwner = null;
         outputNextRow = 1;
         statusMessage = "コンパイル中...";
     }
@@ -5498,6 +5536,8 @@ public class ModalEditor {
         cursorCol = 0;
         outputErrorLines = new java.util.HashSet<>();
         outputErrorLinesOwner = buffer;
+        runBufferOwner = buffer;
+        compileBufferOwner = null;
         outputNextRow = header0.isEmpty() ? 1 : 2;
         statusMessage = "run: " + fqcn + " を実行中...";
     }

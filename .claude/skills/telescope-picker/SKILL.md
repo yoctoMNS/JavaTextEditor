@@ -278,3 +278,27 @@ BufferPicker は `Main.java` 側から `List<Leaf>` を `ModalEditor` に渡す�
   `testBufferPickerCtrlDDeletesSelectedEntry`・`testBufferPickerLetterDFiltersInsteadOfDeleting`
   を追加。Ctrl+D で `onBufferDelete` が呼ばれ一覧から消えること、文字キーの `d`/`D` はいずれも
   削除せずクエリフィルタとして機能すること（両方ともクエリに追記されること）を検証。
+
+## SPC+b / Ctrl+U・Ctrl+P を「一度でも開いたバッファ全部」の統一一覧にする（2026-07-27）
+
+「開いた全バッファを一つの一覧に含め、Ctrl+U/Ctrl+Pで前後移動・SPC+bで一覧選択でき、F10/F11の
+`*compile*`/`*run*`疑似バッファも同じ一覧に含め、Ctrl+Dを押さない限りカーソル下の対象以外は
+消えないようにしてほしい」という要望に基づく。詳細な設計判断はCLAUDE.mdの
+「F10/F11の *compile* / *run* 疑似バッファを統一バッファ一覧（Ctrl+U/Ctrl+P・SPC+b）に統合」節に
+集約したため、ここでは本スキルとの関係のみ記す。
+
+- **Ctrl+D（上記節）は元々「実ファイル（`onBufferDelete`→`Main.BUFFER_REGISTRY`除外）」のみを
+  想定していたが、`*compile*`/`*run*`エントリに対しては`onBufferDelete`を呼んでも
+  `Main.BUFFER_REGISTRY`に元々存在しないため何も起きない黙殺バグになっていた**。
+  `ModalEditor.processTelescopeKey()`のCtrl+D分岐に、対象が`*compile*`/`*run*`（`PSEUDO_COMPILE_PATH`/
+  `PSEUDO_RUN_PATH`）かどうかの判定を追加し、その場合は`onBufferDelete`ではなく
+  `lastCompileBufferText`/`lastRunBufferText`を直接`null`にするよう修正した。
+- **SPC+bの一覧構築（`enterTelescope("buffers")`）は`ModalEditor.allKnownBufferEntries()`
+  （新設）に集約した**。「BufferPickerのバッファ削除」節時点では`bufferListSupplier`＋
+  その場限りの`*compile*`/`*run*`追加ロジックがSPC+b専用に書かれていたが、Ctrl+U/Ctrl+Pからも
+  同じ一覧が必要になったため共通ヘルパーへ切り出した（`ModalEditor.switchToRelativeBuffer()`も
+  同じヘルパーを使う）。
+- **本スキルのスコープへの影響は無い**: TELESCOPEモードのキー処理・モード遷移（`processTelescopeKey`
+  のCtrl+N/Ctrl+P・矢印・Enter・Escの意味論）自体は変更していない。Ctrl+Dの対象がSPC+b以外の
+  ピッカー（FilePicker/GrepPicker/MainClassPicker）では従来どおり何もしない（`telescopePicker
+  instanceof BufferPicker`のガードは維持）。

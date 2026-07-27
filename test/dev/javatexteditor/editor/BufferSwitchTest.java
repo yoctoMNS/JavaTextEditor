@@ -29,6 +29,8 @@ public class BufferSwitchTest {
         testBprevStaysAtFirstBuffer();
         testNewFileCreatedViaColonEIsRegistered();
         testSaveNewBufferRegistersAbsolutePath();
+        testCtrlUCtrlPReachCompileAndRunBuffers();
+        testCtrlDOnCompileEntryRemovesItPermanently();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -278,5 +280,110 @@ public class BufferSwitchTest {
 
         ctrlU(ed);
         assertEquals("Ctrl+U returns to originally-open file A", a.toString(), ed.getCurrentFilePath());
+    }
+
+    /**
+     * F10/F11の *compile* / *run* 疑似バッファも、実ファイルと同じ統一バッファ一覧に含まれ、
+     * Ctrl+U/Ctrl+Pで行き来できることを検証する。
+     */
+    static void testCtrlUCtrlPReachCompileAndRunBuffers() throws IOException {
+        Path a = Files.createTempFile("bswitch-compile-a", ".txt");
+        Files.writeString(a, "AAA");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        openViaCommand(ed, a.toString());
+
+        ed.showCompileResult(new dev.javatexteditor.projectbuild.BuildResult(
+            true, 1, List.of(), null, "javac -d bin A.java"));
+        String compileText = ed.getText();
+        ed.showRunOutput("java -cp bin A", "A", "hi\n", 0);
+        String runText = ed.getText();
+
+        // 統一一覧の並びは [A, *compile*, *run*]。*run* 表示中に Ctrl+U を2回で A まで戻れる。
+        ctrlU(ed);
+        assertEquals("Ctrl+U from *run* moves to *compile*", compileText, ed.getText());
+        assertEquals("*compile*表示中はcurrentFilePathがnull", null, ed.getCurrentFilePath());
+
+        ctrlU(ed);
+        assertEquals("Ctrl+U again moves to A", a.toString(), ed.getCurrentFilePath());
+
+        // Aから Ctrl+P で *compile* → *run* の順に前進できる。
+        ctrlP(ed);
+        assertEquals("Ctrl+P from A moves to *compile*", compileText, ed.getText());
+
+        ctrlP(ed);
+        assertEquals("Ctrl+P again moves to *run*", runText, ed.getText());
+
+        // 末尾(*run*)でCtrl+Pを押してもラップアラウンドせず留まる。
+        ctrlP(ed);
+        assertEquals("Ctrl+P at last buffer stays at *run*", runText, ed.getText());
+    }
+
+    private static void openSpcB(ModalEditor ed) {
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_B, 'b', 0);
+    }
+
+    private static boolean telescopeHasEntry(ModalEditor ed, String display) {
+        for (var item : ed.getTelescopeResults()) {
+            if (item.display().equals(display)) return true;
+        }
+        return false;
+    }
+
+    private static void selectTelescopeEntryUnderCursorForDelete(ModalEditor ed, String display) {
+        var results = ed.getTelescopeResults();
+        int idx = -1;
+        for (int i = 0; i < results.size(); i++) {
+            if (results.get(i).display().equals(display)) { idx = i; break; }
+        }
+        if (idx < 0) throw new IllegalStateException("entry not found: " + display);
+        // TELESCOPE内ではCtrl+Nが一覧を前方(下)へ、Ctrl+Pが後方(上)へ動かす
+        // （ModalEditor.processTelescopeKey参照。Ctrl+U/Ctrl+P用のctrlP()ヘルパーとは意味が異なる）。
+        for (int i = 0; i < idx; i++) {
+            ed.processKey(KeyEvent.VK_N, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+        }
+        ed.processKey(KeyEvent.VK_D, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+    }
+
+    /**
+     * バッファは Ctrl+D（SPC+b 一覧でカーソル下の項目を明示的に削除）を押さない限り
+     * 一覧から消えないこと、かつ Ctrl+D を押した対象だけが消えることを検証する
+     * （*compile* / *run* 疑似バッファも実ファイルと同じくこの規約に従う）。
+     */
+    static void testCtrlDOnCompileEntryRemovesItPermanently() throws IOException {
+        Path a = Files.createTempFile("bswitch-ctrld-a", ".txt");
+        Files.writeString(a, "AAA");
+
+        FakeRegistry reg = new FakeRegistry();
+        ModalEditor ed = makeEditorWithRegistry(reg);
+        ed.setOnBufferDelete(e -> reg.entries.removeIf(x -> x.filePath().equals(e.filePath())));
+        openViaCommand(ed, a.toString());
+        ed.showCompileResult(new dev.javatexteditor.projectbuild.BuildResult(
+            true, 1, List.of(), null, "javac -d bin A.java"));
+        ed.showRunOutput("java -cp bin A", "A", "hi\n", 0);
+        // SPC+b は「呼び出した時点で表示していたバッファ」へEscで戻るため、Aへ戻ってから開く
+        // （統一一覧は [A, *compile*, *run*] の順）。
+        ctrlU(ed);
+        ctrlU(ed);
+        assertEquals("SPC+b呼び出し前はAに戻っている", a.toString(), ed.getCurrentFilePath());
+
+        openSpcB(ed);
+        assertEquals("削除前はAが一覧にある", true, telescopeHasEntry(ed, a.getFileName().toString()));
+        assertEquals("*compile*が一覧にある", true, telescopeHasEntry(ed, "*compile*"));
+        assertEquals("*run*が一覧にある", true, telescopeHasEntry(ed, "*run*"));
+
+        // カーソルを *compile* に合わせて Ctrl+D で削除する。
+        selectTelescopeEntryUnderCursorForDelete(ed, "*compile*");
+        assertEquals("Ctrl+D後は*compile*が一覧から消える", false, telescopeHasEntry(ed, "*compile*"));
+        assertEquals("Ctrl+Dしていない*run*は残る", true, telescopeHasEntry(ed, "*run*"));
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+
+        // 削除後、Ctrl+U/Ctrl+Pの統一一覧からも*compile*が完全に外れる（[A, *run*]の2件のみ）。
+        assertEquals("current file is A", a.toString(), ed.getCurrentFilePath());
+        ctrlP(ed);
+        assertEquals("Ctrl+PでAから直接*run*へ（*compile*は経由しない）", "*run*",
+            ed.getText().split("\n", -1)[1].split(" ")[0]);
     }
 }
