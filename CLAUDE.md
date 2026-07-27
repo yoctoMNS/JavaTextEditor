@@ -1210,14 +1210,64 @@ project-root/
 
 ### 次に着手すべき候補（優先度順）
 
-1. **`ModalEditor` の疑似バッファ退避・復元の5系統統一** — telescope／`:cd`候補／`:e`候補／FILER／
-   jdk-source が `xxxSaved*` フィールド群を各自持ち、`*compile*`/`*run*` はさらに別系統
-   （`outputSaved*`）。共通の `PseudoBufferStash` 型へ寄せられる可能性が高い。ただし既存節
-   「既知の未接続・二重定義」5.（2系統を重ねた場合の挙動は未定義・未テスト）に触れるため、
-   仕様を確定させてから着手すること。
+1. ~~**`ModalEditor` の疑似バッファ退避・復元の系統統一**~~ → **✅ 第2弾で完了**（下記参照）
 2. **`executeCommand()` の if-else 連鎖 → コマンド名 → ハンドラの `Map` 化**。`:wa`/`:qa` の
    `equals` 完全一致判定と `startsWith` 判定が混在しており、追加順序に依存する暗黙の優先順位がある。
    順序依存を壊さないことの検証が必須。
 3. **FILER／TELESCOPE／FILESEARCH／IMPORT_SELECT／CLASSPATH_INPUT の疑似モード群**。いずれも
    `KeymapRegistry` をバイパスして `processXxxKey()` で直接キーを処理する同型の構造をしており、
    共通のインタフェース（例: `ModalScreen`）へ寄せられる可能性がある。
+
+## ModalEditor 神クラス解体リファクタリング 第2弾（2026-07-27）— 疑似バッファ退避の統一
+
+第1弾の「次に着手すべき候補」1. を実施した。進め方（着手前の全クラスベースライン取得 →
+1抽出1コミット → Phase 完了時にベースラインとの `diff` ゼロを機械的に確認 → 公開シグネチャ不変）は
+第1弾と同じ手順を踏襲している。
+
+### 何が重複していたか
+
+疑似バッファを表示している間、その裏に隠れる「元の編集状態」を預かる仕組みが**7系統**に分かれ、
+いずれも `xxxSavedBuffer` / `xxxSavedFilePath` / `xxxSavedCursorRow` / `xxxSavedCursorCol` という
+**同じ4フィールドを重複して持っていた**（計28フィールド）。保存側・復元側とも代入順まで一致し、
+復元時の `saved != null ? saved : new UndoablePieceTable("")` というフォールバックも7箇所に散っていた。
+
+対象7系統: telescope / `:cd`候補 / `:e`候補 / FILER / jdk-source / `*compile*`・`*run*` / Markdown閲覧ビュー。
+
+### 何をしたか
+
+- **`PseudoBufferStash`（新設）**: 4点セットを預かるだけの型。空フォールバックを `buffer()` の中に
+  1つだけ置き、7箇所の三項演算子の重複を解消した。
+- **`ModalEditor.saveToStash()` / `restoreFromStash()`**: 各系統の保存・復元が1行になった。
+- **28フィールド → 7フィールド**。`ModalEditor` は 6,657行 → 6,603行。
+
+### 引き継ぎ上の重要な設計判断（次の担当者は必ず読むこと）
+
+1. **バッファは「本文の写し」ではなく生きた `UndoablePieceTable` の参照として預かる。**
+   Vim方式の共有バッファ（同一ファイルを複数ペインで開くと同一インスタンスを共有する）を
+   壊さないために必須。ここで新インスタンスを作り直すと、疑似バッファを開いて閉じただけで
+   そのペインが共有から静かに外れる。本文をコピーする `BufferSnapshot`（Ctrl+U/Ctrl+P の履歴用）
+   とは役割が異なるので**混同しないこと**。
+2. **型は共通化したが、インスタンスは用途ごとに7つ独立させたまま**にした。1つに統合すると
+   「疑似バッファを重ねて開いた場合の挙動は未定義・未テスト」（本ファイル「既知の未接続・二重定義」5.）
+   という現状の意味論を意図せず変えてしまう。**この未定義事項は第2弾でも解消していない**。
+   統合するなら、まず重ね合わせ時の仕様をユーザーと確定させること。
+3. **各系統に固有の「おまけの状態」は stash に入れなかった**:
+   - telescope … `telescopeSavedGrepResults` / `telescopeSavedGrepBaseDir` / `telescopeSavedFileNameResults`
+   - `:cd`候補 / `:e`候補 … `cdSavedCommandText` / `edSavedCommandText`（COMMAND モード復帰用）
+
+   いずれも「疑似バッファの退避」とは別の関心事のため `ModalEditor` 側に残してある。
+4. **既存の細かな差異はそのまま維持**した。例: `restoreCdSavedBuffer()` は
+   `resetSearchAndResultState()` を呼ぶが `restoreEditSavedBuffer()` は呼ばない。
+   統一したくなるが、挙動を変えないことを優先して手を付けていない。
+
+### 検証
+
+全93テストクラスを個別JVMで実行し、ベースラインと `diff` で完全一致を確認。
+既知FAIL は `ScrollTest` 2件・`ModalEditorTest` 1件のみで増減なし（いずれも仕様判断未決のため修正禁止）。
+
+### 次に着手すべき候補（更新）
+
+第1弾の候補 2.（`executeCommand()` の 35分岐 if-else → コマンド表）と 3.（疑似モード群の共通化）が残っている。
+加えて `processNormalKey()`（356行・単一メソッド最大）は、早期 return の順序に暗黙の制約が複数あるため
+（本ファイル各所に「この分岐は既存のESC分岐より*前*に置く必要がある」という記録が散在）、
+3スライス程度に分けて1スライス1コミットで進めること。

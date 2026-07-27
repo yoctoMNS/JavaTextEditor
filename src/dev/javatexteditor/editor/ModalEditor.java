@@ -266,10 +266,8 @@ public class ModalEditor {
     // Vim方式の共有バッファ: テキストのスナップショットではなく UndoablePieceTable の参照そのものを
     // 退避・復元する。文字列経由で復元すると（他ペインと共有していた場合でも）新規インスタンスに
     // なってしまい共有が切れるため。
-    private UndoablePieceTable telescopeSavedBuffer = null;
-    private String telescopeSavedFilePath = null;
-    private int telescopeSavedCursorRow = 0;
-    private int telescopeSavedCursorCol = 0;
+    /** telescope 表示中に隠れている元の編集状態。 */
+    private final PseudoBufferStash telescopeStash = new PseudoBufferStash();
     // telescope 起動時にたまたま grep/file-search 結果バッファの上にいた場合、その一覧も退避して復元する
     // （telescope が buffer を上書きするため、退避しないと Esc キャンセル後に Enter ジャンプが効かなくなる）。
     private List<SearchResult> telescopeSavedGrepResults = null;
@@ -1956,10 +1954,7 @@ public class ModalEditor {
      * *picker* 疑似バッファに差し替える。キャンセル時（Esc）は退避した状態にそのまま戻す。
      */
     private void beginTelescopeSession() {
-        telescopeSavedBuffer = buffer;
-        telescopeSavedFilePath = currentFilePath;
-        telescopeSavedCursorRow = cursorRow;
-        telescopeSavedCursorCol = cursorCol;
+        saveToStash(telescopeStash);
         telescopeSavedGrepResults = grepResults;
         telescopeSavedGrepBaseDir = grepBaseDir;
         telescopeSavedFileNameResults = fileNameResults;
@@ -2196,15 +2191,10 @@ public class ModalEditor {
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
-        buffer = telescopeSavedBuffer != null ? telescopeSavedBuffer : new UndoablePieceTable("");
-        currentFilePath = telescopeSavedFilePath;
-        cursorRow = telescopeSavedCursorRow;
-        cursorCol = telescopeSavedCursorCol;
+        restoreFromStash(telescopeStash);
         grepResults = telescopeSavedGrepResults;
         grepBaseDir = telescopeSavedGrepBaseDir;
         fileNameResults = telescopeSavedFileNameResults;
-        telescopeSavedBuffer = null;
-        telescopeSavedFilePath = null;
         telescopeSavedGrepResults = null;
         telescopeSavedGrepBaseDir = null;
         telescopeSavedFileNameResults = null;
