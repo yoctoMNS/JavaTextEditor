@@ -517,6 +517,26 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         this.selCursorCol = cursorCol;
         repaint();
     }
+    /**
+     * 選択範囲の描画状態をまとめて差し替える。
+     *
+     * <p>種類を表す3つの boolean と4つの座標を必ず一組で設定するため、
+     * 個別の {@code setVisualMode}/{@code setVisualLineMode}/{@code setVisualBlockMode}/
+     * {@code setSelection}/{@code clearSelection} を順に呼ぶ場合と違って、
+     * 途中の辻褄の合わない状態が生じない。新しい呼び出しはこちらを使うこと。
+     */
+    public void setSelectionView(SelectionView view) {
+        SelectionView v = (view != null) ? view : SelectionView.none();
+        this.visualMode      = v.isActive();
+        this.visualLineMode  = v.isLine();
+        this.visualBlockMode = v.isBlock();
+        this.selAnchorRow = v.anchorRow();
+        this.selAnchorCol = v.anchorCol();
+        this.selCursorRow = v.cursorRow();
+        this.selCursorCol = v.cursorCol();
+        repaint();
+    }
+
     public void clearSelection() {
         this.selAnchorRow = -1;
         this.visualLineMode = false;

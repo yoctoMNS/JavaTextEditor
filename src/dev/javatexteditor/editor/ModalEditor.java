@@ -36,8 +36,11 @@ import dev.javatexteditor.telescope.MainClassPicker;
 import dev.javatexteditor.telescope.TelescopeItem;
 import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
+import dev.javatexteditor.ui.CompletionView;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
+import dev.javatexteditor.ui.SelectionView;
+import dev.javatexteditor.ui.TelescopeView;
 import dev.javatexteditor.ui.Theme;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
@@ -1431,14 +1434,14 @@ public class ModalEditor {
     private void syncCompletionCanvas() {
         if (canvas == null) return;
         if (completion.hasNoVisibleItems()) {
-            canvas.setCompletionView(dev.javatexteditor.ui.CompletionView.hidden());
+            canvas.setCompletionView(CompletionView.hidden());
             return;
         }
         java.util.List<String> labels = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::label).toList();
         java.util.List<String> kinds = completion.items().stream()
             .map(dev.javatexteditor.analysis.CompletionItem::kind).toList();
-        canvas.setCompletionView(new dev.javatexteditor.ui.CompletionView(
+        canvas.setCompletionView(new CompletionView(
             true, labels, kinds, completion.selectedIdx(), cursorRow, cursorCol));
     }
 
@@ -5012,6 +5015,18 @@ public class ModalEditor {
         canvasTextRebuildCount++;
     }
 
+    /** 現在のモードから、画面に描くべき選択範囲を組み立てる。 */
+    private SelectionView currentSelectionView() {
+        return switch (mode) {
+            case VISUAL       -> SelectionView.of(
+                    SelectionView.Kind.CHARACTER, anchorRow, anchorCol, cursorRow, cursorCol);
+            case VISUAL_BLOCK -> SelectionView.of(
+                    SelectionView.Kind.BLOCK, anchorRow, anchorCol, cursorRow, cursorCol);
+            case VISUAL_LINE  -> SelectionView.ofLines(anchorRow, cursorRow);
+            default           -> SelectionView.none();
+        };
+    }
+
     public void syncCanvas() {
         if (canvas != null) {
             refreshCanvasTextCache();
@@ -5033,20 +5048,7 @@ public class ModalEditor {
             canvas.setCursor(cursorRow, cursorCol);
             canvas.setInsertMode(mode == Mode.INSERT);
 
-            boolean isVisual      = (mode == Mode.VISUAL);
-            boolean isVisualLine  = (mode == Mode.VISUAL_LINE);
-            boolean isVisualBlock = (mode == Mode.VISUAL_BLOCK);
-            canvas.setVisualMode(isVisual || isVisualLine || isVisualBlock);
-            canvas.setVisualLineMode(isVisualLine);
-            canvas.setVisualBlockMode(isVisualBlock);
-
-            if (isVisual || isVisualBlock) {
-                canvas.setSelection(anchorRow, anchorCol, cursorRow, cursorCol);
-            } else if (isVisualLine) {
-                canvas.setSelection(anchorRow, 0, cursorRow, 0);
-            } else {
-                canvas.clearSelection();
-            }
+            canvas.setSelectionView(currentSelectionView());
 
             canvas.ensureCursorVisible(cursorRow);
             String[] lines = canvasCachedLines;
@@ -5096,10 +5098,10 @@ public class ModalEditor {
                 int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
                 String title = "Import: " + importSelectSymbol
                     + "  [" + sym + "/" + total + "]";
-                canvas.setTelescopeView(new dev.javatexteditor.ui.TelescopeView(
+                canvas.setTelescopeView(new TelescopeView(
                     true, title, "", items, importSelectIdx, ""));
             } else {
-                canvas.setTelescopeView(dev.javatexteditor.ui.TelescopeView.hidden());
+                canvas.setTelescopeView(TelescopeView.hidden());
             }
         }
     }
