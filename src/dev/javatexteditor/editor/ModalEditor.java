@@ -812,6 +812,93 @@ public class ModalEditor {
         return false;
     }
 
+    // -------------------------------------------------------------------------
+    // NORMAL モードの各アクションの中身
+    // （processNormalKey() の switch を「アクション名 → 動作」の対応表として読めるようにするため、
+    //   2行以上になる処理はここに名前を付けて切り出してある）
+    // -------------------------------------------------------------------------
+
+    /** i: その場から INSERT モードへ入る。 */
+    private void enterInsertMode() {
+        mode = Mode.INSERT;
+        statusMessage = "";
+    }
+
+    /** a: カーソルを1つ右へ寄せてから INSERT モードへ入る（行末は超えない）。 */
+    private void enterInsertAfterCursor() {
+        String[] lines = getLines();
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        cursorCol = Math.min(cursorCol + 1, lineLen);
+        mode = Mode.INSERT;
+        statusMessage = "";
+    }
+
+    /** o: カーソル行の下に空行を作り、その行頭から INSERT モードへ入る。 */
+    private void openLineBelowAndInsert() {
+        String[] lines = getLines();
+        int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+        int endOfLine = offsetAt(cursorRow, lineLen);
+        buffer.insert(endOfLine, "\n");
+        cursorRow++;
+        cursorCol = 0;
+        mode = Mode.INSERT;
+        statusMessage = "";
+    }
+
+    /** :: コマンド入力を空にして COMMAND モードへ入る。 */
+    private void enterCommandMode() {
+        commandBuffer.setLength(0);
+        statusMessage = "";
+        mode = Mode.COMMAND;
+    }
+
+    /** /: 検索入力を空にして SEARCH モードへ入る（既定は前方検索）。 */
+    private void enterSearchMode() {
+        searchBuffer.setLength(0);
+        mode = Mode.SEARCH;
+        lastSearchForward = true;
+        statusMessage = "";
+    }
+
+    /** u: 直前の編集を取り消し、カーソルが範囲外に出ていれば引き戻す。 */
+    private void undoEdit() {
+        buffer.undo();
+        clampCursorAfterUndoRedo();
+    }
+
+    /** Ctrl+R: 取り消した編集をやり直し、カーソルが範囲外に出ていれば引き戻す。 */
+    private void redoEdit() {
+        buffer.redo();
+        clampCursorAfterUndoRedo();
+    }
+
+    /** v / V / Ctrl+V: 選択の起点を現在のカーソル位置に置いて、指定の VISUAL 系モードへ入る。 */
+    private void enterVisualMode(Mode visualMode) {
+        anchorRow = cursorRow;
+        if (visualMode != Mode.VISUAL_LINE) {
+            // 行選択は列を持たないため、アンカーの列は更新しない（既存挙動）
+            anchorCol = cursorCol;
+        }
+        mode = visualMode;
+    }
+
+    /** r: 次に押された1文字で置換するため、count を覚えて2打鍵目を待つ。 */
+    private void beginReplaceChar(int count) {
+        pendingReplaceCount = count;
+        beginSequence("r", "r-");
+    }
+
+    /**
+     * 多打鍵シーケンスの1打鍵目を受け付け、2打鍵目を待つ状態にする。
+     *
+     * @param sequence  保留するシーケンス（{@code "g"}・{@code "SPC"} など）
+     * @param indicator ステータス行に出す待機表示（{@code "g-"} など）
+     */
+    private void beginSequence(String sequence, String indicator) {
+        pendingSequence = sequence;
+        statusMessage = indicator;
+    }
+
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
         // 画面に出ているものによって意味が決まる割り込みキーを先に処理する
         if (handleNormalModeInterrupt(keyCode, keyChar, modifiers)) return;
@@ -852,60 +939,17 @@ public class ModalEditor {
             case "cursor.right" -> moveCursor(0, 1);
             case "cursor.down" -> moveCursor(1, 0);
             case "cursor.up" -> moveCursor(-1, 0);
-            case "enter.insert" -> {
-                mode = Mode.INSERT;
-                statusMessage = "";
-            }
-            case "enter.insert.after" -> {
-                String[] lines = getLines();
-                int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
-                cursorCol = Math.min(cursorCol + 1, lineLen);
-                mode = Mode.INSERT;
-                statusMessage = "";
-            }
-            case "enter.insert.newline" -> {
-                String[] lines = getLines();
-                int lineLen = cursorRow < lines.length ? lines[cursorRow].length() : 0;
-                int endOfLine = offsetAt(cursorRow, lineLen);
-                buffer.insert(endOfLine, "\n");
-                cursorRow++;
-                cursorCol = 0;
-                mode = Mode.INSERT;
-                statusMessage = "";
-            }
-            case "enter.command" -> {
-                commandBuffer.setLength(0);
-                statusMessage = "";
-                mode = Mode.COMMAND;
-            }
-            case "undo" -> {
-                buffer.undo();
-                clampCursorAfterUndoRedo();
-            }
-            case "redo" -> {
-                buffer.redo();
-                clampCursorAfterUndoRedo();
-            }
+            case "enter.insert" -> enterInsertMode();
+            case "enter.insert.after" -> enterInsertAfterCursor();
+            case "enter.insert.newline" -> openLineBelowAndInsert();
+            case "enter.command" -> enterCommandMode();
+            case "undo" -> undoEdit();
+            case "redo" -> redoEdit();
             case "case.toggle.char" -> toggleCaseUnderCursor();
-            case "replace.char.pending" -> {
-                pendingReplaceCount = replaceCount;
-                pendingSequence = "r";
-                statusMessage = "r-";
-            }
-            case "enter.visual" -> {
-                anchorRow = cursorRow;
-                anchorCol = cursorCol;
-                mode = Mode.VISUAL;
-            }
-            case "enter.visual.line" -> {
-                anchorRow = cursorRow;
-                mode = Mode.VISUAL_LINE;
-            }
-            case "enter.visual.block" -> {
-                anchorRow = cursorRow;
-                anchorCol = cursorCol;
-                mode = Mode.VISUAL_BLOCK;
-            }
+            case "replace.char.pending" -> beginReplaceChar(replaceCount);
+            case "enter.visual" -> enterVisualMode(Mode.VISUAL);
+            case "enter.visual.line" -> enterVisualMode(Mode.VISUAL_LINE);
+            case "enter.visual.block" -> enterVisualMode(Mode.VISUAL_BLOCK);
             case "delete.char" -> deleteCharAtCursor();
             case "delete.to.eol" -> deleteToEndOfLine();
             case "paste.after" -> pasteAfter();
@@ -913,14 +957,14 @@ public class ModalEditor {
             case "clipboard.paste" -> pasteFromSystemClipboard(true);
             case "yank.pending" -> pendingSequence = "y";
             case "delete.pending" -> pendingSequence = "d";
-            case "macro.record.pending" -> { pendingSequence = "q"; statusMessage = "q-"; }
-            case "macro.play.pending"   -> { pendingSequence = "@"; statusMessage = "@-"; }
-            case "goto.pending"   -> { pendingSequence = "g"; statusMessage = "g-"; }
-            case "diag.pending"   -> { pendingSequence = "["; statusMessage = "[-"; }
-            case "screen.center.pending" -> { pendingSequence = "z"; statusMessage = "z-"; }
-            case "split.pending"       -> { pendingSequence = "s";  statusMessage = "s-"; }
-            case "leader.pending"      -> { pendingSequence = " "; statusMessage = "SPC-"; }
-            case "filesearch.pending"  -> { pendingSequence = "\\"; statusMessage = "\\-"; }
+            case "macro.record.pending"  -> beginSequence("q", "q-");
+            case "macro.play.pending"    -> beginSequence("@", "@-");
+            case "goto.pending"          -> beginSequence("g", "g-");
+            case "diag.pending"          -> beginSequence("[", "[-");
+            case "screen.center.pending" -> beginSequence("z", "z-");
+            case "split.pending"         -> beginSequence("s", "s-");
+            case "leader.pending"        -> beginSequence(" ", "SPC-");
+            case "filesearch.pending"    -> beginSequence("\\", "\\-");
             case "line.swap.down" -> swapLineDown();
             case "line.swap.up"   -> swapLineUp();
             case "word.forward"  -> moveWordForward();
@@ -934,12 +978,7 @@ public class ModalEditor {
             case "jdk.doc" -> lookupJdkDoc();
             case "jump.back" -> jumpBack();
             case "insert.override" -> insertOverrideStub();
-            case "search.enter" -> {
-                searchBuffer.setLength(0);
-                mode = Mode.SEARCH;
-                lastSearchForward = true;
-                statusMessage = "";
-            }
+            case "search.enter" -> enterSearchMode();
             case "search.next" -> jumpToNextMatch(lastSearchForward);
             case "search.prev" -> jumpToNextMatch(!lastSearchForward);
             case "search.star" -> searchWordAtCursor(true);
