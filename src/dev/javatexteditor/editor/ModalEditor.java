@@ -5096,9 +5096,10 @@ public class ModalEditor {
                 int total = pendingImports.size() + pendingImportIdx + 1; // 残り含む総数
                 String title = "Import: " + importSelectSymbol
                     + "  [" + sym + "/" + total + "]";
-                canvas.setTelescopeState(true, title, "", items, importSelectIdx, "");
+                canvas.setTelescopeView(new dev.javatexteditor.ui.TelescopeView(
+                    true, title, "", items, importSelectIdx, ""));
             } else {
-                canvas.setTelescopeState(false, "", "", List.of(), 0, "");
+                canvas.setTelescopeView(dev.javatexteditor.ui.TelescopeView.hidden());
             }
         }
     }

@@ -86,12 +86,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private CompletionView completion = CompletionView.hidden();
 
     // telescope オーバーレイ状態
-    private boolean telescopeActive = false;
-    private String telescopeTitle = "";
-    private String telescopeQuery = "";
-    private List<TelescopeItem> telescopeResults = List.of();
-    private int telescopeSelectedIdx = 0;
-    private String telescopePreview = "";
+    private TelescopeView telescope = TelescopeView.hidden();
 
     // 診断情報（エラー・警告）。空リストのときはガターを描画しない。
     private List<CompileDiagnostic> diagnostics = List.of();
@@ -550,15 +545,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         setCompletionView(new CompletionView(active, labels, kinds, selectedIdx, anchorRow, anchorCol));
     }
 
+    /** 候補一覧オーバーレイの描画状態をまとめて差し替える。 */
+    public void setTelescopeView(TelescopeView view) {
+        this.telescope = (view != null) ? view : TelescopeView.hidden();
+        repaint();
+    }
+
+    /**
+     * 候補一覧オーバーレイの状態をセットする。
+     *
+     * <p>移行期間中の委譲。新しい呼び出しは {@link #setTelescopeView(TelescopeView)} を使うこと。
+     * 既存の呼び出し側との互換のために残してある。
+     */
     public void setTelescopeState(boolean active, String title, String query,
             List<TelescopeItem> results, int selectedIdx, String preview) {
-        this.telescopeActive    = active;
-        this.telescopeTitle     = title != null ? title : "";
-        this.telescopeQuery     = query != null ? query : "";
-        this.telescopeResults   = results != null ? results : List.of();
-        this.telescopeSelectedIdx = selectedIdx;
-        this.telescopePreview   = preview != null ? preview : "";
-        repaint();
+        setTelescopeView(new TelescopeView(active, title, query, results, selectedIdx, preview));
     }
 
     public void setSearchHighlights(List<int[]> highlights) {
@@ -1003,7 +1004,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         // 再描画範囲がステータス行の帯に収まっている場合（歩行アニメーションのティック）は、
         // 本文（数十万行規模になりうる）の再描画を丸ごとスキップし、ステータス行だけ塗り直す。
         Rectangle clip = g2.getClipBounds();
-        boolean statusLineOnly = clip != null && !showSplash && !telescopeActive
+        boolean statusLineOnly = clip != null && !showSplash && !telescope.active()
             && !completion.hasVisibleItems()
             && clip.y >= getHeight() - lineHeight - 8;
         if (statusLineOnly) {
@@ -1093,7 +1094,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         drawStatusLine(g2, lineHeight);
 
         // 7. telescope オーバーレイ（最前面に描画）
-        if (telescopeActive) {
+        if (telescope.active()) {
             drawTelescopeOverlay(g2, lineHeight);
         }
 
@@ -1149,7 +1150,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         // プロンプト行
         g2.setColor(theme.accent);
         g2.fillRect(ox, oy, overlayW, fh + pad * 2);
-        String promptText = telescopeTitle + "  > " + telescopeQuery + "_";
+        String promptText = telescope.promptLine() + "_";
         drawUiText(g2, promptText, ox + pad, oy + fh + pad, cw, fh, theme.background);
 
         int bodyY = oy + fh + pad * 2 + 1;
@@ -1163,27 +1164,27 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
         // Results ペイン
         int maxResultRows = bodyH / fh;
-        int visStart = Math.max(0, telescopeSelectedIdx - maxResultRows + 1);
-        if (telescopeSelectedIdx < visStart) visStart = telescopeSelectedIdx;
+        int visStart = Math.max(0, telescope.selectedIdx() - maxResultRows + 1);
+        if (telescope.selectedIdx() < visStart) visStart = telescope.selectedIdx();
 
-        for (int i = visStart; i < telescopeResults.size() && (i - visStart) < maxResultRows; i++) {
-            TelescopeItem item = telescopeResults.get(i);
+        for (int i = visStart; i < telescope.results().size() && (i - visStart) < maxResultRows; i++) {
+            TelescopeItem item = telescope.results().get(i);
             int ry = bodyY + (i - visStart + 1) * fh;
             Color rowColor;
-            if (i == telescopeSelectedIdx) {
+            if (i == telescope.selectedIdx()) {
                 g2.setColor(theme.accent);
                 g2.fillRect(ox + 1, ry - fh, resultsW - 2, fh);
                 rowColor = theme.background;
             } else {
                 rowColor = theme.foreground;
             }
-            String label = (i == telescopeSelectedIdx ? "> " : "  ") + item.display();
+            String label = (i == telescope.selectedIdx() ? "> " : "  ") + item.display();
             String clipped = clipToUiWidth(label, cw, resultsW - pad * 2);
             drawUiText(g2, clipped, ox + pad, ry, cw, fh, rowColor);
         }
 
         // Preview ペイン
-        String[] previewLines = telescopePreview.split("\n", -1);
+        String[] previewLines = telescope.preview().split("\n", -1);
         int previewW = overlayW - resultsW;
         int py = bodyY + fh;
         for (int i = 0; i < previewLines.length && (py - bodyY) < bodyH; i++) {
