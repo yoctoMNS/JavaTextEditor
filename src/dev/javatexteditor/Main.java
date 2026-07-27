@@ -44,6 +44,263 @@ import javax.swing.UIManager;
 
 public class Main {
 
+    // -------------------------------------------------------------------------
+    // エントリポイント
+    // -------------------------------------------------------------------------
+
+    public static void main(String[] args) {
+        // セットアップ未完了なら自動実行（バックグラウンド）
+        runSetupIfNeeded();
+
+        // プロジェクトルートを引数のファイルの親ディレクトリか user.dir から決定
+        String initialPath = (args.length > 0) ? args[0] : null;
+        String initialText;
+        if (initialPath != null) {
+            try {
+                initialText = Files.readString(Path.of(initialPath)).replace("\r\n", "\n");
+            } catch (IOException e) {
+                System.err.println("Error opening file: " + e.getMessage());
+                return;
+            }
+        } else {
+            initialText = "";
+        }
+
+        // 作業ディレクトリマネージャを初期化（引数ファイルの親を hint として渡す）
+        Path initialHint = (initialPath != null)
+            ? Path.of(initialPath).toAbsolutePath().getParent()
+            : null;
+        WD_MANAGER = new WorkingDirectoryManager(initialHint);
+        Path projectRoot = WD_MANAGER.getWorkingDirectory();
+
+        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築
+        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(JDK_INDEX);
+        // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
+        WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
+
+        final GraphicsConfiguration targetScreen = detectMouseScreen();
+        double displayScale = computeDisplayScale(targetScreen);
+        int[] cellSize = computeInitialCellSize(displayScale);
+        initialCellW = cellSize[0];
+        initialCellH = cellSize[1];
+        int[] windowSize = computeInitialWindowSize(targetScreen, displayScale);
+        final String text = initialText;
+        final String path = initialPath;
+        final boolean splash = (initialPath == null);
+
+        SwingUtilities.invokeLater(() -> {
+            JFrame frame = new JFrame(buildTitle(WD_MANAGER.getWorkingDirectory()), targetScreen);
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setSize(windowSize[0], windowSize[1]);
+            centerOnScreen(frame, targetScreen);
+
+            PaneTree.Leaf firstLeaf = createLeaf(text, path);
+            if (splash) firstLeaf.canvas().setShowSplash(true);
+            // 初期ファイルをバッファレジストリに登録
+            if (path != null) {
+                BUFFER_REGISTRY.register(new dev.javatexteditor.telescope.BufferPicker.BufferEntry(
+                    Path.of(path).getFileName().toString(), path));
+            }
+
+            PaneTree.PaneNode[] root   = { firstLeaf };
+            PaneTree.Leaf[]     active = { firstLeaf };
+
+            // 作業ディレクトリ変更時: 全エディタと JFrame タイトルを更新
+            WD_MANAGER.addChangeListener(wd -> {
+                for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
+                    l.editor().setProjectRoot(wd);
+                }
+                frame.setTitle(buildTitle(wd));
+            });
+
+            refreshCallbacks(frame, root, active);
+            updateBorders(List.of(firstLeaf), firstLeaf);
+            frame.add(firstLeaf.canvas());
+
+            // KEY_PRESSEDで processKey を呼んだキーは KEY_TYPED でも届くため、
+            // 二重処理を防ぐためにフラグで管理する。
+            boolean[] pressedHandled = { false };
+
+            KeyboardFocusManager.getCurrentKeyboardFocusManager()
+                .addKeyEventDispatcher(e -> {
+                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
+                    java.awt.Window focused = KeyboardFocusManager
+                        .getCurrentKeyboardFocusManager().getFocusedWindow();
+                    if (focused != frame) return false;
+
+                    if (e.getID() == KeyEvent.KEY_PRESSED) {
+                        pressedHandled[0] = false;
+
+                        // Ctrl+Shift+矢印: アクティブペインのビットマップフォントセルサイズを変更
+                        boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
+                        boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
+                        if (ctrl && shift) {
+                            int kc = e.getKeyCode();
+                            if (kc == KeyEvent.VK_RIGHT) {
+                                active[0].canvas().adjustCellWidth(+1);
+                                pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_LEFT) {
+                                active[0].canvas().adjustCellWidth(-1);
+                                pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_DOWN) {
+                                active[0].canvas().adjustCellHeight(+1);
+                                pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_UP) {
+                                active[0].canvas().adjustCellHeight(-1);
+                                pressedHandled[0] = true; return true;
+                            }
+                        }
+
+                        // Ctrl+Alt+矢印: 画面分割中、アクティブペインの縦横幅を伸縮する
+                        boolean alt = (e.getModifiersEx() & KeyEvent.ALT_DOWN_MASK) != 0;
+                        if (ctrl && alt && !shift) {
+                            int kc = e.getKeyCode();
+                            if (kc == KeyEvent.VK_LEFT || kc == KeyEvent.VK_RIGHT
+                                    || kc == KeyEvent.VK_UP || kc == KeyEvent.VK_DOWN) {
+                                resizeActivePane(active[0], kc);
+                                pressedHandled[0] = true; return true;
+                            }
+                        }
+
+                        // F2: カーソル行の診断をモーダルダイアログで表示
+                        if (e.getKeyCode() == KeyEvent.VK_F2) {
+                            dev.javatexteditor.editor.ModalEditor edF2 = active[0].editor();
+                            int row = edF2.getCursorRow();
+                            List<CompileDiagnostic> diags = active[0].canvas().getDiagnostics();
+                            List<CompileDiagnostic> rowDiags = diags.stream()
+                                .filter(d -> d.lineNumber() == row)
+                                .toList();
+                            Font f2Font = computeF2PopupFont(frame);
+                            if (rowDiags.isEmpty()) {
+                                JLabel f2Label = new JLabel("この行にエラー・警告はありません。");
+                                f2Label.setFont(f2Font);
+                                JOptionPane.showMessageDialog(frame,
+                                    f2Label,
+                                    "診断情報（行 " + (row + 1) + "）",
+                                    JOptionPane.INFORMATION_MESSAGE);
+                            } else {
+                                StringBuilder sb = new StringBuilder();
+                                for (int i = 0; i < rowDiags.size(); i++) {
+                                    CompileDiagnostic d = rowDiags.get(i);
+                                    if (i > 0) sb.append("\n\n");
+                                    String kindLabel = switch (d.kind()) {
+                                        case ERROR   -> "エラー";
+                                        case WARNING -> "警告";
+                                    };
+                                    sb.append("[").append(kindLabel).append("]");
+                                    if (d.column() >= 0) {
+                                        sb.append("  列: ").append(d.column() + 1);
+                                    }
+                                    sb.append("\n").append(d.message());
+                                }
+                                int iconType = rowDiags.stream().anyMatch(
+                                    d -> d.kind() == dev.javatexteditor.analysis.DiagnosticKind.ERROR)
+                                    ? JOptionPane.ERROR_MESSAGE
+                                    : JOptionPane.WARNING_MESSAGE;
+                                JTextArea f2Area = new JTextArea(sb.toString());
+                                f2Area.setFont(f2Font);
+                                f2Area.setEditable(false);
+                                f2Area.setLineWrap(true);
+                                f2Area.setWrapStyleWord(true);
+                                f2Area.setBackground(UIManager.getColor("OptionPane.background"));
+                                int screenW = frame.getGraphicsConfiguration().getBounds().width;
+                                int screenH = frame.getGraphicsConfiguration().getBounds().height;
+                                JScrollPane f2Scroll = new JScrollPane(f2Area);
+                                f2Scroll.setBorder(BorderFactory.createEmptyBorder());
+                                f2Scroll.setPreferredSize(new Dimension(
+                                    Math.min(screenW * 3 / 5, 900),
+                                    Math.min(screenH * 2 / 5, 500)));
+                                JOptionPane.showMessageDialog(frame,
+                                    f2Scroll,
+                                    "診断情報（行 " + (row + 1) + "）",
+                                    iconType);
+                            }
+                            pressedHandled[0] = true;
+                            return true;
+                        }
+
+                        // F10/F11/F12: プロジェクト全体のコンパイル・実行（NORMALモードのみ）
+                        if (e.getKeyCode() == KeyEvent.VK_F10
+                                || e.getKeyCode() == KeyEvent.VK_F11
+                                || e.getKeyCode() == KeyEvent.VK_F12) {
+                            dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
+                            EditorCanvas canvasBuild = active[0].canvas();
+                            if (edBuild.isNormalMode()) {
+                                boolean c = isCBuffer(edBuild);
+                                switch (e.getKeyCode()) {
+                                    case KeyEvent.VK_F10 -> { if (c) triggerCompileC(edBuild, canvasBuild); else triggerCompile(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F11 -> { if (c) triggerRunC(edBuild, canvasBuild); else triggerRun(edBuild, canvasBuild); }
+                                    case KeyEvent.VK_F12 -> { if (c) triggerCompileAndRunC(edBuild, canvasBuild); else triggerCompileAndRun(edBuild, canvasBuild); }
+                                }
+                            }
+                            pressedHandled[0] = true;
+                            return true;
+                        }
+
+                        // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
+                        // IMEがコミットした文字は KEY_TYPED で受け取る。
+                        boolean noCtrlAlt = (e.getModifiersEx() &
+                            (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
+                        char kc2 = e.getKeyChar();
+                        boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
+                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
+                        if (noCtrlAlt && isPrintable &&
+                                (ed.isInsertMode() || ed.isCommandMode())) {
+                            return false; // IMEに委譲（pressedHandled は false のまま）
+                        }
+
+                        ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+                        updateBorders(PaneTree.allLeaves(root[0]), active[0]);
+                        pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
+                        return true;
+                    }
+
+                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する。
+                    // KEY_PRESSEDで既に処理したキーは無視する（';'→COMMMANDモードへの遷移後に
+                    // KEY_TYPED の';'がコマンドバッファに追記される問題を防ぐ）。
+                    if (e.getID() == KeyEvent.KEY_TYPED) {
+                        if (pressedHandled[0]) {
+                            pressedHandled[0] = false;
+                            return false;
+                        }
+                        char ch = e.getKeyChar();
+                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
+                        if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
+                                (ed.isInsertMode() || ed.isCommandMode())) {
+                            ed.processKey(0, ch, 0);
+                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
+                            return true;
+                        }
+                    }
+
+                    return false;
+                });
+
+            // マウスクリックでアクティブペインを切り替える
+            frame.getContentPane().addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override
+                public void mousePressed(java.awt.event.MouseEvent ev) {
+                    Component clicked = frame.getContentPane().findComponentAt(ev.getPoint());
+                    for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
+                        if (l.canvas() == clicked) {
+                            active[0] = l;
+                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
+                            active[0].canvas().requestFocusInWindow();
+                            break;
+                        }
+                    }
+                }
+            });
+
+            frame.setVisible(true);
+            // canvasは既定でフォーカスを持たない(JPanel)ため、表示直後に明示的に
+            // フォーカスを与える。IME(InputContext)は実際のフォーカスオーナーである
+            // コンポーネントにしか関連付けられないため、これが無いと変換中文字列の
+            // オーバーレイ表示（EditorCanvas.inputMethodTextChanged）が呼ばれない。
+            active[0].canvas().requestFocusInWindow();
+        });
+    }
+
     private static final Color ACTIVE_BORDER_COLOR = new Color(0x88, 0x88, 0xFF);
     private static final int WINDOW_WIDTH  = 1200;
     private static final int WINDOW_HEIGHT = 750;
@@ -832,263 +1089,6 @@ public class Main {
                 : BorderFactory.createLineBorder(Color.DARK_GRAY, 1));
             l.canvas().setActivePane(isActive);
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // エントリポイント
-    // -------------------------------------------------------------------------
-
-    public static void main(String[] args) {
-        // セットアップ未完了なら自動実行（バックグラウンド）
-        runSetupIfNeeded();
-
-        // プロジェクトルートを引数のファイルの親ディレクトリか user.dir から決定
-        String initialPath = (args.length > 0) ? args[0] : null;
-        String initialText;
-        if (initialPath != null) {
-            try {
-                initialText = Files.readString(Path.of(initialPath)).replace("\r\n", "\n");
-            } catch (IOException e) {
-                System.err.println("Error opening file: " + e.getMessage());
-                return;
-            }
-        } else {
-            initialText = "";
-        }
-
-        // 作業ディレクトリマネージャを初期化（引数ファイルの親を hint として渡す）
-        Path initialHint = (initialPath != null)
-            ? Path.of(initialPath).toAbsolutePath().getParent()
-            : null;
-        WD_MANAGER = new WorkingDirectoryManager(initialHint);
-        Path projectRoot = WD_MANAGER.getWorkingDirectory();
-
-        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築
-        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(JDK_INDEX);
-        // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
-        WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
-
-        final GraphicsConfiguration targetScreen = detectMouseScreen();
-        double displayScale = computeDisplayScale(targetScreen);
-        int[] cellSize = computeInitialCellSize(displayScale);
-        initialCellW = cellSize[0];
-        initialCellH = cellSize[1];
-        int[] windowSize = computeInitialWindowSize(targetScreen, displayScale);
-        final String text = initialText;
-        final String path = initialPath;
-        final boolean splash = (initialPath == null);
-
-        SwingUtilities.invokeLater(() -> {
-            JFrame frame = new JFrame(buildTitle(WD_MANAGER.getWorkingDirectory()), targetScreen);
-            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(windowSize[0], windowSize[1]);
-            centerOnScreen(frame, targetScreen);
-
-            PaneTree.Leaf firstLeaf = createLeaf(text, path);
-            if (splash) firstLeaf.canvas().setShowSplash(true);
-            // 初期ファイルをバッファレジストリに登録
-            if (path != null) {
-                BUFFER_REGISTRY.register(new dev.javatexteditor.telescope.BufferPicker.BufferEntry(
-                    Path.of(path).getFileName().toString(), path));
-            }
-
-            PaneTree.PaneNode[] root   = { firstLeaf };
-            PaneTree.Leaf[]     active = { firstLeaf };
-
-            // 作業ディレクトリ変更時: 全エディタと JFrame タイトルを更新
-            WD_MANAGER.addChangeListener(wd -> {
-                for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
-                    l.editor().setProjectRoot(wd);
-                }
-                frame.setTitle(buildTitle(wd));
-            });
-
-            refreshCallbacks(frame, root, active);
-            updateBorders(List.of(firstLeaf), firstLeaf);
-            frame.add(firstLeaf.canvas());
-
-            // KEY_PRESSEDで processKey を呼んだキーは KEY_TYPED でも届くため、
-            // 二重処理を防ぐためにフラグで管理する。
-            boolean[] pressedHandled = { false };
-
-            KeyboardFocusManager.getCurrentKeyboardFocusManager()
-                .addKeyEventDispatcher(e -> {
-                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
-                    java.awt.Window focused = KeyboardFocusManager
-                        .getCurrentKeyboardFocusManager().getFocusedWindow();
-                    if (focused != frame) return false;
-
-                    if (e.getID() == KeyEvent.KEY_PRESSED) {
-                        pressedHandled[0] = false;
-
-                        // Ctrl+Shift+矢印: アクティブペインのビットマップフォントセルサイズを変更
-                        boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
-                        boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
-                        if (ctrl && shift) {
-                            int kc = e.getKeyCode();
-                            if (kc == KeyEvent.VK_RIGHT) {
-                                active[0].canvas().adjustCellWidth(+1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_LEFT) {
-                                active[0].canvas().adjustCellWidth(-1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_DOWN) {
-                                active[0].canvas().adjustCellHeight(+1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_UP) {
-                                active[0].canvas().adjustCellHeight(-1);
-                                pressedHandled[0] = true; return true;
-                            }
-                        }
-
-                        // Ctrl+Alt+矢印: 画面分割中、アクティブペインの縦横幅を伸縮する
-                        boolean alt = (e.getModifiersEx() & KeyEvent.ALT_DOWN_MASK) != 0;
-                        if (ctrl && alt && !shift) {
-                            int kc = e.getKeyCode();
-                            if (kc == KeyEvent.VK_LEFT || kc == KeyEvent.VK_RIGHT
-                                    || kc == KeyEvent.VK_UP || kc == KeyEvent.VK_DOWN) {
-                                resizeActivePane(active[0], kc);
-                                pressedHandled[0] = true; return true;
-                            }
-                        }
-
-                        // F2: カーソル行の診断をモーダルダイアログで表示
-                        if (e.getKeyCode() == KeyEvent.VK_F2) {
-                            dev.javatexteditor.editor.ModalEditor edF2 = active[0].editor();
-                            int row = edF2.getCursorRow();
-                            List<CompileDiagnostic> diags = active[0].canvas().getDiagnostics();
-                            List<CompileDiagnostic> rowDiags = diags.stream()
-                                .filter(d -> d.lineNumber() == row)
-                                .toList();
-                            Font f2Font = computeF2PopupFont(frame);
-                            if (rowDiags.isEmpty()) {
-                                JLabel f2Label = new JLabel("この行にエラー・警告はありません。");
-                                f2Label.setFont(f2Font);
-                                JOptionPane.showMessageDialog(frame,
-                                    f2Label,
-                                    "診断情報（行 " + (row + 1) + "）",
-                                    JOptionPane.INFORMATION_MESSAGE);
-                            } else {
-                                StringBuilder sb = new StringBuilder();
-                                for (int i = 0; i < rowDiags.size(); i++) {
-                                    CompileDiagnostic d = rowDiags.get(i);
-                                    if (i > 0) sb.append("\n\n");
-                                    String kindLabel = switch (d.kind()) {
-                                        case ERROR   -> "エラー";
-                                        case WARNING -> "警告";
-                                    };
-                                    sb.append("[").append(kindLabel).append("]");
-                                    if (d.column() >= 0) {
-                                        sb.append("  列: ").append(d.column() + 1);
-                                    }
-                                    sb.append("\n").append(d.message());
-                                }
-                                int iconType = rowDiags.stream().anyMatch(
-                                    d -> d.kind() == dev.javatexteditor.analysis.DiagnosticKind.ERROR)
-                                    ? JOptionPane.ERROR_MESSAGE
-                                    : JOptionPane.WARNING_MESSAGE;
-                                JTextArea f2Area = new JTextArea(sb.toString());
-                                f2Area.setFont(f2Font);
-                                f2Area.setEditable(false);
-                                f2Area.setLineWrap(true);
-                                f2Area.setWrapStyleWord(true);
-                                f2Area.setBackground(UIManager.getColor("OptionPane.background"));
-                                int screenW = frame.getGraphicsConfiguration().getBounds().width;
-                                int screenH = frame.getGraphicsConfiguration().getBounds().height;
-                                JScrollPane f2Scroll = new JScrollPane(f2Area);
-                                f2Scroll.setBorder(BorderFactory.createEmptyBorder());
-                                f2Scroll.setPreferredSize(new Dimension(
-                                    Math.min(screenW * 3 / 5, 900),
-                                    Math.min(screenH * 2 / 5, 500)));
-                                JOptionPane.showMessageDialog(frame,
-                                    f2Scroll,
-                                    "診断情報（行 " + (row + 1) + "）",
-                                    iconType);
-                            }
-                            pressedHandled[0] = true;
-                            return true;
-                        }
-
-                        // F10/F11/F12: プロジェクト全体のコンパイル・実行（NORMALモードのみ）
-                        if (e.getKeyCode() == KeyEvent.VK_F10
-                                || e.getKeyCode() == KeyEvent.VK_F11
-                                || e.getKeyCode() == KeyEvent.VK_F12) {
-                            dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
-                            EditorCanvas canvasBuild = active[0].canvas();
-                            if (edBuild.isNormalMode()) {
-                                boolean c = isCBuffer(edBuild);
-                                switch (e.getKeyCode()) {
-                                    case KeyEvent.VK_F10 -> { if (c) triggerCompileC(edBuild, canvasBuild); else triggerCompile(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F11 -> { if (c) triggerRunC(edBuild, canvasBuild); else triggerRun(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F12 -> { if (c) triggerCompileAndRunC(edBuild, canvasBuild); else triggerCompileAndRun(edBuild, canvasBuild); }
-                                }
-                            }
-                            pressedHandled[0] = true;
-                            return true;
-                        }
-
-                        // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
-                        // IMEがコミットした文字は KEY_TYPED で受け取る。
-                        boolean noCtrlAlt = (e.getModifiersEx() &
-                            (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
-                        char kc2 = e.getKeyChar();
-                        boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
-                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
-                        if (noCtrlAlt && isPrintable &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
-                            return false; // IMEに委譲（pressedHandled は false のまま）
-                        }
-
-                        ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
-                        updateBorders(PaneTree.allLeaves(root[0]), active[0]);
-                        pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
-                        return true;
-                    }
-
-                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する。
-                    // KEY_PRESSEDで既に処理したキーは無視する（';'→COMMMANDモードへの遷移後に
-                    // KEY_TYPED の';'がコマンドバッファに追記される問題を防ぐ）。
-                    if (e.getID() == KeyEvent.KEY_TYPED) {
-                        if (pressedHandled[0]) {
-                            pressedHandled[0] = false;
-                            return false;
-                        }
-                        char ch = e.getKeyChar();
-                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
-                        if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
-                            ed.processKey(0, ch, 0);
-                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
-                            return true;
-                        }
-                    }
-
-                    return false;
-                });
-
-            // マウスクリックでアクティブペインを切り替える
-            frame.getContentPane().addMouseListener(new java.awt.event.MouseAdapter() {
-                @Override
-                public void mousePressed(java.awt.event.MouseEvent ev) {
-                    Component clicked = frame.getContentPane().findComponentAt(ev.getPoint());
-                    for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
-                        if (l.canvas() == clicked) {
-                            active[0] = l;
-                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
-                            active[0].canvas().requestFocusInWindow();
-                            break;
-                        }
-                    }
-                }
-            });
-
-            frame.setVisible(true);
-            // canvasは既定でフォーカスを持たない(JPanel)ため、表示直後に明示的に
-            // フォーカスを与える。IME(InputContext)は実際のフォーカスオーナーである
-            // コンポーネントにしか関連付けられないため、これが無いと変換中文字列の
-            // オーバーレイ表示（EditorCanvas.inputMethodTextChanged）が呼ばれない。
-            active[0].canvas().requestFocusInWindow();
-        });
     }
 
     /** JFrame タイトル文字列を構築する（ホームディレクトリは ~ に置換）。 */
