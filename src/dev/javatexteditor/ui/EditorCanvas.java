@@ -389,7 +389,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             }
             int lineHeight = cachedLineHeight > 0 ? cachedLineHeight : 16;
             int charWidth  = cachedCharWidth  > 0 ? cachedCharWidth  : 8;
-            int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+            int gutterWidth = gutterWidthFor(charWidth);
             String line = (cursorRow < cachedLines.length) ? cachedLines[cursorRow] : "";
             int screenRow;
             int x;
@@ -747,6 +747,18 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         repaint();
     }
 
+    /**
+     * 行番号ガター（診断マーカー E/W を出す左端の余白）の幅を返す。
+     *
+     * <p>診断が1件も無いときはガター自体を出さないので幅0。
+     * ある場合はマーカー1文字ぶんとその右の余白で2セル分を確保する。
+     * 描画の複数箇所（本文・カーソル・折り返し計算）が同じ値を使う必要があるため、
+     * この計算はここ1箇所に置く。
+     */
+    private int gutterWidthFor(int charWidth) {
+        return diagnostics.isEmpty() ? 0 : 2 * charWidth;
+    }
+
     /** 現在保持している診断リストを返す（テスト用）。 */
     public List<CompileDiagnostic> getDiagnostics() { return diagnostics; }
 
@@ -860,7 +872,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private int computeVisibleColsForWrap() {
         int charWidth = (cachedCharWidth > 0) ? cachedCharWidth : cellW;
         if (charWidth <= 0) return 80;
-        int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+        int gutterWidth = gutterWidthFor(charWidth);
         return Math.max(1, (getWidth() - gutterWidth) / charWidth);
     }
 
@@ -1018,7 +1030,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.setFont(getSwingFont());
 
         // ガター幅: 診断がある場合のみ "E " / "W " / "  " 2文字分を確保
-        int gutterWidth = diagnostics.isEmpty() ? 0 : 2 * charWidth;
+        int gutterWidth = gutterWidthFor(charWidth);
         int scrollOffsetX = wrapEnabled ? 0 : scrollCol * charWidth;
 
         // 再描画範囲がステータス行の帯に収まっている場合（歩行アニメーションのティック）は、
