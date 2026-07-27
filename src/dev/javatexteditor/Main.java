@@ -111,25 +111,11 @@ public class Main {
     // ペインツリー
     // -------------------------------------------------------------------------
 
-    sealed interface PaneNode permits Leaf, Split {}
-
-    record Leaf(EditorCanvas canvas, ModalEditor editor) implements PaneNode {}
-
-    static final class Split implements PaneNode {
-        final int orientation; // JSplitPane.HORIZONTAL_SPLIT or VERTICAL_SPLIT
-        PaneNode left, right;
-        Split(int orientation, PaneNode left, PaneNode right) {
-            this.orientation = orientation;
-            this.left  = left;
-            this.right = right;
-        }
-    }
-
     /** ツリーを Swing コンポーネントに変換する。 */
-    private static Component buildComponent(PaneNode node) {
+    private static Component buildComponent(PaneTree.PaneNode node) {
         return switch (node) {
-            case Leaf l -> l.canvas();
-            case Split s -> {
+            case PaneTree.Leaf l -> l.canvas();
+            case PaneTree.Split s -> {
                 JSplitPane sp = new JSplitPane(s.orientation,
                     buildComponent(s.left), buildComponent(s.right));
                 sp.setResizeWeight(0.5);
@@ -140,29 +126,15 @@ public class Main {
         };
     }
 
-    /** ツリー内のすべてのリーフを収集する。 */
-    private static List<Leaf> allLeaves(PaneNode node) {
-        List<Leaf> result = new ArrayList<>();
-        collectLeaves(node, result);
-        return result;
-    }
-
-    private static void collectLeaves(PaneNode node, List<Leaf> out) {
-        switch (node) {
-            case Leaf l    -> out.add(l);
-            case Split s   -> { collectLeaves(s.left, out); collectLeaves(s.right, out); }
-        }
-    }
-
     /**
      * Vim方式の共有バッファ: absolutePath を現在の currentFilePath として持つ生きたペインが
      * あれば、そのペインが参照する UndoablePieceTable をそのまま返す（無ければ null）。
      * ModalEditor.acquireBufferForOpen() から liveBufferLookup 経由で呼ばれる。
      */
     private static dev.javatexteditor.buffer.UndoablePieceTable findLiveBuffer(
-            PaneNode root, String absolutePath) {
+            PaneTree.PaneNode root, String absolutePath) {
         if (absolutePath == null) return null;
-        for (Leaf l : allLeaves(root)) {
+        for (PaneTree.Leaf l : PaneTree.allLeaves(root)) {
             if (absolutePath.equals(l.editor().getCurrentFilePath())) {
                 return l.editor().getBuffer();
             }
@@ -176,50 +148,13 @@ public class Main {
      * getLines()（＝共有バッファの最新内容）を基準に行/列をクランプしたうえで
      * syncCanvas() まで行うため、他ペインでの削除等でカーソルが範囲外になっていても安全。
      */
-    private static void syncSiblingBuffers(PaneNode root, Leaf source) {
+    private static void syncSiblingBuffers(PaneTree.PaneNode root, PaneTree.Leaf source) {
         dev.javatexteditor.buffer.UndoablePieceTable buf = source.editor().getBuffer();
-        for (Leaf l : allLeaves(root)) {
+        for (PaneTree.Leaf l : PaneTree.allLeaves(root)) {
             if (l != source && l.editor().getBuffer() == buf) {
                 l.editor().setCursor(l.editor().getCursorRow(), l.editor().getCursorCol());
             }
         }
-    }
-
-    /**
-     * target リーフを指定の向きで分割し、右/下に新リーフを挿入した新ツリーを返す。
-     * root が target 自身の場合は Split を直接返す。
-     */
-    private static PaneNode splitLeaf(PaneNode node, Leaf target, Leaf newLeaf, int orientation) {
-        return switch (node) {
-            case Leaf l -> (l == target)
-                ? new Split(orientation, l, newLeaf)
-                : l;
-            case Split s -> {
-                s.left  = splitLeaf(s.left,  target, newLeaf, orientation);
-                s.right = splitLeaf(s.right, target, newLeaf, orientation);
-                yield s;
-            }
-        };
-    }
-
-    /**
-     * target リーフを取り除いたツリーを返す。
-     * 親 Split は兄弟ノードに置き換わる。
-     * ルートが target の場合は null を返す（最後の1ペイン）。
-     */
-    private static PaneNode removeLeaf(PaneNode node, Leaf target) {
-        return switch (node) {
-            case Leaf l -> (l == target) ? null : l;
-            case Split s -> {
-                PaneNode newLeft  = removeLeaf(s.left,  target);
-                PaneNode newRight = removeLeaf(s.right, target);
-                if (newLeft  == null) yield newRight;
-                if (newRight == null) yield newLeft;
-                s.left  = newLeft;
-                s.right = newRight;
-                yield s;
-            }
-        };
     }
 
     // -------------------------------------------------------------------------
@@ -698,28 +633,28 @@ public class Main {
 
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
     private static void setupSplitCallbacks(
-            JFrame frame, PaneNode[] root, Leaf[] active, Leaf leaf) {
+            JFrame frame, PaneTree.PaneNode[] root, PaneTree.Leaf[] active, PaneTree.Leaf leaf) {
         leaf.editor().setSplitHorizontalCallback(() -> {
-            Leaf cur     = active[0];
-            Leaf newLeaf = createLeaf(cur.editor().getText(),
+            PaneTree.Leaf cur     = active[0];
+            PaneTree.Leaf newLeaf = createLeaf(cur.editor().getText(),
                                       cur.editor().getCurrentFilePath(),
                                       cur.canvas().getCellW(), cur.canvas().getCellH(),
                                       cur.editor().getTheme(), cur.editor().getFontChoice());
             shareBufferWithSplit(cur, newLeaf);
-            root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
+            root[0]   = PaneTree.splitLeaf(root[0], cur, newLeaf, JSplitPane.HORIZONTAL_SPLIT);
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
             refreshCallbacks(frame, root, active);
             active[0].canvas().requestFocusInWindow();
         });
         leaf.editor().setSplitVerticalCallback(() -> {
-            Leaf cur     = active[0];
-            Leaf newLeaf = createLeaf(cur.editor().getText(),
+            PaneTree.Leaf cur     = active[0];
+            PaneTree.Leaf newLeaf = createLeaf(cur.editor().getText(),
                                       cur.editor().getCurrentFilePath(),
                                       cur.canvas().getCellW(), cur.canvas().getCellH(),
                                       cur.editor().getTheme(), cur.editor().getFontChoice());
             shareBufferWithSplit(cur, newLeaf);
-            root[0]   = splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
+            root[0]   = PaneTree.splitLeaf(root[0], cur, newLeaf, JSplitPane.VERTICAL_SPLIT);
             active[0] = newLeaf;
             rebuildLayout(frame, root[0], active[0]);
             refreshCallbacks(frame, root, active);
@@ -733,13 +668,13 @@ public class Main {
      * createLeaf() が内部で一旦構築した独自バッファを捨てて置き換える。カーソル位置も
      * 分割元に揃える。以後は liveBufferLookup を経由せずとも参照が同一のまま保たれる）。
      */
-    private static void shareBufferWithSplit(Leaf source, Leaf newLeaf) {
+    private static void shareBufferWithSplit(PaneTree.Leaf source, PaneTree.Leaf newLeaf) {
         newLeaf.editor().setBuffer(source.editor().getBuffer());
         newLeaf.editor().setCursor(source.editor().getCursorRow(), source.editor().getCursorCol());
     }
 
     /** 新しいリーフを生成してコールバックを設定する（既定のフォントセルサイズ・テーマ・フォントを使用）。 */
-    private static Leaf createLeaf(String text, String path) {
+    private static PaneTree.Leaf createLeaf(String text, String path) {
         return createLeaf(text, path, initialCellW, initialCellH, Theme.DARK_MODE, FontChoice.MISC_FIXED);
     }
 
@@ -748,7 +683,7 @@ public class Main {
      * 引き継ぐために cellW/cellH を明示指定できる（分割後は Ctrl+Shift+矢印で他ペインとは
      * 独立に変更可能。あくまで「分割直後の初期値」を揃えるだけ）。
      */
-    private static Leaf createLeaf(String text, String path, int cellW, int cellH) {
+    private static PaneTree.Leaf createLeaf(String text, String path, int cellW, int cellH) {
         return createLeaf(text, path, cellW, cellH, Theme.DARK_MODE, FontChoice.MISC_FIXED);
     }
 
@@ -758,7 +693,7 @@ public class Main {
      * （cellW/cellHの引き継ぎと同じ「分割直後の初期値を揃える」考え方。以後は各ペインで
      * 独立に :color/:font を実行できる）。
      */
-    private static Leaf createLeaf(String text, String path, int cellW, int cellH,
+    private static PaneTree.Leaf createLeaf(String text, String path, int cellW, int cellH,
                                     Theme theme, FontChoice fontChoice) {
         EditorCanvas canvas = new EditorCanvas();
         canvas.setInitialCellSize(cellW, cellH);
@@ -805,7 +740,7 @@ public class Main {
             editor.setProjectRoot(wd);
             editor.setChangeWorkingDirectoryCallback(p -> WD_MANAGER.setWorkingDirectory(p));
         }
-        return new Leaf(canvas, editor);
+        return new PaneTree.Leaf(canvas, editor);
     }
 
     /**
@@ -813,20 +748,20 @@ public class Main {
      * :q 時、ペインが1つなら終了、複数なら現在のリーフを閉じる。
      */
     private static void refreshCallbacks(
-            JFrame frame, PaneNode[] root, Leaf[] active) {
-        for (Leaf leaf : allLeaves(root[0])) {
+            JFrame frame, PaneTree.PaneNode[] root, PaneTree.Leaf[] active) {
+        for (PaneTree.Leaf leaf : PaneTree.allLeaves(root[0])) {
             setupSplitCallbacks(frame, root, active, leaf);
             // :wa/:qa/:qa! の対象を現在の全ペインにする（分割構成は :split/:vsplit のたびに変わるため、
-            // 固定リストではなく毎回 allLeaves(root[0]) を再評価するSupplierを渡す）。
+            // 固定リストではなく毎回 PaneTree.allLeaves(root[0]) を再評価するSupplierを渡す）。
             leaf.editor().setAllEditorsSupplier(
-                    () -> allLeaves(root[0]).stream().map(Leaf::editor).toList());
+                    () -> PaneTree.allLeaves(root[0]).stream().map(PaneTree.Leaf::editor).toList());
             // Vim方式の共有バッファ: ファイルを開く際、同じ絶対パスを他ペインが既に開いていれば
             // その生きたバッファ参照を再利用させる（:e/telescope/FILER/gr/Ctrl+U/Ctrl+P等すべて経由）。
             leaf.editor().setLiveBufferLookup(path -> findLiveBuffer(root[0], path));
             // 共有バッファの内容が変化した直後、同じ参照を持つ他ペインの画面へ即座に反映する。
             leaf.editor().setOnSharedBufferSync(() -> syncSiblingBuffers(root[0], leaf));
             leaf.editor().setMovePanePrevCallback(() -> {
-                List<Leaf> leaves = allLeaves(root[0]);
+                List<PaneTree.Leaf> leaves = PaneTree.allLeaves(root[0]);
                 if (leaves.size() <= 1) return;
                 int idx = leaves.indexOf(active[0]);
                 active[0] = leaves.get((idx - 1 + leaves.size()) % leaves.size());
@@ -834,7 +769,7 @@ public class Main {
                 active[0].canvas().requestFocusInWindow();
             });
             leaf.editor().setMovePaneNextCallback(() -> {
-                List<Leaf> leaves = allLeaves(root[0]);
+                List<PaneTree.Leaf> leaves = PaneTree.allLeaves(root[0]);
                 if (leaves.size() <= 1) return;
                 int idx = leaves.indexOf(active[0]);
                 active[0] = leaves.get((idx + 1) % leaves.size());
@@ -842,18 +777,18 @@ public class Main {
                 active[0].canvas().requestFocusInWindow();
             });
             leaf.editor().setExitCallback(() -> {
-                List<Leaf> leaves = allLeaves(root[0]);
+                List<PaneTree.Leaf> leaves = PaneTree.allLeaves(root[0]);
                 if (leaves.size() <= 1) {
                     System.exit(0);
                     return;
                 }
                 // アクティブを閉じる
-                Leaf closing = active[0];
-                PaneNode newRoot = removeLeaf(root[0], closing);
+                PaneTree.Leaf closing = active[0];
+                PaneTree.PaneNode newRoot = PaneTree.removeLeaf(root[0], closing);
                 root[0] = newRoot;
 
                 // 次のアクティブは閉じたリーフの直前 or 先頭
-                List<Leaf> remaining = allLeaves(root[0]);
+                List<PaneTree.Leaf> remaining = PaneTree.allLeaves(root[0]);
                 int idx = leaves.indexOf(closing);
                 active[0] = remaining.get(Math.min(idx, remaining.size() - 1));
 
@@ -865,12 +800,12 @@ public class Main {
     }
 
     /** フレームのコンテンツを再構築してボーダーを更新する。 */
-    private static void rebuildLayout(JFrame frame, PaneNode root, Leaf active) {
+    private static void rebuildLayout(JFrame frame, PaneTree.PaneNode root, PaneTree.Leaf active) {
         frame.getContentPane().removeAll();
         frame.getContentPane().add(buildComponent(root));
         frame.revalidate();
         frame.repaint();
-        updateBorders(allLeaves(root), active);
+        updateBorders(PaneTree.allLeaves(root), active);
     }
 
     /**
@@ -889,10 +824,10 @@ public class Main {
     /**
      * Ctrl+Alt+矢印: アクティブペインを囲む祖先のうち、キーの方向に対応するorientationを持つ
      * 最初のJSplitPaneだけを調整し、現在ペインを伸縮する。対応する分割が見つからなければ何もしない。
-     * PaneNode/Splitツリーではなく、実際に画面に貼られたSwingコンポーネント階層を直接辿る
+     * PaneTree.PaneNode/Splitツリーではなく、実際に画面に貼られたSwingコンポーネント階層を直接辿る
      * （buildComponentがリーフのEditorCanvasを中間ラッパーなしでJSplitPaneの子にするため辿れる）。
      */
-    private static void resizeActivePane(Leaf active, int keyCode) {
+    private static void resizeActivePane(PaneTree.Leaf active, int keyCode) {
         boolean horizontal = (keyCode == KeyEvent.VK_LEFT || keyCode == KeyEvent.VK_RIGHT);
         int neededOrientation = horizontal ? JSplitPane.HORIZONTAL_SPLIT : JSplitPane.VERTICAL_SPLIT;
         boolean grow = (keyCode == KeyEvent.VK_RIGHT || keyCode == KeyEvent.VK_DOWN);
@@ -917,8 +852,8 @@ public class Main {
         // 対応方向の分割祖先が見つからない場合は何もしない（単一ペイン・非対応方向のみの入れ子等）
     }
 
-    private static void updateBorders(List<Leaf> leaves, Leaf active) {
-        for (Leaf l : leaves) {
+    private static void updateBorders(List<PaneTree.Leaf> leaves, PaneTree.Leaf active) {
+        for (PaneTree.Leaf l : leaves) {
             boolean isActive = l == active;
             l.canvas().setBorder(isActive
                 ? BorderFactory.createLineBorder(ACTIVE_BORDER_COLOR, 2)
@@ -977,7 +912,7 @@ public class Main {
             frame.setSize(windowSize[0], windowSize[1]);
             centerOnScreen(frame, targetScreen);
 
-            Leaf firstLeaf = createLeaf(text, path);
+            PaneTree.Leaf firstLeaf = createLeaf(text, path);
             if (splash) firstLeaf.canvas().setShowSplash(true);
             // 初期ファイルをバッファレジストリに登録
             if (path != null) {
@@ -985,12 +920,12 @@ public class Main {
                     Path.of(path).getFileName().toString(), path));
             }
 
-            PaneNode[] root   = { firstLeaf };
-            Leaf[]     active = { firstLeaf };
+            PaneTree.PaneNode[] root   = { firstLeaf };
+            PaneTree.Leaf[]     active = { firstLeaf };
 
             // 作業ディレクトリ変更時: 全エディタと JFrame タイトルを更新
             WD_MANAGER.addChangeListener(wd -> {
-                for (Leaf l : allLeaves(root[0])) {
+                for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
                     l.editor().setProjectRoot(wd);
                 }
                 frame.setTitle(buildTitle(wd));
@@ -1133,7 +1068,7 @@ public class Main {
                         }
 
                         ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
-                        updateBorders(allLeaves(root[0]), active[0]);
+                        updateBorders(PaneTree.allLeaves(root[0]), active[0]);
                         pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
                         return true;
                     }
@@ -1151,7 +1086,7 @@ public class Main {
                         if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
                                 (ed.isInsertMode() || ed.isCommandMode())) {
                             ed.processKey(0, ch, 0);
-                            updateBorders(allLeaves(root[0]), active[0]);
+                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
                             return true;
                         }
                     }
@@ -1164,10 +1099,10 @@ public class Main {
                 @Override
                 public void mousePressed(java.awt.event.MouseEvent ev) {
                     Component clicked = frame.getContentPane().findComponentAt(ev.getPoint());
-                    for (Leaf l : allLeaves(root[0])) {
+                    for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
                         if (l.canvas() == clicked) {
                             active[0] = l;
-                            updateBorders(allLeaves(root[0]), active[0]);
+                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
                             active[0].canvas().requestFocusInWindow();
                             break;
                         }
