@@ -812,7 +812,7 @@ CLAUDE.md の「学習目的のシンプルさ」に反する。**コンスト�
 | 0 | 2026-07-27 | `6b2601f` | ✅ | ✅ 124 | 1,189 → 1,189 | 計画書の「javap 出力が同一になる」は誤りだった。正しい検証4項目を §5 段階0 に追記済み |
 | 1 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 1,189 → **1,104**（−85） | ① `Paths` の import が未使用になったため削除した（抽出の直接の帰結であり振る舞い変更ではない）。② `resolveLibDir` は `CodeSourceLocator.findUpward` の手書き再実装。共通化の余地があるが §7.4 に従い据え置き、`SetupBootstrap` の Javadoc に注記した |
 | 2 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 1,104 → **867**（−237） | ① **`canvas` 引数は9箇所で引き回されるだけで一度も使われていない**（`canvas.` の呼び出しが0件）。新APIから削除すべきだが §7.4 に従い今回は残した。要判断 → §8 R-7。② 旧 `Main.runningProcess` は `volatile` でなく EDT と仮想スレッドから可視性保証なく読み書きされている。純粋な移動を優先し `RunningProcessHolder` でも付けていない。要判断 → §8 R-8。③ Javadoc 内に `*compile*/*run*` と書くと `*/` がコメントを閉じてしまいコンパイルエラーになる（実際に踏んだ。`{@code *compile*} / {@code *run*}` と分けて回避） |
-| 3 | | | | | |
+| 3 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 867 → **704**（−163） | ① 計画では `SOURCE_ANALYZER`/`IMPORT_SUGGESTER`/`AUTO_IMPORT_HANDLER` も段階3で移すとしていたが、移動対象6メソッドはこれらを**1箇所も使っていなかった**（`createLeaf` の配線でのみ使用）。移すのは段階5が適切なため据え置いた。実際に移したのは `COMPILE_ANALYZER`/`C_COMPILE_ANALYZER` のみ。② 作業ディレクトリは `Supplier<Path>` で渡した。固定 `Path` にすると `:cd` 後の解析が古いディレクトリを見る（旧実装は解析実行時に `WD_MANAGER.getWorkingDirectory()` を読んでいた）。③ `organizeCIncludes` も `canvas` 未使用（R-7 の3例目）。④ 未使用になった `AnalysisException`/`AtomicLong` の import を削除 |
 | 4 | | | | | |
 | 5 | | | | | |
 | 6 | | | | | |
