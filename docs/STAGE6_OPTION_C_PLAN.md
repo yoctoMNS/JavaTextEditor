@@ -163,9 +163,36 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 | 6-0 | 2026-07-28 | `136c00f` | ✅ | ✅ 124 | (対象外) | 検証環境構築・ベースライン確定のみ |
 | 6-1 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | ✅ | 6-1と6-2を統合して実施（下記「気づき」参照） |
 | 6-2 | 2026-07-28 | （6-1に統合） | — | — | — | — |
-| 6-3 | | | | | (対象外) | |
+| 6-3 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | (対象外) | ゲート確認で親計画書の setter 名が実際と異なると判明（下記） |
 | 6-4 | | | | | | |
 | 6-5 | | | | | | |
+
+### 6-3の気づき
+
+- **ゲート確認で判明した設定ミス**: §3「6-3のゲート」に書いたgrepパターンは親計画書の
+  スケッチ名（`setClosePaneCallback`/`setOnCloseBlocked`）をそのまま使っていたが、実際の
+  `ModalEditor` にはこの名前のsetterは存在しない。実際は `setExitCallback`（ペインを閉じる）・
+  `setCloseBlockedCallback`（閉じられない場合。現状どこからも呼ばれていない未接続の受け口）
+  だった。7個の対象setterは以下の通り: `setSplitHorizontalCallback`/`setSplitVerticalCallback`/
+  `setExitCallback`/`setCloseBlockedCallback`/`setMovePanePrevCallback`/
+  `setMovePaneNextCallback`/`setOnSharedBufferSync`。`EditorHost.java` の Javadoc にこの
+  対応関係を記録した。
+- **実装内容**: `dev.javatexteditor.app.EditorHost`（新設インタフェース）を
+  `PaneManager implements EditorHost` として実装した。追加のみで、`ModalEditor` 側の配線
+  （8個のsetter/supplier/function。上記7個＋`setAllEditorsSupplier`/`setLiveBufferLookup`）は
+  一切変更していない。既存の per-leaf コールバック内にインラインで書かれていた分割・
+  ペイン移動・ペインクローズの実処理を `doSplit`/`doMoveToPrevPane`/`doMoveToNextPane`/
+  `doClosePane` という private ヘルパーへ抽出し、既存のコールバックと新設の `EditorHost`
+  メソッドの両方がこのヘルパーを共有するようにした（本文は移動しただけで変えていない）。
+  `findLiveBuffer` は既存の private メソッドをそのまま public化＋`@Override`付与した
+  （新規ロジックの追加ではなく可視性変更のみ）。`allEditors()`/`syncSiblingBuffers(ModalEditor)`
+  は既存ロジック（`allEditorsSupplier`のラムダ本体・`syncSiblingBuffers(Leaf)`）を
+  そのまま再利用する薄いラッパーとして追加した。`onCloseBlocked()` は現状どこからも
+  呼ばれない受け口のため no-op 実装とした。
+- **検証結果**: `diff` は空（既知FAILのみ）、起動スモークテストは `exit=124`。`Main.java` は
+  無変更（`git diff --stat` で確認）。EditorHost導入は「純追加でリスクほぼゼロ」という
+  当初の想定通りだったため、6-4・6-5で必須の手動ペイン検証（§7）は6-3では実施しなかった
+  （本書§2の一覧表どおり、手動検証は6-1・6-2・6-4・6-5が対象）。
 
 ### 6-1の気づき（6-1/6-2統合の経緯）
 
