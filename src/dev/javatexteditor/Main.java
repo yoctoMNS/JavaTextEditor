@@ -1,10 +1,7 @@
 package dev.javatexteditor;
 
-import dev.javatexteditor.analysis.AutoImportHandler;
 import dev.javatexteditor.analysis.CompileAnalyzer;
-import dev.javatexteditor.analysis.ImportSuggester;
-import dev.javatexteditor.analysis.JdkClassIndex;
-import dev.javatexteditor.analysis.SourceAnalyzer;
+import dev.javatexteditor.app.AnalysisServices;
 import dev.javatexteditor.app.CBuildRunner;
 import dev.javatexteditor.app.DiagnosticPopup;
 import dev.javatexteditor.app.JavaBuildRunner;
@@ -69,10 +66,10 @@ public class Main {
         WD_MANAGER = new WorkingDirectoryManager(initialHint);
         Path projectRoot = WD_MANAGER.getWorkingDirectory();
 
-        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築
-        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(JDK_INDEX);
-        // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
-        WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
+        // 作業ディレクトリに依存する索引（補完・単語）の構築を開始する。
+        // ★必ず SwingUtilities.invokeLater より前で呼ぶこと（構築開始が遅れると
+        //   起動直後の Ctrl+Space / Alt+/ が空振りする）。
+        SERVICES.startProjectIndexing(projectRoot);
 
         final GraphicsConfiguration targetScreen = detectMouseScreen();
         double displayScale = computeDisplayScale(targetScreen);
@@ -258,20 +255,20 @@ public class Main {
     // 作業ディレクトリの中央管理（main() で初期化）
     private static WorkingDirectoryManager WD_MANAGER;
 
-    private static final JdkClassIndex JDK_INDEX = JdkClassIndex.build();
+    // 各ペインに配線する解析サービス一式。
+    // ★この宣言はクラスロード時に評価され、その時点で JDK クラス索引の構築が始まる。
+    //   invokeLater の中へ移すと構築開始が遅れ、起動直後の Ctrl+Space が空振りする
+    //   （AnalysisServices の Javadoc「構築開始のタイミング」参照）。
+    // ★LIVE_DIAGNOSTICS が jdkClassIndex() を使うため、必ずその宣言より前に置くこと
+    //   （static フィールドはソース順に初期化される）。
+    private static final AnalysisServices SERVICES = AnalysisServices.createAndStartJdkIndexing();
     // 編集中バッファのインライン診断（ガター/波下線）と auto-import / auto-#include。
     // 作業ディレクトリは Supplier で渡す（:cd 後も解析時点の値を読むため。LiveDiagnostics の Javadoc 参照）。
     private static final LiveDiagnostics LIVE_DIAGNOSTICS = new LiveDiagnostics(
         new CompileAnalyzer(),
         new dev.javatexteditor.analysis.CCompileAnalyzer(),
-        JDK_INDEX,
+        SERVICES.jdkClassIndex(),
         () -> WD_MANAGER.getWorkingDirectory());
-    private static final SourceAnalyzer SOURCE_ANALYZER = new SourceAnalyzer();
-    private static final ImportSuggester IMPORT_SUGGESTER = new ImportSuggester(JDK_INDEX);
-    private static final AutoImportHandler AUTO_IMPORT_HANDLER =
-        new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
-    private static dev.javatexteditor.analysis.CompletionIndex COMPLETION_INDEX = null;
-    private static dev.javatexteditor.analysis.WordIndex WORD_INDEX = null;
 
     // -------------------------------------------------------------------------
     // F10/F11/F12: プロジェクト全体のコンパイル・実行
@@ -488,25 +485,19 @@ public class Main {
                 i += Character.charCount(cp);
             }
         });
-        editor.setJdkClassIndex(JDK_INDEX);
+        // 解析サービス一式（JDKクラス索引・auto-import・補完索引・単語索引）を配線する。
+        SERVICES.wireInto(editor);
         // Shift+K の最優先段（Eclipse JDT 流バインディング解決）を有効化する。
         // javac の属性付けはプロジェクト規模に比例して重いため EDT では実行せず、
         // 仮想スレッドで解析して invokeLater で結果を反映する（完全非同期）。
         editor.enableBindingDefinitionLookup(
             task -> Thread.ofVirtual().name("binding-definition-lookup").start(task),
             SwingUtilities::invokeLater);
-        editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
         editor.setBufferListSupplier(BUFFER_REGISTRY::entries);
         editor.setOnFileOpened(BUFFER_REGISTRY::register);
         editor.setOnBufferDelete(BUFFER_REGISTRY::unregister);
         editor.setOnRunMainClassSelected(
             fqcn -> JAVA_BUILD_RUNNER.runSelectedMainClass(editor, editor.getBuildRoot(), fqcn));
-        if (COMPLETION_INDEX != null) {
-            editor.setCompletionIndex(COMPLETION_INDEX);
-        }
-        if (WORD_INDEX != null) {
-            editor.setWordIndex(WORD_INDEX);
-        }
         // 作業ディレクトリを反映
         if (WD_MANAGER != null) {
             Path wd = WD_MANAGER.getWorkingDirectory();
