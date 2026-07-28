@@ -1677,3 +1677,35 @@ F10/F11/F12 のビルド・実行群（`triggerCompile`/`doCompile`/`runJavaClas
 `ModalEditor`/`EditorCanvas` のさらなる分割（R-2/R-3）・パッケージ境界の機械的検査（R-4）・
 既知の失敗3件の仕様確定（R-5）・`Main` に対する自動テストの新設（R-6）はいずれも
 `docs/MAIN_DECOMPOSITION_PLAN.md` §8 に記載のとおり本計画のスコープ外のまま。
+
+## `:e` で存在しないファイルを指定した際の新規作成確認（2026-07-28）
+
+「`:e` コマンドで指定されたファイルが存在しない場合は、対象のディレクトリに作成するかを
+y/n で尋ね、y なら新規作成・n なら何もしない」という要望に基づく変更。
+
+- **不具合ではなく仕様変更**: 従来 `:e newfile.txt` は確認なしで即座に空の新規バッファを
+  作成していた（本ファイル既存の「`currentFilePath` の絶対パス統一と新規ファイル作成時の
+  不具合修正」節で扱っていたのは「新規作成後にバッファ履歴へ登録されない」という別の不具合で、
+  作成すること自体は無条件だった）。今回はその「無条件で作成する」動作を「確認してから作成する」
+  へ変更した。
+- **実装**: `Mode.CONFIRM_NEW_FILE`（新設）を追加した。`:e <path>` の実行は
+  `requestLoadFromFile(path)`（新設）に差し替え、`Files.exists()` で存在確認した上で
+  ①存在すれば従来どおり `loadFromFile()` を即座に呼ぶ、②存在しなければ `pendingNewFilePath`
+  にパスを保持したまま `Mode.CONFIRM_NEW_FILE` へ遷移し、ステータス行に
+  `"<path>" は存在しません。新規作成しますか？ (y/n)` を表示する、の2分岐にした。
+  `processConfirmNewFileKey()` が `y`/`Y` で `loadFromFile()`（＝実際の新規作成）を呼び、
+  `n`/`N`/Esc で何もせず `Mode.NORMAL` に戻る（バッファ・`currentFilePath`とも無変更）。
+  それ以外のキーは無視し y/n/Esc の入力を待ち続ける。
+- **他の疑似モード群（FILESEARCH/CLASSPATH_INPUT等）と同型のパターンを踏襲**: `KeymapRegistry`
+  を経由せず `processKey()` のモード分岐に `CONFIRM_NEW_FILE` を追加するだけで完結する、
+  既存の「1行入力プロンプト」系（第5弾リファクタリングの `handleTextPromptKey` 分類）と同じ
+  設計方針。ただし本機能は自由入力を持たない単純な y/n/Esc 判定のみのため、
+  `handleTextPromptKey()` は使わず専用の `processConfirmNewFileKey()` を新設した。
+- **`loadFromFile()` の他の呼び出し元（FILER・telescope・`gr`・`\g`・Shift+K定義ジャンプ等）は
+  変更していない**。これらは検索結果・ディレクトリ一覧など「実在が既に分かっているパス」を
+  開く経路であり、存在しないパスを渡すことは想定されていないため、確認プロンプトを挟む
+  必要はないと判断した。
+- **テスト**: `test/dev/javatexteditor/editor/ConfirmNewFileTest.java`（新設・11アサーション）。
+  y確認での新規作成・n/Escでの作成キャンセル（ファイル未作成・バッファ内容維持）・既存ファイルは
+  確認なしで即座に開かれることを検証。既存の `BufferSwitchTest.testNewFileCreatedViaColonEIsRegistered()`
+  は `:e newfile.txt` 実行後に `y` キー入力を追加する形で新仕様に合わせて更新した。

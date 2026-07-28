@@ -241,6 +241,7 @@ public class BufferSwitchTest {
         assertEquals("registry has 1 entry after opening A", 1, reg.entries.size());
 
         colonCommand(ed, "e newfile.txt");
+        ed.processKey(KeyEvent.VK_UNDEFINED, 'y', 0); // 新規作成の確認プロンプトに y で応答
         assertEquals("registry has 2 entries after creating new file", 2, reg.entries.size());
 
         ctrlU(ed);

@@ -74,7 +74,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -251,6 +251,8 @@ public class ModalEditor {
     private final StringBuilder classpathInputBuffer = new StringBuilder();
     private String classpathInputLabel = "";
     private Consumer<List<Path>> classpathCallback;
+    /** :e で存在しないファイルを開こうとした際、確認待ち(y/n)にしているパス。Mode.CONFIRM_NEW_FILE専用。 */
+    private String pendingNewFilePath;
     // テキスト内検索状態
     private final StringBuilder searchBuffer = new StringBuilder();
     private String  lastSearchPattern = "";
@@ -589,6 +591,7 @@ public class ModalEditor {
                 case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
                 case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
                 case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
+                case CONFIRM_NEW_FILE -> processConfirmNewFileKey(keyCode, keyChar);
             }
         }
         syncCanvas();
@@ -2614,7 +2617,7 @@ public class ModalEditor {
         r.on(this::openTutorial,                     "tutor", "Tutor", "tutorial");
         r.on(() -> switchToRelativeBuffer(+1),       "bnext", "bn");
         r.on(() -> switchToRelativeBuffer(-1),       "bprev", "bp");
-        r.onPrefix("e ", path -> loadFromFile(resolveRelativeToProjectRoot(path)));
+        r.onPrefix("e ", path -> requestLoadFromFile(resolveRelativeToProjectRoot(path)));
 
         // --- 表示の切り替え ---
         r.on(this::showClassFileMnemonic,            "nimo");
@@ -3394,6 +3397,35 @@ public class ModalEditor {
             binaryCursorOffset = Math.max(0, Math.min(binaryByteCount - 1, binaryCursorOffset));
         }
         syncBinaryCursorPosition();
+    }
+
+    /**
+     * :e で指定されたパスを開く。ファイルが存在しない場合は即座に新規作成せず、
+     * y/n で作成するかどうかを確認する（Mode.CONFIRM_NEW_FILE）。既存ファイルの場合は
+     * 確認なしでそのまま loadFromFile() を呼ぶ。
+     */
+    private void requestLoadFromFile(String path) {
+        if (Files.exists(Path.of(path))) {
+            loadFromFile(path);
+            return;
+        }
+        pendingNewFilePath = path;
+        mode = Mode.CONFIRM_NEW_FILE;
+        statusMessage = "\"" + path + "\" は存在しません。新規作成しますか？ (y/n)";
+    }
+
+    private void processConfirmNewFileKey(int keyCode, char keyChar) {
+        if (keyChar == 'y' || keyChar == 'Y') {
+            String path = pendingNewFilePath;
+            pendingNewFilePath = null;
+            mode = Mode.NORMAL;
+            loadFromFile(path);
+        } else if (keyChar == 'n' || keyChar == 'N' || keyCode == KeyEvent.VK_ESCAPE) {
+            pendingNewFilePath = null;
+            mode = Mode.NORMAL;
+            statusMessage = "";
+        }
+        // それ以外のキーは無視し、y/n/Escの入力を待ち続ける。
     }
 
     private void loadFromFile(String path) {
