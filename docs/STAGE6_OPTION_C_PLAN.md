@@ -145,7 +145,7 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 |---|---|---|
 | 1 | `s` `v` | 左右に分割される |
 | 2 | `s` `s` | 上下に分割される |
-| 3 | `Ctrl+W` | アクティブペインの枠線が移動する |
+| 3 | `s h`/`s l`（親計画書 §6.5 は「Ctrl+W」と記載しているが実際のキーバインドと異なる。6-1実施時に確認済み） | アクティブペインの枠線が移動する |
 | 4 | `Ctrl+Alt+→` | アクティブペインが広がる |
 | 5 | `:q` | ペインが1つ閉じる（最後の1枚では閉じない） |
 | 6 | 同一ファイルを2ペインで開き片方で編集 | もう片方に即座に反映される |
@@ -160,12 +160,53 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 
 | サブ段階 | 実施日 | コミット | `diff` 空 | スモーク | 手動ペイン検証 | 気づき |
 |---|---|---|---|---|---|---|
-| 6-0 | | | | | (対象外) | |
-| 6-1 | | | | | | |
-| 6-2 | | | | | | |
+| 6-0 | 2026-07-28 | `136c00f` | ✅ | ✅ 124 | (対象外) | 検証環境構築・ベースライン確定のみ |
+| 6-1 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | ✅ | 6-1と6-2を統合して実施（下記「気づき」参照） |
+| 6-2 | 2026-07-28 | （6-1に統合） | — | — | — | — |
 | 6-3 | | | | | (対象外) | |
 | 6-4 | | | | | | |
 | 6-5 | | | | | | |
+
+### 6-1の気づき（6-1/6-2統合の経緯）
+
+本書 §2 の表は当初「6-1＝§6.2手順1〜2（PaneManager新設＋機械的置換のみ）」
+「6-2＝§6.2手順3〜4（main()側の配線統一）」と分けていたが、実装に着手したところ
+**手順1〜2だけでは `Main.java` がビルドできない**ことが判明した。責務4・10のメソッド群
+（`createLeaf`/`refreshCallbacks`等）を `Main` から削除すると、`main()` 側はまだ
+`root[0]`/`active[0]` の配列と旧メソッド呼び出しに依存したままのため、コンパイルが
+通らない状態になる。
+
+`docs/MAIN_DECOMPOSITION_PLAN.md` §5「進め方の原則」の「各段階で `./scripts/build.sh` が
+通ってから次へ進む」という制約を優先し、6-1の時点で `PaneManager` の新設・メソッド移設・
+`main()` 側の `PaneManager` 経由への統一（当初の6-2相当分）までを一体で実施した。
+6-2は独立した作業が残らなかったため実質的に6-1と同一コミットになった
+（進捗記録の「6-2」行は「6-1に統合」として記録する）。
+
+実装したもの:
+- `dev.javatexteditor.app.PaneManager`（新設）: `root`/`active` をインスタンスフィールドとして持ち、
+  旧 `Main` の責務4（`buildComponent`/`findLiveBuffer`/`syncSiblingBuffers`）・
+  責務10（`setupSplitCallbacks`/`shareBufferWithSplit`/`createLeaf`×3/`refreshCallbacks`/
+  `rebuildLayout`/`resizeActivePane`/`updateBorders`）を機械的に移設（本文不変、
+  `root[0]`→`root`・`active[0]`→`active` の置換のみ）。
+- `Main.java` 側: `PaneTree.PaneNode[] root`/`PaneTree.Leaf[] active` ローカル配列を撤去し、
+  `PaneManager panes = new PaneManager(...)` に統一。グローバルキーディスパッチャ・
+  マウスリスナーは `panes.active()`/`panes.allLeaves()`/`panes.resizeActivePane()`/
+  `panes.updateBorders()`/`panes.setActive()` を呼ぶだけになった。
+- `Main.java`: 625行 → **343行**。
+
+検証結果:
+- `diff /tmp/baseline6.txt /tmp/phase6-1.txt` は空（97テストクラス全て、既知FAIL含め差分なし）
+- 起動スモークテスト: `exit=124`、例外ログなし
+- 手動ペイン検証（Xvfb + `java.awt.Robot`、実際のキー入力とスクリーンショットで確認）:
+  `s v`（左右分割）・`s s`（ネストした上下分割）・`s h`/`s l`（ペインフォーカス切替、
+  境界線の色で確認）・`Ctrl+Alt+→`（アクティブペイン拡大、divider位置で確認）・
+  `:q`（ペインを1つ閉じてプロセス生存）・閉じた後の残りペインでの編集（INSERT遷移・
+  補完ポップアップ表示まで正常動作）を全て確認した。
+  **親計画書 §6.5 の検証項目表にある「3. Ctrl+W」は本エディタの実際のキーバインドと
+  異なる（実際は `s`+`h`/`j`/`k`/`l`。`ModalEditor.processNormalKey()` の
+  `movePanePrevCallback`/`movePaneNextCallback` 呼び出し箇所で確認）。表の誤記であり
+  今回の変更によるものではないため、本書ではこの誤記を記録するに留め、
+  検証は実際のキーバインドで実施した。**
 
 全サブ段階完了後、`docs/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ要約を1行で転記し、
 本書の詳細ログはこの表を正とする。
