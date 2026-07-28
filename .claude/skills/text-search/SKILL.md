@@ -131,6 +131,27 @@ for (int[] h : searchHighlights) {
 
 ---
 
+## Emacs式インクリメンタルサーチ（C-s / C-r、INSERTモード専用）
+
+- **背景**: 上記の `/`・`n`/`N` はいずれも Vim 式（文字列入力を Enter で確定してから n/N で候補間移動）。ユーザーから「Emacs 式（1文字入力するたびにリアルタイムで最も近い候補へジャンプし、C-s/C-r 連打でさらに次/前の候補へ進める）にしてほしい。ただし INSERT モードの時のみ有効にすること」という明示的な依頼があり、既存の Vim 式検索とは別に追加した（Vim 式は NORMAL モードの `/` として従来通り残っている。両者は独立した機能であり、どちらかがどちらかを置き換えるものではない）。
+- **Mode を増やさず INSERT のまま完結させる設計**: 本家 Emacs の isearch は「エディタの一状態」であって別モードには遷移しない（isearch中も自由に別バッファへは移れないが、モードという概念自体が薄い）。この エディタは Vim ライクなモーダル編集だが、Emacs式検索だけ独自に `Mode.SEARCH` 等の新モードを作ると「INSERTモードの時のみ有効」という要件をモード遷移で表現する必要が生じて逆に複雑になるため、`ModalEditor.Mode` は増やさず、`emacsIsearchActive`（boolean）という INSERT 内の疑似サブ状態として持つ。`isInsertMode()` は isearch 中も true のまま。
+- **キー横取りは KeymapRegistry を使わず `processInsertKey()` 冒頭で直接判定する**: 「Ctrl+Space→補完トリガー」「Alt+/→単語補完トリガー」という既存の2つの特殊キーも `KeymapRegistry` を経由せず `processInsertKey()` 先頭で `modifiers`/`keyCode` を直接見て判定している（`triggerCompletion()`/`triggerWordCompletion()` 呼び出し）。Emacs式isearchの起動キー（Ctrl+S/Ctrl+R）もこの既存パターンに合わせ、`KeymapRegistry.Mode.INSERT` へのバインド追加はしていない。理由は2つ: (1) このキーは「INSERTモードの時のみ」有効という要件そのものが `processInsertKey()` という関数の存在範囲と一致するため、わざわざ登録・解決の間接層を挟む意味がない。(2) isearch起動中は後続のほぼ全キーを isearch 側が横取りする必要があり（`processEmacsIsearchKey()`）、これは「アクション文字列を1つ解決して switch する」という `KeymapRegistry` の設計とは形が合わない（1個のキーではなく「セッション中の全キー入力」を横取りする必要があるため）。
+- **NORMALモードの Ctrl+S / Ctrl+R には一切手を加えていない**: Ctrl+R は NORMAL モードで既に `redo`（`KeymapRegistry.bind(Mode.NORMAL, ofCode(VK_R, CTRL_DOWN_MASK, "redo"), "redo")`）に割り当て済みであり、Emacs式isearchの判定は `processInsertKey()` 内だけに閉じているため干渉しない。Ctrl+S は NORMAL では（`VK_S` に modifier 0 の `split.pending` はあるが）Ctrl修飾のバインドは元々存在せず、今回も追加していない。
+- **カーソル移動基準点は「基準オフセットより厳密に後方/前方」（Vimの `/` と同じ `BufferTextSearch.selectNearest` の厳密比較）を流用する**: ユーザー指定の仕様文言「カーソル位置よりも後方（下方向）にある候補を検索します」「カーソル位置よりも前方（上方向）にある候補を検索します」は、`selectNearest` が forward で `> refOffset`、backward で `< refOffset` と厳密比較する既存の挙動とそのまま一致する（カーソル直下の文字も候補に含めてしまう実装は仕様と食い違うため採用しなかった）。
+- **「1文字入力するたびに同じ候補を拡張できる」ための inclusive/exclusive 切り替え**: 上記の厳密比較をそのまま毎回使うと、例えば `foo` を検索中に2文字目3文字目を打つたびに「今カーソルが乗っている候補自身」が基準オフセットと同一になり除外されてしまい、候補が毎回先へ飛んでしまう不具合になる（実装中に実機で確認済み）。これを防ぐため `runEmacsIsearch(refOffset, forward, inclusive)` に `inclusive` フラグを持たせ、`inclusive=true` のときは `forward` なら `refOffset-1`、`backward` なら `refOffset+1` を渡すことで「基準オフセット自身」も候補に含める（`selectNearest` 自体は変更しない）。
+  - 1文字入力時（`appendEmacsIsearchChar()`）: **直前に既にマッチが成立していたか**（`currentMatchIdx >= 0 && !searchMatches.isEmpty()`）で inclusive/exclusive を切り替える。isearch開始直後の1文字目（まだ何もマッチしていない）は **exclusive**（＝カーソル位置そのものは候補に含めない。ユーザー仕様の「カーソル位置よりも後方/前方」の原点に忠実にするため）。2文字目以降、既に候補が見つかっている状態でさらに文字を追加する場合は **inclusive**（＝今マッチしている候補自身を拡張できるようにするため）。
+  - C-s/C-r 連打（`advanceEmacsIsearch()`）: 検索文字列を変えずに次/前の候補へ進める操作なので常に **exclusive**（同じ候補に留まらず必ず次/前へ進む）。
+- **Backspace は「その文字を入力する直前の基準点」へ正確に戻すため、専用のスタック（`isearchLegAnchorHistory`）を使う**: ヒューリスティックな再計算（例:「現在の legAnchor からもう一度inclusive検索」）では、直前の1文字がマッチ失敗（例: `fooX` で候補なし）だった場合に legAnchor が更新されず古い値のまま残ることがあり、そこから単純にinclusive再検索すると偶然正しく戻ることもあるが原理的に保証がないため、`appendEmacsIsearchChar()` で1文字追加するたびに「追加する直前の `isearchLegAnchor`」を `isearchLegAnchorHistory`（`ArrayList<Integer>` をスタックとして使用。新規importを避けるため `ArrayDeque` ではなくこちらを採用）へ push し、Backspace時にpopして正確に復元する。C-s/C-r連打（`advanceEmacsIsearch()`）はこのスタックに積まない（クエリ文字列自体の巻き戻しではなく候補間ナビゲーションのため、範囲外とした。Backspaceで「直前のC-s連打」まで遡って戻す本家Emacsの完全な undo stack は本実装のスコープ外）。
+- **検索対象は正規表現ではなくリテラル文字列**（`Pattern.quote(isearchQuery.toString())`）: 本家 Emacs の `isearch-forward`（非regexp版）に合わせた。Vim式の `/` は正規表現対応だが、1文字ずつ評価するインクリメンタルサーチで正規表現の特殊文字を都度解釈すると入力体験が不安定になる（例: `(` を打った瞬間に構文エラーになる）ため、意図的にリテラル一致にしている。大文字小文字は既存の `/` 検索と足並みを揃え `Pattern.CASE_INSENSITIVE` のまま。
+- **ハイライト・`searchMatches`/`currentMatchIdx` は Vim式 `/` と同じフィールドを共有する**: 別々の状態を持つと「バッファ切替時のハイライト残留バグ」節で述べた事故が再発するリスクがあるため、既存の `searchMatches`/`currentMatchIdx`/`updateSearchHighlights()`/`clearSearchHighlights()` をそのまま再利用している。ただし `lastSearchPattern`/`lastSearchForward`（Vim式の `n`/`N` が参照する状態）には一切書き込まない。isearch は独立した `isearchQuery`/`isearchForward` を持ち、NORMALモードの `n`/`N` の挙動には影響しない。
+- **Enter（確定）・Esc（キャンセル）・その他キー（未対応キー）の3種類の終了経路**、いずれも終了時に必ず `clearSearchHighlights()` を呼ぶ（前述「バッファ切替時のハイライト残留バグ」と同じ理由: isearch終了後は通常のINSERT入力に戻り文字挿入でテキストが変化するため、ハイライト矩形を残すとずれて表示される）。
+  - Enter（`commitEmacsIsearch()`）: 現在のマッチ位置にカーソルを残したまま通常のINSERT入力へ戻る。
+  - Esc（`cancelEmacsIsearch()`）: isearch開始時点のカーソル位置（`isearchOriginOffset`）へ戻してから通常のINSERT入力へ戻る（Vim式SEARCHモードのEscキャンセルと同じ「開始前の状態に戻す」考え方）。
+  - それ以外のキー（矢印キー・Ctrl+B等、isearch専用キーのいずれでもないキー）: 本家Emacsが「isearch中に未束縛のコマンドを叩くとisearchを終了させてからそのコマンドを実行する」のに倣い、現在位置はそのままisearchを終了し、同じキーイベントを通常の `processInsertKey()` へ再度渡す（再帰呼び出し。`emacsIsearchActive` は既にfalseになっているため無限ループしない）。
+- **ステータス行の表示は既存の `statusMessage` をそのまま利用する**: `syncCanvas()` 側に isearch 専用の分岐は追加していない。isearch中は毎キー入力ごとに `statusMessage` を `"I-search: <query>"`（backward時は `"I-search backward: <query>"`）に上書きしており、`mode == Mode.INSERT` のときは他のどの `else if` 分岐にも一致しないため、既存の `else if (!statusMessage.isEmpty())` 分岐でそのままコマンドライン領域に表示される。
+
+---
+
 ## 注意点
 
 - **`executeSearch()` は `Pattern.compile(pattern, Pattern.CASE_INSENSITIVE)` で大文字小文字を区別しない**（ユーザー要望により追加。`/` パターン検索・`*`/`#` 単語検索のいずれもこのメソッド経由のため自動的に両方に反映される）。`\g`/`gr`/`:grep`（`ProjectSearcher`）・`\f`（`FileNameSearcher`、元々CASE_INSENSITIVE）・Alt+/ 単語補完（`WordIndex`、元々大文字小文字無視）・Ctrl+Space 補完（`CompletionIndex`/`CompletionScorer`、元々大文字小文字無視プレフィックスをスコアリング対象に含む）と足並みを揃えた形。大文字小文字を区別する検索が必要になった場合は、既存の `Pattern.compile(pattern)` に戻すのではなく、`(?-i)` インラインフラグや専用の切替オプションを検討すること（挙動を後退させる形の変更はしない）。
@@ -140,3 +161,4 @@ for (int[] h : searchHighlights) {
 - `*`/`#` の単語境界は `\\b` を使う。Java の `\b` は `[a-zA-Z0-9_]` 境界に相当するため、Vim の `iskeyword` デフォルト設定とほぼ一致する
 - `/` と `*`/`#` で `lastSearchPattern` と `lastSearchForward` を更新することで、後続の `n`/`N` が正しく動く
 - `EditorCanvas.getSearchHighlights()` はテスト専用に追加したゲッター。本番コードから読み取り目的で使う想定はない（描画専用の内部状態を外部公開しているのはテストで実際に画面上の残留ハイライトを検証するため）
+- Emacs式インクリメンタルサーチ（C-s/C-r）のテストは `test/dev/javatexteditor/search/EmacsIsearchTest.java`（30テスト）に分離している。Vim式の `/`・`n`/`N` とは別のテストクラス（`TextSearchTest.java`、34テスト）のまま残しており、統合していない（起動条件・状態遷移が大きく異なるため、1ファイルにまとめるとテストの意図が読み取りにくくなると判断した）。`ModalEditor.isEmacsIsearchActive()`/`getIsearchQuery()`/`isIsearchForward()` はこのテスト専用に追加した公開アクセサ。

@@ -264,6 +264,17 @@ public class ModalEditor {
     private boolean lastSearchForward = true;
     private List<int[]> searchMatches = List.of(); // 各要素: {offset, length}
     private int currentMatchIdx = -1;
+    // Emacs式インクリメンタルサーチ（C-s/C-r）の状態。INSERTモードでのみ有効。
+    // Mode は増やさず、INSERT のまま完結する疑似サブ状態として持つ（Escでモード外へ出ない Emacs の isearch に合わせる）。
+    private boolean emacsIsearchActive = false;
+    private final StringBuilder isearchQuery = new StringBuilder();
+    private boolean isearchForward = true;
+    /** isearch 開始時点のカーソルオフセット。Esc でのキャンセル時にここへ戻す。 */
+    private int isearchOriginOffset = 0;
+    /** 直近のマッチ開始オフセット（未マッチ時は直前の値のまま）。文字入力時の検索基準点。 */
+    private int isearchLegAnchor = 0;
+    /** Backspace で1文字戻したときに legAnchor を正確に復元するためのスタック（1文字入力ごとに直前の値をpush）。 */
+    private final List<Integer> isearchLegAnchorHistory = new ArrayList<>();
     // telescope モード状態
     private TelescopePicker telescopePicker = null;
     private final StringBuilder telescopeQuery = new StringBuilder();
@@ -1095,6 +1106,22 @@ public class ModalEditor {
     }
 
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
+        // Emacs式インクリメンタルサーチ（C-s/C-r）が起動中は、他のキー処理より先に横取りする。
+        if (emacsIsearchActive) {
+            processEmacsIsearchKey(keyCode, keyChar, modifiers);
+            return;
+        }
+        boolean isearchCtrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
+            && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
+        if (isearchCtrlOnly && keyCode == KeyEvent.VK_S) {
+            enterEmacsIsearch(true);
+            return;
+        }
+        if (isearchCtrlOnly && keyCode == KeyEvent.VK_R) {
+            enterEmacsIsearch(false);
+            return;
+        }
+
         // Ctrl+Space → 補完トリガー（ポップアップが開いていても再トリガー）
         if ((modifiers & KeyEvent.CTRL_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SPACE) {
             triggerCompletion();
@@ -2580,6 +2607,159 @@ public class ModalEditor {
             }
         }
         canvas.setSearchHighlights(highlights);
+    }
+
+    // -------------------------------------------------------------------------
+    // Emacs式インクリメンタルサーチ（C-s/C-r、INSERTモード専用）
+    // -------------------------------------------------------------------------
+
+    /**
+     * C-s（forward=true）/ C-r（forward=false）で isearch セッションを開始する。
+     * Vim式の {@code /} と異なり Mode は変えず、INSERT モードのまま完結する
+     * （キー処理は {@link #processEmacsIsearchKey} が横取りする）。
+     */
+    private void enterEmacsIsearch(boolean forward) {
+        dismissCompletion();
+        emacsIsearchActive = true;
+        isearchQuery.setLength(0);
+        isearchLegAnchorHistory.clear();
+        isearchForward = forward;
+        isearchOriginOffset = offsetOfCursor();
+        isearchLegAnchor = isearchOriginOffset;
+        clearSearchHighlights();
+        statusMessage = emacsIsearchStatusPrefix();
+    }
+
+    /** isearch セッション中のキー入力を処理する。通常の INSERT 処理には渡さない。 */
+    private void processEmacsIsearchKey(int keyCode, char keyChar, int modifiers) {
+        boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
+            && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
+        if (ctrlOnly && keyCode == KeyEvent.VK_S) {
+            advanceEmacsIsearch(true);
+            return;
+        }
+        if (ctrlOnly && keyCode == KeyEvent.VK_R) {
+            advanceEmacsIsearch(false);
+            return;
+        }
+        if (keyCode == KeyEvent.VK_BACK_SPACE) {
+            backspaceEmacsIsearch();
+            return;
+        }
+        if (keyCode == KeyEvent.VK_ENTER) {
+            commitEmacsIsearch();
+            return;
+        }
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            cancelEmacsIsearch();
+            return;
+        }
+        if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
+            appendEmacsIsearchChar(keyChar);
+            return;
+        }
+        // それ以外のキー（矢印キー等）は Emacs 同様 isearch を終了させ、
+        // 現在位置はそのままに通常の INSERT キー処理へ委ねる。
+        commitEmacsIsearch();
+        processInsertKey(keyCode, keyChar, modifiers);
+    }
+
+    /**
+     * クエリに1文字追加する。「現在既にマッチ中か」を基準に、続けて入力しても同じ候補を
+     * 拡張できるよう inclusive/exclusive を切り替える（詳細は {@link #runEmacsIsearch} 参照）。
+     * Backspace で正確に元へ戻せるよう、直前の legAnchor をスタックへ退避しておく。
+     */
+    private void appendEmacsIsearchChar(char c) {
+        isearchLegAnchorHistory.add(isearchLegAnchor);
+        isearchQuery.append(c);
+        boolean inclusive = currentMatchIdx >= 0 && !searchMatches.isEmpty();
+        runEmacsIsearch(isearchLegAnchor, isearchForward, inclusive);
+    }
+
+    /** Backspace: 1文字削除し、その文字を入力する直前の legAnchor へ正確に戻ってから再検索する。 */
+    private void backspaceEmacsIsearch() {
+        if (isearchQuery.length() == 0) return;
+        isearchQuery.deleteCharAt(isearchQuery.length() - 1);
+        int historySize = isearchLegAnchorHistory.size();
+        isearchLegAnchor = historySize > 0
+            ? isearchLegAnchorHistory.remove(historySize - 1)
+            : isearchOriginOffset;
+        if (isearchQuery.length() == 0) {
+            moveCursorToOffset(isearchOriginOffset);
+            clearSearchHighlights();
+            statusMessage = emacsIsearchStatusPrefix();
+            return;
+        }
+        // 復元した legAnchor 自身が指す候補は「1文字少ないクエリで実際に見つかっていた候補」なので、
+        // inclusive に検索して同じ候補へ戻す。
+        runEmacsIsearch(isearchLegAnchor, isearchForward, true);
+    }
+
+    /** C-s/C-r 連打で次/前の候補へ進める。検索文字列自体は変えない。 */
+    private void advanceEmacsIsearch(boolean forward) {
+        isearchForward = forward;
+        if (isearchQuery.length() == 0) {
+            statusMessage = emacsIsearchStatusPrefix();
+            return;
+        }
+        int fromOffset = (!searchMatches.isEmpty() && currentMatchIdx >= 0)
+            ? searchMatches.get(currentMatchIdx)[0]
+            : isearchLegAnchor;
+        runEmacsIsearch(fromOffset, forward, false);
+    }
+
+    /**
+     * isearchQuery（リテラル文字列・大文字小文字区別なし）で全文検索し、基準オフセットから見て
+     * 最も近い候補へカーソルを移動する。
+     *
+     * @param refOffset 基準オフセット
+     * @param inclusive true なら基準オフセット自身から始まる候補も対象に含める（既に見つかっている候補を
+     *                  1文字ずつ拡張しても同じ候補に留まれるようにするため）。false なら基準オフセットより
+     *                  厳密に先/前のみを対象にする（isearch開始直後の初回検索、およびC-s/C-r連打時に
+     *                  同じ候補へ留まらず必ず次/前へ進むため）。
+     */
+    private void runEmacsIsearch(int refOffset, boolean forward, boolean inclusive) {
+        Pattern p = Pattern.compile(Pattern.quote(isearchQuery.toString()), Pattern.CASE_INSENSITIVE);
+        List<int[]> matches = BufferTextSearch.findAll(buffer.getText(), p);
+        if (matches.isEmpty()) {
+            searchMatches = List.of();
+            currentMatchIdx = -1;
+            updateSearchHighlights();
+            statusMessage = emacsIsearchStatusPrefix() + "  (見つかりません)";
+            return;
+        }
+        // BufferTextSearch.selectNearest は forward で "> refOffset"、backward で "< refOffset" と
+        // 厳密比較するため、inclusive=true のときは ±1 して基準オフセット自身を含める。
+        int adjustedRef = inclusive ? (forward ? refOffset - 1 : refOffset + 1) : refOffset;
+        int idx = BufferTextSearch.selectNearest(matches, adjustedRef, forward);
+        searchMatches = matches;
+        currentMatchIdx = idx;
+        isearchLegAnchor = matches.get(idx)[0];
+        moveCursorToOffset(matches.get(idx)[0]);
+        updateSearchHighlights();
+        statusMessage = emacsIsearchStatusPrefix();
+    }
+
+    /** Enter、または未対応キー: 現在のカーソル位置を確定させて isearch を終了する。 */
+    private void commitEmacsIsearch() {
+        emacsIsearchActive = false;
+        isearchQuery.setLength(0);
+        clearSearchHighlights();
+        statusMessage = "";
+    }
+
+    /** Esc: isearch 開始時点のカーソル位置へ戻して終了する。 */
+    private void cancelEmacsIsearch() {
+        emacsIsearchActive = false;
+        isearchQuery.setLength(0);
+        moveCursorToOffset(isearchOriginOffset);
+        clearSearchHighlights();
+        statusMessage = "";
+    }
+
+    private String emacsIsearchStatusPrefix() {
+        String label = isearchForward ? "I-search" : "I-search backward";
+        return label + ": " + isearchQuery;
     }
 
     private static int[] offsetToRowCol(int offset, String[] lines) {
@@ -5676,6 +5856,9 @@ public class ModalEditor {
     public String getLastSearchPattern()  { return lastSearchPattern; }
     public List<int[]> getSearchMatches() { return searchMatches; }
     public int getCurrentMatchIdx()       { return currentMatchIdx; }
+    public boolean isEmacsIsearchActive() { return emacsIsearchActive; }
+    public String getIsearchQuery()       { return isearchQuery.toString(); }
+    public boolean isIsearchForward()     { return isearchForward; }
     public String getYankRegister()    { return yankRegister; }
     public String getYankType()        { return yankType == YankType.LINE ? "line" : "char"; }
     // vim-macro-recording: テスト・プラグイン向けアクセサ
