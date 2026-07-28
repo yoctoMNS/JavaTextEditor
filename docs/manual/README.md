@@ -33,6 +33,7 @@ Vimのモーダル編集とEmacsの拡張性を統合した、Java SE製の軽�
 |---|---|
 | [`../requirements.md`](../requirements.md) | 初期要件定義 |
 | [`../implementation-history.md`](../implementation-history.md) | 実装の変遷・設計判断の記録 |
-| [`../REFACTORING_PLAN.md`](../REFACTORING_PLAN.md) | リファクタリング計画・既知の未接続コードの記録 |
+| [`../decision-log.md`](../decision-log.md) | 機能追加・不具合修正ごとの詳細な設計判断ログ（`CLAUDE.md`から分離） |
+| [`../archive/`](../archive/) | 完了済みのリファクタリング実行計画書・提案書（既知の未接続コードの記録を含む） |
 
 機能追加・設計変更を行う際は、まず `.claude/skills/` 配下の関連SKILL.mdと `CLAUDE.md` を確認してください（このマニュアルは「今何ができるか」の利用者向け説明であり、設計判断の理由は `CLAUDE.md`/SKILL.md が正です）。

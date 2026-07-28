@@ -66,7 +66,8 @@ project-root/
 │   ├── manual/                      # 本マニュアル
 │   ├── requirements.md
 │   ├── implementation-history.md
-│   └── REFACTORING_PLAN.md
+│   ├── decision-log.md              # 機能追加・不具合修正ごとの詳細な設計判断ログ（CLAUDE.mdから分離）
+│   └── archive/                     # 完了済みのリファクタリング実行計画書・提案書
 ├── lib/                             # .gitignore 対象（setup.sh/bat で自動生成、フォント本体はソース埋め込みのため対象外）
 │   ├── src.zip                      # OpenJDK 21 Java ソース
 │   └── openjdk-native/              # HotSpot/JNI ネイティブソース

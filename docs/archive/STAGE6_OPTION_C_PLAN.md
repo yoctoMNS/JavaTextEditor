@@ -3,7 +3,7 @@
 - 作成日: 2026-07-28
 - 対象コミット: `621d56e`（段階0〜5完了・PR #204マージ後）
 - 対象ブランチ: `claude/stage6-substep-execution-4of8o5`
-- 親計画書: `docs/MAIN_DECOMPOSITION_PLAN.md` §5「段階6 — `PaneManager` ＋ `EditorHost`（最難関）」
+- 親計画書: `docs/archive/MAIN_DECOMPOSITION_PLAN.md` §5「段階6 — `PaneManager` ＋ `EditorHost`（最難関）」
 - 本書の位置づけ: 親計画書 §6.1〜6.5 に書かれた内容を**新しく設計し直すものではない**。
   親計画書自身が「手順2と5を同じコミットに混ぜないこと」「判断が必要なため、手順5に着手する前に
   いったん止めて確認を仰ぐこと」と明記している区切りをそのままサブ段階境界として採用し、
@@ -222,7 +222,7 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 `root[0]`/`active[0]` の配列と旧メソッド呼び出しに依存したままのため、コンパイルが
 通らない状態になる。
 
-`docs/MAIN_DECOMPOSITION_PLAN.md` §5「進め方の原則」の「各段階で `./scripts/build.sh` が
+`docs/archive/MAIN_DECOMPOSITION_PLAN.md` §5「進め方の原則」の「各段階で `./scripts/build.sh` が
 通ってから次へ進む」という制約を優先し、6-1の時点で `PaneManager` の新設・メソッド移設・
 `main()` 側の `PaneManager` 経由への統一（当初の6-2相当分）までを一体で実施した。
 6-2は独立した作業が残らなかったため実質的に6-1と同一コミットになった
@@ -298,14 +298,14 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 
 ## 段階6 完了
 
-6-0〜6-5すべて完了した。`docs/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ以下を転記する:
+6-0〜6-5すべて完了した。`docs/archive/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ以下を転記する:
 
 > 2026-07-28 / 6-0〜6-5（本ブランチのコミット群） / diff空・スモーク✅ / `Main.java`変更なし
 > （`PaneManager`/`EditorHost`新設のみ、段階6-1で625→343行に既に反映済み） /
 > `root[0]`/`active[0]`の箱を`PaneManager`のインスタンスフィールドへ解消。
 > `EditorHost`で23個の外部setterのうち8個を`setHost()`1本へ統合（旧setter自体は削除せず
 > 移行期間方式）。6-5の手動検証で`:q`が無反応になる重大な回帰を発見・修正（`setCloseBlockedCallback`
-> のnull判定を誤って壊す配線だった）。詳細はdocs/STAGE6_OPTION_C_PLAN.md参照。
+> のnull判定を誤って壊す配線だった）。詳細はdocs/archive/STAGE6_OPTION_C_PLAN.md参照。
 
-全サブ段階完了後、`docs/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ要約を1行で転記し、
+全サブ段階完了後、`docs/archive/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ要約を1行で転記し、
 本書の詳細ログはこの表を正とする。

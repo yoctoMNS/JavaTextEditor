@@ -52,8 +52,9 @@ Windowsの場合は `build.bat` / `run.bat` / `test.bat` を使用してくだ�
 | [docs/manual/](docs/manual/README.md) | 全機能の利用者向けマニュアル（セットアップ・モーダル編集・検索・Java開発支援・補完・プラグイン・内部アーキテクチャなど） |
 | [docs/requirements.md](docs/requirements.md) | 初期要件定義 |
 | [docs/implementation-history.md](docs/implementation-history.md) | 実装の変遷・設計判断の記録 |
-| [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) | リファクタリング計画・既知の未接続コードの記録 |
-| [CLAUDE.md](CLAUDE.md) | 開発方針・技術制約・設計決定事項（開発者向け） |
+| [docs/decision-log.md](docs/decision-log.md) | 機能追加・不具合修正ごとの詳細な設計判断ログ（日付順） |
+| [docs/archive/](docs/archive/) | 完了済みのリファクタリング実行計画書・提案書（既知の未接続コードの記録を含む） |
+| [CLAUDE.md](CLAUDE.md) | 開発方針・技術制約・設計決定事項の要約（開発者向け） |
 
 ## 技術制約
 

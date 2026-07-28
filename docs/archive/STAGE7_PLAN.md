@@ -3,9 +3,9 @@
 - 作成日: 2026-07-28
 - 対象コミット: `96e5c89`（段階6-0〜6-5完了・PR #205マージ後）
 - 対象ブランチ: `claude/stage7-global-key-dispatcher-9p0n8e`
-- 親計画書: `docs/MAIN_DECOMPOSITION_PLAN.md` §5「段階7 — `GlobalKeyDispatcher` ＋ `EditorApplication`」
+- 親計画書: `docs/archive/MAIN_DECOMPOSITION_PLAN.md` §5「段階7 — `GlobalKeyDispatcher` ＋ `EditorApplication`」
 - 本書の位置づけ: 親計画書の段階7節はサブ段階分割済みではなかったため、段階6
-  （`docs/STAGE6_OPTION_C_PLAN.md`）と同じ「1サブ段階＝1コミット＋個別検証」の原則に
+  （`docs/archive/STAGE6_OPTION_C_PLAN.md`）と同じ「1サブ段階＝1コミット＋個別検証」の原則に
   沿って、実行前にここで分割する。設計判断を追加するものではない。
 
 ## 現状の再確認（段階6完了後）
@@ -125,7 +125,7 @@ public final class Main {
 
 ## 検証手順（全サブ段階共通）
 
-`docs/MAIN_DECOMPOSITION_PLAN.md` §2 と同一。`verify.sh`・ベースラインは本セッションの
+`docs/archive/MAIN_DECOMPOSITION_PLAN.md` §2 と同一。`verify.sh`・ベースラインは本セッションの
 `/tmp` に作成済み（`/tmp/verify.sh`・`/tmp/baseline7.txt`）。
 
 ```bash
@@ -142,7 +142,7 @@ rm -rf lib/_openjdk_clone_tmp
 
 ## 手動検証（§4、7-1・7-2の両方で実施）
 
-`docs/STAGE6_OPTION_C_PLAN.md` §5の6項目に加え、本段階固有の**IME確認**を追加する
+`docs/archive/STAGE6_OPTION_C_PLAN.md` §5の6項目に加え、本段階固有の**IME確認**を追加する
 （親計画書が明記する「`boolean[] pressedHandled` も箱である」という指摘に対応。
 自動テストが存在しない領域であり、段階6の `:q` 回帰と同種のリスクのため必須とする）。
 
