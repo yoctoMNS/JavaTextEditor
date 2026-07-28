@@ -11,6 +11,7 @@ import dev.javatexteditor.analysis.JdkTypeInfo;
 import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
+import dev.javatexteditor.app.EditorHost;
 import dev.javatexteditor.buffer.BinaryFileDetector;
 import dev.javatexteditor.buffer.HexDumpFormatter;
 import dev.javatexteditor.buffer.UndoablePieceTable;
@@ -489,6 +490,47 @@ public class ModalEditor {
      */
     public void setOnSharedBufferSync(Runnable callback) {
         this.onSharedBufferSync = callback;
+    }
+
+    /**
+     * {@link EditorHost} 1個で、分割・ペイン移動・ペインクローズ・共有バッファ関連の
+     * 8個の setter/supplier/function（{@code setSplitHorizontalCallback}/
+     * {@code setSplitVerticalCallback}/{@code setExitCallback}/
+     * {@code setMovePanePrevCallback}/{@code setMovePaneNextCallback}/
+     * {@code setAllEditorsSupplier}/{@code setLiveBufferLookup}/{@code setOnSharedBufferSync}）
+     * をまとめて配線する（MAIN_DECOMPOSITION_PLAN.md 段階6 §6.3、
+     * docs/STAGE6_OPTION_C_PLAN.md 段階6-4）。
+     *
+     * <p><b>旧setterは削除していない</b>。このメソッドは内部で上記8個の既存setterを
+     * {@code host} のメソッドへ委譲するラムダで呼び出すだけの糖衣構文であり、
+     * 個々のsetterを直接呼ぶ既存の呼び出し方（本番コード・テストとも）は今までどおり動作する。
+     * {@code setOnSharedBufferSync} だけは元の型が引数無しの {@link Runnable} であり、
+     * どのエディタで変更が起きたかという情報を {@link EditorHost#syncSiblingBuffers} は
+     * 引数として要求するため、{@code this}（このメソッドを呼んだ {@code ModalEditor} 自身）を
+     * 渡すラムダで橋渡しする。
+     *
+     * <p><b>{@code setCloseBlockedCallback} だけは意図的に配線しない</b>（段階6-5で実機検証中に
+     * 発見した罠）。{@code closeCurrentPane()}/{@code saveAndCloseCurrentPane()} は
+     * {@code closeBlockedCallback != null} を「閉じられない事情がある」という意味の
+     * フラグとして使っており、{@code null} かどうかそのものが分岐条件になっている
+     * （「設定されていれば呼ぶ、されていなければ何もしない」という通常の optional callback
+     * パターンではない）。{@link EditorHost#onCloseBlocked()} は現状どの実装
+     * （{@code PaneManager}）でも no-op だが、ここで {@code setCloseBlockedCallback(
+     * host::onCloseBlocked)} のように非null値を配線してしまうと、{@code :q}/{@code :wq} が
+     * 常に「閉じられない」分岐に落ちてペインが一切閉じなくなる（実機Xvfb+Robot検証で
+     * この regressionを検出し、本Javadocに記録した）。将来 {@code EditorHost} 経由で
+     * 実際に閉じる操作を拒否する仕組みを導入する場合は、この null 判定そのものを
+     * 見直す必要がある。
+     */
+    public void setHost(EditorHost host) {
+        setSplitHorizontalCallback(host::splitHorizontal);
+        setSplitVerticalCallback(host::splitVertical);
+        setExitCallback(host::closePane);
+        setMovePanePrevCallback(host::moveToPrevPane);
+        setMovePaneNextCallback(host::moveToNextPane);
+        setAllEditorsSupplier(host::allEditors);
+        setLiveBufferLookup(host::findLiveBuffer);
+        setOnSharedBufferSync(() -> host.syncSiblingBuffers(this));
     }
 
     /** テスト・呼び出し側の再解析要否判定用。バッファ内容が変わるたびに増分する。 */
