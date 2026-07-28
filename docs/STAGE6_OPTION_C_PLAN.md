@@ -164,8 +164,27 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 | 6-1 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | ✅ | 6-1と6-2を統合して実施（下記「気づき」参照） |
 | 6-2 | 2026-07-28 | （6-1に統合） | — | — | — | — |
 | 6-3 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | (対象外) | ゲート確認で親計画書の setter 名が実際と異なると判明（下記） |
-| 6-4 | | | | | | |
+| 6-4 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | ✅（無変化を確認） | `setHost()` を追加のみ、呼び出し箇所ゼロ（下記） |
 | 6-5 | | | | | | |
+
+### 6-4の気づき
+
+- **解釈の確定**: 親計画書 §6.3 の「旧setterを残し、内部でEditorHostのデフォルト実装へ委譲する」を、
+  「`ModalEditor.setHost(EditorHost)` を新設し、内部で既存の9個のsetter
+  （`setSplitHorizontalCallback`/`setSplitVerticalCallback`/`setExitCallback`/
+  `setCloseBlockedCallback`/`setMovePanePrevCallback`/`setMovePaneNextCallback`/
+  `setAllEditorsSupplier`/`setLiveBufferLookup`/`setOnSharedBufferSync`）へ委譲する」
+  という**純追加**として実装した。既存9個のsetter自体・その呼び出し箇所（`PaneManager.
+  refreshCallbacks()`）は一切変更していない。`setHost()` を実際に呼ぶ箇所はまだ存在しない
+  （`grep -rn "\.setHost("` は空）ため、本サブ段階はアプリの実行時挙動を1バイトも変えていない。
+- **実際の配線切り替え（`PaneManager.refreshCallbacks()` を `leaf.editor().setHost(this)` 1行に
+  統一し、9個の個別 `setXxx` 呼び出しを削除すること）は6-5に先送りした**。ここが実際に
+  挙動が変わりうる箇所であり、6-5の削除前grepゲート・中止条件の対象はこちらになる。
+- **検証結果**: `diff` は空、起動スモークテスト `exit=124`。手動ペイン検証（Xvfb+Robot、
+  6-1で使用した検証スクリプトをそのまま再実行）でも `s v`/`s h`/`s l`/`:q` の挙動が
+  6-1完了時点と完全に同一であることをスクリーンショットで確認した（`setHost()` 未呼び出し
+  のため当然の結果だが、要求どおり実施・記録した）。
+- **ModalEditor.java**: 6,763行 → 6,793行（+30、`setHost()` とJavadocの追加のみ）。
 
 ### 6-3の気づき
 
