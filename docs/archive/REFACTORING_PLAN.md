@@ -54,13 +54,13 @@ GUI 系の補足: `RobotKeyInputTest` は DISPLAY 未設定のため [SKIP] 表�
 
 ```
 $ git status --short
-?? docs/REFACTORING_PLAN.md        ← 本計画書（新規ファイル・成果物そのもの）のみ
+?? docs/archive/REFACTORING_PLAN.md        ← 本計画書（新規ファイル・成果物そのもの）のみ
 
 $ git diff --stat
 （出力なし）
 ```
 
-**無変更の確認**: `git diff --stat` が空であること＝**既存の追跡ファイル（コード・設定・ドキュメント・テスト）には1文字の変更も発生していない**。`git status --short` に現れる唯一のエントリは本計画書 `docs/REFACTORING_PLAN.md`（新規作成の成果物）である。調査中に実行したビルド（`build/` 生成）とテストは .gitignore 対象のため追跡ファイルに影響しない。テスト実行用の補助スクリプト・ログはすべてリポジトリ外（/tmp）に置いた。
+**無変更の確認**: `git diff --stat` が空であること＝**既存の追跡ファイル（コード・設定・ドキュメント・テスト）には1文字の変更も発生していない**。`git status --short` に現れる唯一のエントリは本計画書 `docs/archive/REFACTORING_PLAN.md`（新規作成の成果物）である。調査中に実行したビルド（`build/` 生成）とテストは .gitignore 対象のため追跡ファイルに影響しない。テスト実行用の補助スクリプト・ログはすべてリポジトリ外（/tmp）に置いた。
 
 ---
 
@@ -1043,7 +1043,7 @@ private void generateGetter() {
 
 ---
 
-あなたには JavaTextEditor のリファクタリングを依頼します。`docs/REFACTORING_PLAN.md` が唯一の作業指示書です。以下のルールを厳守してください。
+あなたには JavaTextEditor のリファクタリングを依頼します。`docs/archive/REFACTORING_PLAN.md` が唯一の作業指示書です。以下のルールを厳守してください。
 
 1. **最初に計画書の「Item 0: 安全網の構築」を実施**してください。`git status --short` がクリーンであること、`./scripts/build.sh` が通ることを確認してください。**注意①: `./scripts/test.sh` は現状 `CompileAnalyzerTest` で停止します（計画書 P-23）**。計画書 §4 0-2 の per-class ランナーでベースライン（クラスごとの PASS/FAIL と「killed」の一覧）を取得・記録してから作業を始めてください。**注意②: `ScrollTest` はベースライン時点で 18/20（2件 FAIL）です（計画書 U-7）。これは既知の失敗であり、直さずにそのまま基準として扱ってください。**
 2. **1項目ずつ、計画書の実行順（Item 1 → 14）どおりに実施**してください。順序の入れ替え・複数 Item の同時着手は禁止です。**Item 1（テストハーネスの完走性回復）を最初に完了させるまで、他の Item に着手してはいけません。**
