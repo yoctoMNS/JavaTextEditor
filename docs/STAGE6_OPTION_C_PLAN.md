@@ -165,7 +165,7 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
 | 6-2 | 2026-07-28 | （6-1に統合） | — | — | — | — |
 | 6-3 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | (対象外) | ゲート確認で親計画書の setter 名が実際と異なると判明（下記） |
 | 6-4 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | ✅（無変化を確認） | `setHost()` を追加のみ、呼び出し箇所ゼロ（下記） |
-| 6-5 | | | | | | |
+| 6-5 | 2026-07-28 | （本コミット） | ✅ | ✅ 124 | ✅（重大な回帰を発見・修正） | `:q`が無反応になる回帰を手動検証で発見・修正（下記） |
 
 ### 6-4の気づき
 
@@ -253,6 +253,59 @@ grep -n "\.setSplitHorizontalCallback(\|\.setSplitVerticalCallback(\|\.setCloseP
   `movePanePrevCallback`/`movePaneNextCallback` 呼び出し箇所で確認）。表の誤記であり
   今回の変更によるものではないため、本書ではこの誤記を記録するに留め、
   検証は実際のキーバインドで実施した。**
+
+### 6-5の実施内容と、手動検証で発見した重大な回帰
+
+- **配線の統一**: `PaneManager.refreshCallbacks()` の9個の個別 `leaf.editor().setXxx(...)` 呼び出し
+  （うち分割2個は `setupSplitCallbacks()` という別メソッドに分かれていた）を
+  `leaf.editor().setHost(this);` の1行へ統一した。`setupSplitCallbacks()` メソッド自体を削除した
+  （6-3で追加した `doSplit`/`doMoveToPrevPane`/`doMoveToNextPane`/`doClosePane` はそのまま再利用）。
+- **削除前grepゲート（§3）の実施結果**: 本番側の呼び出し箇所は`PaneManager.java`の8箇所
+  （`refreshCallbacks()`内の分割2個・移動2個・クローズ1個・共有バッファ2個・全エディタ供給1個）
+  にのみ存在し、他は全て `test/` 配下（個々のsetterを直接呼ぶテスト。今回のリファクタ対象外）
+  であることを確認してから着手した。
+- **🔴 手動ペイン検証で発見した重大な回帰（自動テストでは検出不能だった）**: `:q` がペインを
+  一切閉じなくなる回帰を、Xvfb+Robotによる実キー入力検証で発見した。**この回帰は
+  `diff`（97テストクラス全て）では検出されなかった**（バグを含む状態でも `diff` は空だった。
+  親計画書§6.4の「ペイン分割の挙動を検証する自動テストが存在しない」という警告どおりの
+  結果であり、本サブ段階で手動検証が必須とされていた理由そのものを実地で確認した形になった）。
+  - **原因**: `ModalEditor.closeCurrentPane()`/`saveAndCloseCurrentPane()` は
+    `closeBlockedCallback != null` を「閉じられない事情がある」の判定に使っており、
+    「設定されていれば実行・されていなければ何もしない」という通常の optional callback
+    パターンでは**ない**（null自体が分岐条件）。6-4で新設した `setHost()` は
+    `setCloseBlockedCallback(host::onCloseBlocked)` を含む9個全てを配線する実装にしていたため、
+    `setHost()` を呼んだ瞬間に `closeBlockedCallback` が非null（no-op）になり、`:q`/`:wq` が
+    常に「閉じられない」分岐に落ちて無反応になっていた。6-4完了時点では `setHost()` を呼ぶ箇所が
+    存在しなかったため未発覚で、6-5で実際に配線した瞬間に顕在化した。
+  - **修正**: `setHost()` から `setCloseBlockedCallback` の配線を除外した（8個の配線に変更）。
+    `EditorHost.onCloseBlocked()` インタフェースメソッド自体は将来のために残したが、
+    `setHost()`経由では呼ばれない。両ファイルのJavadocに罠の詳細を記録した。
+  - **教訓**: 6-4完了時に「`setHost()`は呼び出し箇所ゼロだから無害」と判断したこと自体は
+    事実として正しかったが、「9個全部を配線して問題ないはずだ」という6-4時点の予測
+    （本書6-4節「同じ効果、副作用なし」という記述）は誤りだった。個々のsetterの用途を
+    「Runnableを設定するだけ」と表面的に見るのではなく、呼び出し側のnullチェックの意味まで
+    確認する必要があった。次にこの種の「setterをまとめる」リファクタを行う際は、各setterが
+    「未設定=null」をどう解釈しているか（無視するのか、それとも分岐条件として使うのか）を
+    個別に確認すること。
+- **検証結果（修正後）**: `diff` は空（既知FAILのみ）、起動スモークテスト `exit=124`。
+  手動ペイン検証（§7の6項目）を再実施しすべて確認: `s v`（左右分割）・`s h`/`s l`
+  （フォーカス切替、境界線の色で確認）・`Ctrl+Alt+→`（アクティブペイン拡大、divider位置で確認）・
+  `:q`（**修正後は正しくペインを閉じることを確認**）・同一ファイルを2ペインで開き片方で編集すると
+  もう片方に即座に反映される（共有バッファ、`ZZZ`の入力が両ペインに即時反映されることを
+  スクリーンショットで確認）。
+- **PaneManager.java**: 447行 → 439行。**ModalEditor.java**: 6,793行 → 6,805行
+  （`setHost()`のJavadoc拡充による微増）。
+
+## 段階6 完了
+
+6-0〜6-5すべて完了した。`docs/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ以下を転記する:
+
+> 2026-07-28 / 6-0〜6-5（本ブランチのコミット群） / diff空・スモーク✅ / `Main.java`変更なし
+> （`PaneManager`/`EditorHost`新設のみ、段階6-1で625→343行に既に反映済み） /
+> `root[0]`/`active[0]`の箱を`PaneManager`のインスタンスフィールドへ解消。
+> `EditorHost`で23個の外部setterのうち8個を`setHost()`1本へ統合（旧setter自体は削除せず
+> 移行期間方式）。6-5の手動検証で`:q`が無反応になる重大な回帰を発見・修正（`setCloseBlockedCallback`
+> のnull判定を誤って壊す配線だった）。詳細はdocs/STAGE6_OPTION_C_PLAN.md参照。
 
 全サブ段階完了後、`docs/MAIN_DECOMPOSITION_PLAN.md` §9 の「6」行へ要約を1行で転記し、
 本書の詳細ログはこの表を正とする。

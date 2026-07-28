@@ -260,12 +260,6 @@ public final class PaneManager implements EditorHost {
         }
     }
 
-    /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
-    private void setupSplitCallbacks(PaneTree.Leaf leaf) {
-        leaf.editor().setSplitHorizontalCallback(() -> doSplit(JSplitPane.HORIZONTAL_SPLIT));
-        leaf.editor().setSplitVerticalCallback(() -> doSplit(JSplitPane.VERTICAL_SPLIT));
-    }
-
     /**
      * アクティブペインを指定方向に分割する（{@code s v}/{@code s s} の実処理。
      * {@link EditorHost#splitHorizontal()}/{@link EditorHost#splitVertical()} と
@@ -361,23 +355,21 @@ public final class PaneManager implements EditorHost {
     }
 
     /**
-     * 全リーフの exitCallback を再設定する。
+     * 全リーフの {@link EditorHost} 配線を再設定する（段階6-5でsetHost()1本化に統一）。
      * :q 時、ペインが1つなら終了、複数なら現在のリーフを閉じる。
+     *
+     * <p>以前はここで9個の setter を個別に呼んでいた（{@code setSplitHorizontalCallback}/
+     * {@code setSplitVerticalCallback}/{@code setAllEditorsSupplier}/{@code setLiveBufferLookup}/
+     * {@code setOnSharedBufferSync}/{@code setMovePanePrevCallback}/{@code setMovePaneNextCallback}/
+     * {@code setExitCallback}、うち分割2個は {@code setupSplitCallbacks()} という別メソッドに
+     * 分かれていた）。{@code ModalEditor.setHost(EditorHost)}（段階6-4で新設）が同じ9個の委譲を
+     * 内部で行うため、ここでは1行に統一した。{@code PaneManager} 自身が {@link EditorHost} を
+     * 実装しているため {@code this} をそのまま渡せる。挙動が変わらないことは
+     * docs/STAGE6_OPTION_C_PLAN.md 段階6-5の検証記録を参照。
      */
     private void refreshCallbacks() {
         for (PaneTree.Leaf leaf : PaneTree.allLeaves(root)) {
-            setupSplitCallbacks(leaf);
-            // :wa/:qa/:qa! の対象を現在の全ペインにする（分割構成は :split/:vsplit のたびに変わるため、
-            // 固定リストではなく毎回 allEditors() を再評価するSupplierを渡す）。
-            leaf.editor().setAllEditorsSupplier(this::allEditors);
-            // Vim方式の共有バッファ: ファイルを開く際、同じ絶対パスを他ペインが既に開いていれば
-            // その生きたバッファ参照を再利用させる（:e/telescope/FILER/gr/Ctrl+U/Ctrl+P等すべて経由）。
-            leaf.editor().setLiveBufferLookup(this::findLiveBuffer);
-            // 共有バッファの内容が変化した直後、同じ参照を持つ他ペインの画面へ即座に反映する。
-            leaf.editor().setOnSharedBufferSync(() -> syncSiblingBuffers(leaf));
-            leaf.editor().setMovePanePrevCallback(this::doMoveToPrevPane);
-            leaf.editor().setMovePaneNextCallback(this::doMoveToNextPane);
-            leaf.editor().setExitCallback(this::doClosePane);
+            leaf.editor().setHost(this);
         }
     }
 

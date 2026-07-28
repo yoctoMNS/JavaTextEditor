@@ -39,6 +39,12 @@ public interface EditorHost {
      * 現状この経路を実際に使う呼び出し元は無い（:q は常にペイン1つならアプリ終了、複数ならアクティブ
      * ペインを閉じる、という無条件の実装のため）。将来 :q を拒否する条件が追加された場合の受け口として
      * インタフェースにだけ用意してある。
+     *
+     * <p><b>注意</b>: {@code ModalEditor.setHost(EditorHost)} はこのメソッドを意図的に配線しない
+     * （段階6-5の実機検証で発見。{@code ModalEditor} 側は {@code closeBlockedCallback != null}
+     * それ自体を「閉じられない」の判定に使っており、ここへ何らかの値（no-op であっても）を
+     * 配線すると {@code :q}/{@code :wq} が常に無効化されてしまう）。詳細は
+     * {@code ModalEditor.setHost()} のJavadoc参照。
      */
     void onCloseBlocked();
 
