@@ -24,7 +24,8 @@ public class FilerTest {
         testDirectoryListerFilterEmpty();
         testDirectoryListerEmptyDir();
         testCdEntersFilerMode();
-        testCdNonexistentShowsError();
+        testCdNonexistentPromptsToCreate();
+        testCdNonexistentYesCreatesAndEnters();
         testCtrlNMovesSelection();
         testCtrlPMovesSelection();
         testCtrlNClamps();
@@ -137,13 +138,35 @@ public class FilerTest {
         }
     }
 
-    static void testCdNonexistentShowsError() throws Exception {
+    static void testCdNonexistentPromptsToCreate() throws Exception {
         Path tmp = Files.createTempDirectory("filer_noex_");
         try {
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
-            typeCommand(editor, "cd /nonexistent_path_filer_test_12345");
-            assertTrue("nonexistent cd stays normal mode", editor.isNormalMode());
-            assertTrue("nonexistent cd shows error", editor.getStatusMessage().startsWith("E:"));
+            Path target = tmp.resolve("nonexistent_child");
+            typeCommand(editor, "cd " + target);
+            assertTrue("nonexistent cd prompts y/n", editor.isCdConfirmCreateMode());
+            assertTrue("prompt mentions target path", editor.getStatusMessage().contains(target.toString()));
+
+            // n はキャンセルし、ディレクトリは作成されない
+            editor.processKey(java.awt.event.KeyEvent.VK_N, 'n', 0);
+            assertTrue("n returns to normal mode", editor.isNormalMode());
+            assertTrue("n does not create the directory", Files.notExists(target));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCdNonexistentYesCreatesAndEnters() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_noex_");
+        try {
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            Path target = tmp.resolve("new_child_dir");
+            typeCommand(editor, "cd " + target);
+            assertTrue("nonexistent cd prompts y/n", editor.isCdConfirmCreateMode());
+
+            editor.processKey(java.awt.event.KeyEvent.VK_Y, 'y', 0);
+            assertTrue("y creates the directory", Files.isDirectory(target));
+            assertTrue("y enters filer mode", editor.isFilerMode());
         } finally {
             deleteDir(tmp);
         }
