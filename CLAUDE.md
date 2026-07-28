@@ -1600,3 +1600,80 @@ F10/F11/F12 のビルド・実行群（`triggerCompile`/`doCompile`/`runJavaClas
 着手前ベースラインと `diff` で完全一致。既知FAIL は `ScrollTest` 2件・
 `ModalEditorTest` 1件のみで増減なし。
 加えて描画結果のピクセルハッシュ（9シナリオ）が変更前と完全一致することを確認した。
+
+## `Main` クラス解体リファクタリング 第9弾（2026-07-27〜28、段階0〜7・全完了）
+
+第8弾で純粋ロジックを抜いた後も残っていた `Main`（1,189行・GUI組み立て・グローバルキー処理・
+サービス生成・F10/F11/F12・診断連携が同居）を、Composition Root（`main()` のみを持つ
+最小クラス）へ縮小する計画（`docs/MAIN_DECOMPOSITION_PLAN.md`）を策定・全段階実行した。
+判定基準は一貫して「`Main` に残ってよいのは部品を組み立てる記述だけ。`if`/`for` を含む処理は
+1行も置かない」。段階6・7はそれぞれ専用のサブ段階分割計画書（`docs/STAGE6_OPTION_C_PLAN.md`・
+`docs/STAGE7_PLAN.md`）を作り「1サブ段階=1コミット」で慎重に進めた。
+
+`Main.java`: 1,189行 → **15行**（`EditorApplication.launch(args)` を呼ぶだけ）。
+新設パッケージ `dev.javatexteditor.app` に11クラス（`SetupBootstrap`/`AnalysisServices`/
+`LiveDiagnostics`/`DiagnosticPopup`/`RunningProcessHolder`/`JavaBuildRunner`/`CBuildRunner`/
+`ProcessOutputPump` 相当の出力読み取り/`PaneManager`/`EditorHost`/`GlobalKeyDispatcher`/
+`EditorApplication`）が生まれた。段階ごとの詳細・気づきは `docs/MAIN_DECOMPOSITION_PLAN.md` §9
+（進捗記録欄）と両サブ計画書に集約済み。ここでは「次にこの領域を触る開発者が必ず知っておくべき
+設計判断」だけを抜粋する。
+
+- **`runningProcess`（F11/F12で起動した子プロセス）は Java 版・C 版の両ビルドランナーで
+  意図的に1つを共有し続ける**（`RunningProcessHolder`）。「F11 で Java を実行した後、C を F11 で
+  実行すると先の Java プロセスが `destroy()` される」という**言語をまたいだ多重実行防止**が
+  既存仕様であり、`JavaBuildRunner`/`CBuildRunner` が別々のフィールドとして持つと挙動が変わる
+  （両方が同時に走れてしまう）。両ランナーのコンストラクタに必ず同一インスタンスを渡すこと。
+  `volatile` は付けていない（切り出し前の `Main.runningProcess` も付いていなかったため、
+  「振る舞いを変えない」という段階2の制約に従い据え置いた。EDT とバックグラウンド仮想スレッドから
+  可視性保証なく読み書きされている既知の課題として残っている。付けるかどうかは別途判断）。
+- **`compileGeneration`（auto-import の世代ガード、CLAUDE.md「auto-import選択ポップアップの
+  無限再発」節参照）は `LiveDiagnostics.install(editor, canvas)` 呼び出しのたびにローカルで
+  新規生成し、クロージャで捕捉する方式のまま維持した**。`LiveDiagnostics` は全ペインで共有される
+  単一インスタンスだが、世代カウンタ自体をインスタンスフィールドにすると**編集対象（ペイン）を
+  またいで世代が共有されてしまい、別ペインの解析結果が互いを打ち消し合う**新規バグになる。
+  分割ウィンドウ使用時にのみ顕在化する種類の不具合のため、次にこのクラスへ手を入れる開発者は
+  「1インスタンスを全ペインで共有している」という事実を必ず意識すること。
+- **`AnalysisServices`（JDKクラス索引・補完索引）の生成は `EditorApplication` の
+  `static final` フィールドの初期化子のままにしてあり、`launch()` メソッドの中や
+  `SwingUtilities.invokeLater` の中には絶対に移してはならない**。`JdkClassIndex.build()` は
+  非同期でバックグラウンド構築を**開始する合図**にすぎないため、呼び出しタイミングが遅れると
+  起動直後の Ctrl+Space / Shift+K が空振りする（クラッシュしないため自動テストでは検知できない）。
+  段階5で確定したこの制約は、段階7で `Main` → `EditorApplication` へ置き場所が変わった後も
+  `javap -c -p EditorApplication.class` の `<clinit>` 逆アセンブルで初期化順序が保たれていることを
+  確認済み。親計画書のスケッチにあった `StartupArgs` という新規抽象クラスは**採用しなかった**
+  （段階5で確立済みの static final フィールド方式をそのまま延長する方が、新しい抽象を増やさずに
+  同じ保証を維持できるため）。
+- **`EditorHost`（`PaneManager` が実装する、`ModalEditor` → ペイン管理への窓口インタフェース）
+  導入時は旧 setter を削除せず、移行期間方式（第6弾で確立済みのパターン）を踏襲した**。
+  `ModalEditor.setHost(EditorHost)` は内部で個別 setter（`setSplitHorizontalCallback` 等
+  8個）へ委譲する形にし、旧公開シグネチャは1つも削除していない。
+  **例外が1つだけある**: `setHost()` は `setCloseBlockedCallback` を意図的に配線しない。
+  `ModalEditor.closeCurrentPane()`/`saveAndCloseCurrentPane()` は
+  `closeBlockedCallback != null` という**null自体を「閉じられない」の判定条件**として使っており、
+  ここへ何か（no-op であっても）配線すると `:q`/`:wq` が常に無効化される。段階6-5の
+  Xvfb+Robot手動検証で実際にこの回帰を発見・修正した（詳細は `docs/STAGE6_OPTION_C_PLAN.md`
+  段階6-5節）。次に `setHost()` 経由の配線を拡張する開発者は、個々の setter が
+  「未設定=null」をどう解釈しているか（単に無視するのか、それとも分岐条件として使うのか）を
+  必ず個別に確認すること。
+- **自動テストでは検出できない領域が2段階（段階6・7）で明確になった**。`ModalEditor`/
+  `EditorCanvas` の97〜99テストクラス全件が PASS していても、ペイン分割・フォーカス移動・
+  `:q`・共有バッファ同期・グローバルキーディスパッチャ（`pressedHandled` の二重処理防止）・
+  IME確定経路はいずれも自動テストの対象外で、`Xvfb` + `java.awt.Robot`（または
+  `InputMethodEvent` の直接発火）による手動検証でしか壊れていないことを確認できない
+  （段階6-5の `:q` 回帰は好例。97クラス全ての `diff` が空でも回帰は検出されなかった）。
+  次にこの領域（`PaneManager`/`EditorHost`/`GlobalKeyDispatcher`/`EditorApplication`）を
+  変更する開発者は、`diff` が空であることだけをもって「壊れていない」と判断しないこと。
+- **IME確定経路（`canvas.setImeCommitHandler` → `editor.processKey(0, ch, 0)`）は
+  `GlobalKeyDispatcher`/`pressedHandled` と完全に独立した別経路である**（AWTの
+  `InputMethodEvent`/`inputMethodTextChanged` 機構を通り、`KEY_PRESSED`/`KEY_TYPED`
+  のどちらも経由しない）。段階7の手動検証では、`PaneManager.createLeaf()` が実際に配線する
+  ラムダ本体を再現しつつ `InputMethodEvent` を `canvas.inputMethodTextChanged()` へ
+  直接発火する方式で、この経路が壊れていないこと（「あ」の確定で1文字だけ挿入されること）を
+  確認した。実IMEの無いヘッドレス環境で日本語入力を検証する際の標準手順として、次に
+  この領域を触る開発者はこの手法を再利用してよい。
+
+**意図的に見送った既存の残課題（変更なし）**: `PaneTree`/`BufferRegistry`/
+`WorkingDirectoryManager` を `dev.javatexteditor` 直下から `app/` へ移動する件（R-1）・
+`ModalEditor`/`EditorCanvas` のさらなる分割（R-2/R-3）・パッケージ境界の機械的検査（R-4）・
+既知の失敗3件の仕様確定（R-5）・`Main` に対する自動テストの新設（R-6）はいずれも
+`docs/MAIN_DECOMPOSITION_PLAN.md` §8 に記載のとおり本計画のスコープ外のまま。
