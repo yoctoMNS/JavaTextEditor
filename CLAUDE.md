@@ -1678,3 +1678,97 @@ F10/F11/F12 のビルド・実行群（`triggerCompile`/`doCompile`/`runJavaClas
 `ModalEditor`/`EditorCanvas` のさらなる分割（R-2/R-3）・パッケージ境界の機械的検査（R-4）・
 既知の失敗3件の仕様確定（R-5）・`Main` に対する自動テストの新設（R-6）はいずれも
 `docs/MAIN_DECOMPOSITION_PLAN.md` §8 に記載のとおり本計画のスコープ外のまま。
+
+## `:e` で存在しないファイルを指定した際の新規作成確認（2026-07-28）
+
+「`:e` コマンドで指定されたファイルが存在しない場合は、対象のディレクトリに作成するかを
+y/n で尋ね、y なら新規作成・n なら何もしない」という要望に基づく変更。
+
+- **不具合ではなく仕様変更**: 従来 `:e newfile.txt` は確認なしで即座に空の新規バッファを
+  作成していた（本ファイル既存の「`currentFilePath` の絶対パス統一と新規ファイル作成時の
+  不具合修正」節で扱っていたのは「新規作成後にバッファ履歴へ登録されない」という別の不具合で、
+  作成すること自体は無条件だった）。今回はその「無条件で作成する」動作を「確認してから作成する」
+  へ変更した。
+- **実装**: `Mode.CONFIRM_NEW_FILE`（新設）を追加した。`:e <path>` の実行は
+  `requestLoadFromFile(path)`（新設）に差し替え、`Files.exists()` で存在確認した上で
+  ①存在すれば従来どおり `loadFromFile()` を即座に呼ぶ、②存在しなければ `pendingNewFilePath`
+  にパスを保持したまま `Mode.CONFIRM_NEW_FILE` へ遷移し、ステータス行に
+  `"<path>" は存在しません。新規作成しますか？ (y/n)` を表示する、の2分岐にした。
+  `processConfirmNewFileKey()` が `y`/`Y` で `loadFromFile()`（＝実際の新規作成）を呼び、
+  `n`/`N`/Esc で何もせず `Mode.NORMAL` に戻る（バッファ・`currentFilePath`とも無変更）。
+  それ以外のキーは無視し y/n/Esc の入力を待ち続ける。
+- **他の疑似モード群（FILESEARCH/CLASSPATH_INPUT等）と同型のパターンを踏襲**: `KeymapRegistry`
+  を経由せず `processKey()` のモード分岐に `CONFIRM_NEW_FILE` を追加するだけで完結する、
+  既存の「1行入力プロンプト」系（第5弾リファクタリングの `handleTextPromptKey` 分類）と同じ
+  設計方針。ただし本機能は自由入力を持たない単純な y/n/Esc 判定のみのため、
+  `handleTextPromptKey()` は使わず専用の `processConfirmNewFileKey()` を新設した。
+- **`loadFromFile()` の他の呼び出し元（FILER・telescope・`gr`・`\g`・Shift+K定義ジャンプ等）は
+  変更していない**。これらは検索結果・ディレクトリ一覧など「実在が既に分かっているパス」を
+  開く経路であり、存在しないパスを渡すことは想定されていないため、確認プロンプトを挟む
+  必要はないと判断した。
+- **テスト**: `test/dev/javatexteditor/editor/ConfirmNewFileTest.java`（新設・11アサーション）。
+  y確認での新規作成・n/Escでの作成キャンセル（ファイル未作成・バッファ内容維持）・既存ファイルは
+  確認なしで即座に開かれることを検証。既存の `BufferSwitchTest.testNewFileCreatedViaColonEIsRegistered()`
+  は `:e newfile.txt` 実行後に `y` キー入力を追加する形で新仕様に合わせて更新した。
+
+## `:w`/`:enew` への新規作成確認の拡張と、`:e`/`:cd` 同様の TAB 補完（2026-07-28）
+
+上記の `:e` の y/n 確認を「`:w` と `:enew` にも同じ仕様を追加してほしい。また `:e`/`:cd` と
+同様に TAB キーでディレクトリ・ファイル名の入力補完ができるようにしてほしい」という要望に
+基づき拡張した。
+
+- **確認の仕組みを汎用化**: `Mode.CONFIRM_NEW_FILE` 自体は変更せず、「y が押されたときに
+  何をするか」を `Runnable` として保持する `pendingNewFileAction`（新設）を追加した。
+  `requestLoadFromFile(path)`（:e/:enew 用）は `() -> loadFromFile(path)` を、新設した
+  `requestSaveToFile(pathSpec)`（:w 用）は `() -> saveToFile(pathSpec)` を渡す。両者は
+  `requestConfirmNewFile(displayPath, onConfirmed)`（新設）という共通の入口を経由する。
+  `processConfirmNewFileKey()` は `y`/`Y` でこの `Runnable` を実行するだけになり、:e/:enew/:w の
+  分岐を個別に持たない。
+- **`:w`（保存）**: `requestSaveToFile(pathSpec)` が `resolveSavePath()`（既存、`s/pattern/repl/`
+  置換・`~`展開・相対パス解決を担う）で解決した絶対パスの実在を `Files.exists()` で確認し、
+  ①存在すれば従来どおり `saveToFile()` を即座に呼ぶ（＝既存ファイルへの上書き保存は確認なし）、
+  ②存在しなければ y/n 確認を挟む、の2分岐にした。**引数なしの bare `:w`（`currentFilePath` を
+  保存先とする場合）も同じ経路を通る**——`:enew`/`:e` で作った「まだ一度もディスクに書き出して
+  いない新規ファイル」に対する最初の `:w` は、`currentFilePath` こそ設定済みだが実体は
+  存在しないため、こちらも確認対象になる。2回目以降の `:w`（同じファイルへの上書き）はファイルが
+  既に存在するため確認なしになる。
+- **`:wq`（保存して閉じる）・`:wa`（全保存）は対象外のまま**: `saveAndCloseCurrentPane()` は
+  引き続き `saveToFile()` を直接呼ぶ。`:wq` の最中に y/n 確認へ分岐すると「保存に成功したときだけ
+  閉じる」という戻り値ベースの単純な制御フローが崩れ、確認待ちのまま中途半端にペインを閉じる
+  条件分岐が別途必要になる。ユーザーからの要望は `:w`/`:enew` に限定されていたため、複雑化を
+  避けてスコープ外とした。同様に `:wa`（`allEditorsSupplier` 経由で複数編集対象を一括保存）も
+  対象外とした——1回の `:wa` で複数の確認プロンプトが連続して出る設計は使い勝手が悪く、
+  かつ「未保存の変更があるものだけを黙って全部保存する」という既存の意味論とも相性が悪いため。
+- **`:enew <path>`（新規: パス引数付き）**: 従来 `:enew` は常に無名の空バッファを作るだけで
+  パス引数を一切受け付けていなかった（`"e"`/`"enew"` の完全一致のみ登録、前置一致は `"e "` の
+  みで `"enew "` は無かった）。`r.onPrefix("enew ", path -> requestLoadFromFile(...))` を追加し、
+  `:enew <path>` を `:e <path>` と全く同じ意味（存在すれば開く、存在しなければ y/n 確認の上で
+  新規作成）にした。引数なしの `:enew`（無名バッファ作成）は無変更。
+- **TAB 補完を `:e` から `:enew`/`:w` へ一般化**: 従来 `handleEditTabCompletion()` は
+  `"e"`/`"e "` 決め打ちだった。`handleEditTabCompletion(String verb)` に変更し、
+  `processCommandKey()` の TAB 分岐で `cmd` が `"e "`/`"enew "`/`"w "` のいずれで始まるかに応じて
+  対応する `verb`（`"e"`/`"enew"`/`"w"`）を渡すようにした。渡された `verb` は新設の `edVerb`
+  フィールドに保持し、補完確定時（`applyEditCandidate()`／複数候補時の `*e候補*` 疑似バッファで
+  Enter を押した後の `applySelectedEditCandidate()`）に `verb + " " + path` の形で
+  `commandBuffer`/`executeCommand()` を組み立てる際に使う。**判定順序に注意**: `"enew"` は
+  `"e"` で始まるため、TAB 分岐では `"enew"`/`"enew "` の判定を `"e"`/`"e "` より先に置く
+  必要がある（`cmd.startsWith("e ")` は `"enew foo"` にはマッチしないため実害はないが、
+  `cmd.equals("e")` 単体分岐と `"enew"` 単体分岐の順序を誤ると意図が読み取りにくくなるため、
+  安全側で先に置いた）。
+  - 候補一覧（ファイル・ディレクトリ）を作る実体のロジック（`DirectoryLister` 呼び出し・
+    前方一致フィルタ・0件/1件/複数件の分岐）は3つの verb で完全に共通のため、`:cd` 用の
+    `handleCdTabCompletion()`（ディレクトリのみが対象で挙動が異なるため独立のまま）とは別に、
+    1つの汎用メソッドに統合した（`:e`/`:enew`/`:w` の3つ目を機械的に複製すると
+    CLAUDE.mdの「3行の重複は早すぎる抽象化よりよい」の許容範囲を明らかに超えるため、
+    ここは統合した）。
+  - `*e候補*` 疑似バッファの見出し文言・退避フィールド（`edStash`/`edCandidates`等）は
+    verb 間で共有する（同時に2つの verb で補完中になることはないため問題ない）。
+- **テスト**: `test/dev/javatexteditor/editor/WriteAndEnewConfirmTest.java`（新設・19アサーション）。
+  `:w <新規パス>` の y/n 確認（作成/キャンセル）・既存パスへの `:w` は確認なし・
+  `:enew` で作った未保存の新規ファイルへの bare `:w` も確認対象になること・
+  `:enew <path>` の y/n 確認（作成/キャンセル）・`:enew <既存パス>` は確認なしで即座に開くこと・
+  `:w`/`:enew` それぞれの TAB 補完（単一候補で即座に補完）を検証。
+  既存の `BufferSwitchTest.testSaveNewBufferRegistersAbsolutePath()`（`:enew` → `:w newname.txt`
+  という新規ファイル保存の回帰テスト）は `:w newname.txt` 実行後に `y` キー入力を追加する形で
+  新仕様に合わせて更新した。全93テストクラスを個別JVMで実行し、既知のベースラインFAIL
+  （`ScrollTest` 2件・`ModalEditorTest` 1件）以外はすべてPASSであることを確認済み。
