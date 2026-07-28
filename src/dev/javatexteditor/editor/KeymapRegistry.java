@@ -192,6 +192,9 @@ public class KeymapRegistry {
         // Emacs ファイル先頭・末尾（Ctrl+Home / Ctrl+End）
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_HOME, KeyEvent.CTRL_DOWN_MASK, "file.start"), "file.start");
         bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_END,  KeyEvent.CTRL_DOWN_MASK, "file.end"),   "file.end");
+        // Emacs ファイル先頭・末尾（本家 Emacs のキーバインド M-< / M-> ＝ Alt+Shift+, / Alt+Shift+.）
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_COMMA,  KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK, "file.start"), "file.start");
+        bind(Mode.INSERT, KeyBinding.ofCode(KeyEvent.VK_PERIOD, KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK, "file.end"),   "file.end");
 
         // COMMAND モード（:に続く入力）
         // 基本的には文字入力をそのまま溜めるので、特別なキーバインドは ESC だけ
