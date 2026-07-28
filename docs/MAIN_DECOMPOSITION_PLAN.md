@@ -813,7 +813,7 @@ CLAUDE.md の「学習目的のシンプルさ」に反する。**コンスト�
 | 1 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 1,189 → **1,104**（−85） | ① `Paths` の import が未使用になったため削除した（抽出の直接の帰結であり振る舞い変更ではない）。② `resolveLibDir` は `CodeSourceLocator.findUpward` の手書き再実装。共通化の余地があるが §7.4 に従い据え置き、`SetupBootstrap` の Javadoc に注記した |
 | 2 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 1,104 → **867**（−237） | ① **`canvas` 引数は9箇所で引き回されるだけで一度も使われていない**（`canvas.` の呼び出しが0件）。新APIから削除すべきだが §7.4 に従い今回は残した。要判断 → §8 R-7。② 旧 `Main.runningProcess` は `volatile` でなく EDT と仮想スレッドから可視性保証なく読み書きされている。純粋な移動を優先し `RunningProcessHolder` でも付けていない。要判断 → §8 R-8。③ Javadoc 内に `*compile*/*run*` と書くと `*/` がコメントを閉じてしまいコンパイルエラーになる（実際に踏んだ。`{@code *compile*} / {@code *run*}` と分けて回避） |
 | 3 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 867 → **704**（−163） | ① 計画では `SOURCE_ANALYZER`/`IMPORT_SUGGESTER`/`AUTO_IMPORT_HANDLER` も段階3で移すとしていたが、移動対象6メソッドはこれらを**1箇所も使っていなかった**（`createLeaf` の配線でのみ使用）。移すのは段階5が適切なため据え置いた。実際に移したのは `COMPILE_ANALYZER`/`C_COMPILE_ANALYZER` のみ。② 作業ディレクトリは `Supplier<Path>` で渡した。固定 `Path` にすると `:cd` 後の解析が古いディレクトリを見る（旧実装は解析実行時に `WD_MANAGER.getWorkingDirectory()` を読んでいた）。③ `organizeCIncludes` も `canvas` 未使用（R-7 の3例目）。④ 未使用になった `AnalysisException`/`AtomicLong` の import を削除 |
-| 4 | | | | | |
+| 4 | 2026-07-27 | （本コミット） | ✅ | ✅ 124 | 704 → **634**（−70） | ① ダイアログの親は `frame` のまま維持し、ディスパッチャ冒頭の `if (focused != frame) return false;` ガードとの対応が保たれていることを確認済み。② `pressedHandled[0] = true; return true;` はキー処理の責務なのでディスパッチャ側に残した。③ `canvas` は `getDiagnostics()` で実使用のため引数に残した（R-7 の死んだ引数とは別件）。④ 未使用になった import 8個（`JLabel`/`JOptionPane`/`JScrollPane`/`JTextArea`/`UIManager`/`Dimension`/`Font`/`CompileDiagnostic`）を削除。⑤ Xvfb + Robot で実際に F2 ダイアログを表示・Enter でクローズできることを確認（自動テストが無いため） |
 | 5 | | | | | |
 | 6 | | | | | |
 | 7 | | | | | |
