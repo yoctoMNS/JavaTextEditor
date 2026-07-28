@@ -74,7 +74,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -303,6 +303,7 @@ public class ModalEditor {
     /** *cd候補* 表示中に隠れている元の編集状態。 */
     private final PseudoBufferStash cdStash = new PseudoBufferStash();
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
+    private Path cdConfirmTarget = null; // :cd 先が存在しない場合の y/n 確認プロンプト対象パス
     // :e/:enew/:w タブ補完状態（:cd と同じく一時退避→復元パターン。
     // どのコマンドから起動したかは edVerb に覚えておき、補完確定時に正しいコマンド名で
     // commandBuffer / executeCommand() を組み立てる）
@@ -600,6 +601,7 @@ public class ModalEditor {
                 case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
                 case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
                 case CONFIRM_NEW_FILE -> processConfirmNewFileKey(keyCode, keyChar);
+                case CD_CONFIRM_CREATE -> processCdConfirmCreateKey(keyCode, keyChar);
             }
         }
         syncCanvas();
@@ -5020,15 +5022,46 @@ public class ModalEditor {
                 statusMessage = "E: working directory handler not set";
                 return;
             }
-            String err = changeWdCallback.apply(target);
-            if (err != null) {
-                statusMessage = "E: " + err;
+            if (!Files.exists(target)) {
+                cdConfirmTarget = target;
+                mode = Mode.CD_CONFIRM_CREATE;
+                statusMessage = "ディレクトリが存在しません: " + target + " 新規作成しますか? (y/n)";
                 return;
             }
-            saveToStash(filerStash);
-            enterFiler();
+            applyChangeDirectory(target);
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
+        }
+    }
+
+    private void applyChangeDirectory(Path target) {
+        String err = changeWdCallback.apply(target);
+        if (err != null) {
+            statusMessage = "E: " + err;
+            return;
+        }
+        saveToStash(filerStash);
+        enterFiler();
+    }
+
+    /** :cd の対象ディレクトリが存在しない場合の y/n 確認プロンプトを処理する。 */
+    private void processCdConfirmCreateKey(int keyCode, char keyChar) {
+        if (keyCode == KeyEvent.VK_ESCAPE || keyChar == 'n' || keyChar == 'N') {
+            mode = Mode.NORMAL;
+            statusMessage = "キャンセルしました";
+            cdConfirmTarget = null;
+            return;
+        }
+        if (keyChar == 'y' || keyChar == 'Y') {
+            Path target = cdConfirmTarget;
+            cdConfirmTarget = null;
+            mode = Mode.NORMAL;
+            try {
+                Files.createDirectories(target);
+                applyChangeDirectory(target);
+            } catch (Exception ex) {
+                statusMessage = "E: " + ex.getMessage();
+            }
         }
     }
 
@@ -5270,6 +5303,7 @@ public class ModalEditor {
     public boolean isFilerMode()          { return mode == Mode.FILER; }
     public boolean isBinaryMode()         { return mode == Mode.BINARY; }
     public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
+    public boolean isCdConfirmCreateMode() { return mode == Mode.CD_CONFIRM_CREATE; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
     public boolean isCompletionActive()   { return completion.isActive(); }
     public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completion.items(); }
