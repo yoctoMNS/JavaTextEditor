@@ -273,6 +273,7 @@ public class BufferSwitchTest {
         ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
 
         colonCommand(ed, "w newname.txt");
+        ed.processKey(KeyEvent.VK_UNDEFINED, 'y', 0); // 新規作成の確認プロンプトに y で応答
 
         Path expected = dir.resolve("newname.txt").toAbsolutePath();
         assertEquals("currentFilePath is resolved to an absolute path", expected.toString(), ed.getCurrentFilePath());

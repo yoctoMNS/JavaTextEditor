@@ -251,8 +251,13 @@ public class ModalEditor {
     private final StringBuilder classpathInputBuffer = new StringBuilder();
     private String classpathInputLabel = "";
     private Consumer<List<Path>> classpathCallback;
-    /** :e で存在しないファイルを開こうとした際、確認待ち(y/n)にしているパス。Mode.CONFIRM_NEW_FILE専用。 */
+    /**
+     * :e/:enew/:w で存在しないファイルを対象にした際、確認待ち(y/n)にしているパス。
+     * Mode.CONFIRM_NEW_FILE専用（表示用。実際の分岐は pendingNewFileAction が持つ）。
+     */
     private String pendingNewFilePath;
+    /** y が押されたときに実行する処理（実際のファイルオープン/保存）。Mode.CONFIRM_NEW_FILE専用。 */
+    private Runnable pendingNewFileAction;
     // テキスト内検索状態
     private final StringBuilder searchBuffer = new StringBuilder();
     private String  lastSearchPattern = "";
@@ -298,10 +303,13 @@ public class ModalEditor {
     /** *cd候補* 表示中に隠れている元の編集状態。 */
     private final PseudoBufferStash cdStash = new PseudoBufferStash();
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
-    // :e タブ補完状態（:cd と同じく一時退避→復元パターン）
+    // :e/:enew/:w タブ補完状態（:cd と同じく一時退避→復元パターン。
+    // どのコマンドから起動したかは edVerb に覚えておき、補完確定時に正しいコマンド名で
+    // commandBuffer / executeCommand() を組み立てる）
     private List<String> edCandidates = List.of(); // 候補ファイル/ディレクトリ名（末尾 "/" はディレクトリのみ）
     private String edCandidateParentPart = "";
     private boolean edSelectionActive = false;
+    private String edVerb = "e"; // "e" | "enew" | "w" のいずれか
     /** *e候補* 表示中に隠れている元の編集状態。 */
     private final PseudoBufferStash edStash = new PseudoBufferStash();
     private String edSavedCommandText = "";
@@ -1677,8 +1685,12 @@ public class ModalEditor {
             String cmd = commandBuffer.toString();
             if (cmd.equals("cd") || cmd.startsWith("cd ")) {
                 handleCdTabCompletion();
+            } else if (cmd.equals("enew") || cmd.startsWith("enew ")) {
+                handleEditTabCompletion("enew");
             } else if (cmd.equals("e") || cmd.startsWith("e ")) {
-                handleEditTabCompletion();
+                handleEditTabCompletion("e");
+            } else if (cmd.equals("w") || cmd.startsWith("w ")) {
+                handleEditTabCompletion("w");
             }
 
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
@@ -1821,22 +1833,24 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
-    // :e タブ補完（COMMAND モードで "e " 入力中に TAB を押すと候補を補完する）
+    // :e / :enew / :w タブ補完（COMMAND モードで "<verb> " 入力中に TAB を押すと候補を補完する）
     // -------------------------------------------------------------------------
 
     /**
-     * commandBuffer が "e" / "e " で始まる場合のみ有効。
+     * commandBuffer が "verb" / "verb " で始まる場合のみ有効（verb は "e"/"enew"/"w"）。
      * ファイルとディレクトリの両方を候補に含める（ディレクトリは末尾に "/" を付ける）。
      * 候補0件 → 何もしない、1件 → その場で補完、複数件 → *e候補* 疑似バッファで選択させる。
+     * どの verb から呼ばれたかは edVerb に覚えておき、補完確定時に同じコマンド名を使う。
      */
-    private void handleEditTabCompletion() {
+    private void handleEditTabCompletion(String verb) {
         String cmd = commandBuffer.toString();
         String pathStr;
-        if (cmd.equals("e") || cmd.startsWith("e ")) {
-            pathStr = cmd.length() > 1 ? cmd.substring(1).stripLeading() : "";
+        if (cmd.equals(verb) || cmd.startsWith(verb + " ")) {
+            pathStr = cmd.length() > verb.length() ? cmd.substring(verb.length()).stripLeading() : "";
         } else {
             return;
         }
+        edVerb = verb;
 
         String expanded = UserPathResolver.expandHome(pathStr);
         int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
@@ -1883,7 +1897,7 @@ public class ModalEditor {
 
     private void applyEditCandidate(String parentPart, String name) {
         commandBuffer.setLength(0);
-        commandBuffer.append("e ").append(parentPart).append(name);
+        commandBuffer.append(edVerb).append(' ').append(parentPart).append(name);
     }
 
     private void openEditCandidateBuffer(String originalCmd, String parentPart, List<String> candidates) {
@@ -1927,7 +1941,7 @@ public class ModalEditor {
         } else {
             mode = Mode.COMMAND;
             commandBuffer.setLength(0);
-            commandBuffer.append("e ").append(fullPath);
+            commandBuffer.append(edVerb).append(' ').append(fullPath);
             executeCommand(commandBuffer.toString());
             commandBuffer.setLength(0);
             if (mode == Mode.COMMAND) mode = modeAfterCommand();
@@ -2604,15 +2618,16 @@ public class ModalEditor {
 
         // --- 保存・終了 ---
         r.on(this::saveAll,                          "wa", "wall");
-        r.on(() -> saveToFile(currentFilePath),      "w");
+        r.on(() -> requestSaveToFile(currentFilePath), "w");
         r.on(() -> quitAll(false),                   "qa", "qall");
         r.on(() -> quitAll(true),                    "qa!", "qall!");
         r.on(this::closeCurrentPane,                 "q");
         r.on(this::saveAndCloseCurrentPane,          "wq");
-        r.onPrefix("w ", path -> saveToFile(path)); // 成功時の currentFilePath 更新は saveToFile 内
+        r.onPrefix("w ", this::requestSaveToFile); // 保存先が存在しない場合は y/n 確認を挟む
 
         // --- バッファを開く・切り替える ---
         r.on(this::newBuffer,                        "e", "enew");
+        r.onPrefix("enew ", path -> requestLoadFromFile(resolveRelativeToProjectRoot(path)));
         r.on(this::toggleBinaryMode,                 "b");
         r.on(this::openTutorial,                     "tutor", "Tutor", "tutorial");
         r.on(() -> switchToRelativeBuffer(+1),       "bnext", "bn");
@@ -2932,6 +2947,37 @@ public class ModalEditor {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * :w / :w path のエントリポイント。保存先ファイルがまだディスク上に存在しない場合
+     * （＝この保存が新規ファイルを作ることになる場合）は、:e と同様に y/n の確認を挟んでから
+     * saveToFile() を呼ぶ。既に存在するファイルへの上書き保存は従来どおり確認なしで即座に行う。
+     */
+    private void requestSaveToFile(String pathSpec) {
+        String resolvedPath;
+        try {
+            resolvedPath = resolveSavePath(pathSpec);
+        } catch (RuntimeException e) {
+            statusMessage = "E: " + e.getMessage();
+            return;
+        }
+        if (resolvedPath == null || resolvedPath.isEmpty()) {
+            statusMessage = "E: no file name";
+            return;
+        }
+        Path targetPath;
+        try {
+            targetPath = Path.of(resolvedPath).toAbsolutePath();
+        } catch (RuntimeException e) {
+            statusMessage = "E: " + e.getMessage();
+            return;
+        }
+        if (Files.exists(targetPath)) {
+            saveToFile(pathSpec);
+            return;
+        }
+        requestConfirmNewFile(targetPath.toString(), () -> saveToFile(pathSpec));
     }
 
     private boolean saveToFile(String path) {
@@ -3409,19 +3455,31 @@ public class ModalEditor {
             loadFromFile(path);
             return;
         }
-        pendingNewFilePath = path;
+        requestConfirmNewFile(path, () -> loadFromFile(path));
+    }
+
+    /**
+     * y/n の確認待ち(Mode.CONFIRM_NEW_FILE)に入る。displayPath はステータス行に表示するパス、
+     * onConfirmed は y が押されたときに実行する実際の処理（ファイルオープン/保存）。
+     * :e/:enew/:w のいずれも、対象パスが存在しない場合はこれを経由する。
+     */
+    private void requestConfirmNewFile(String displayPath, Runnable onConfirmed) {
+        pendingNewFilePath = displayPath;
+        pendingNewFileAction = onConfirmed;
         mode = Mode.CONFIRM_NEW_FILE;
-        statusMessage = "\"" + path + "\" は存在しません。新規作成しますか？ (y/n)";
+        statusMessage = "\"" + displayPath + "\" は存在しません。新規作成しますか？ (y/n)";
     }
 
     private void processConfirmNewFileKey(int keyCode, char keyChar) {
         if (keyChar == 'y' || keyChar == 'Y') {
-            String path = pendingNewFilePath;
+            Runnable action = pendingNewFileAction;
             pendingNewFilePath = null;
+            pendingNewFileAction = null;
             mode = Mode.NORMAL;
-            loadFromFile(path);
+            if (action != null) action.run();
         } else if (keyChar == 'n' || keyChar == 'N' || keyCode == KeyEvent.VK_ESCAPE) {
             pendingNewFilePath = null;
+            pendingNewFileAction = null;
             mode = Mode.NORMAL;
             statusMessage = "";
         }
