@@ -588,6 +588,13 @@ public static void main(String[] args) {
 
 ### 段階6 — `PaneManager` ＋ `EditorHost`（最難関）
 
+> **★実行計画は `docs/STAGE6_OPTION_C_PLAN.md` を正とする。**
+> 旧 setter を削除する案（案C）で進めることが決まったため、本節を 6-0〜6-5 の
+> サブ段階へ細分割した別文書を作成した。以下の §6.1〜§6.5 は設計の背景として残すが、
+> **§6.3 の `EditorHost` スケッチは実測と2箇所食い違っている**
+> （`onCloseBlocked` は実名 `setCloseBlockedCallback` でどこからも呼ばれていない死にコード／
+> `exitAllCallback` が漏れている）。正しいコールバック一覧は別文書 §3.1 を参照すること。
+
 **対象**: 97–148行、607–840行、および `main()` 内 882–912行の `root[]`/`active[]` 宣言と初回配線
 
 **本段階の本質**: メソッドの移動ではなく、**§3.3 の「箱」の解体**である。
