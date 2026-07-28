@@ -1,12 +1,13 @@
 package dev.javatexteditor;
 
-import dev.javatexteditor.analysis.AnalysisException;
-import dev.javatexteditor.analysis.AutoImportHandler;
 import dev.javatexteditor.analysis.CompileAnalyzer;
-import dev.javatexteditor.analysis.CompileDiagnostic;
-import dev.javatexteditor.analysis.ImportSuggester;
-import dev.javatexteditor.analysis.JdkClassIndex;
-import dev.javatexteditor.analysis.SourceAnalyzer;
+import dev.javatexteditor.app.AnalysisServices;
+import dev.javatexteditor.app.CBuildRunner;
+import dev.javatexteditor.app.DiagnosticPopup;
+import dev.javatexteditor.app.JavaBuildRunner;
+import dev.javatexteditor.app.LiveDiagnostics;
+import dev.javatexteditor.app.RunningProcessHolder;
+import dev.javatexteditor.app.SetupBootstrap;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.DisplayMetrics;
 import dev.javatexteditor.ui.EditorCanvas;
@@ -15,8 +16,6 @@ import dev.javatexteditor.ui.MiscFixedBold9x15;
 import dev.javatexteditor.ui.Theme;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Dimension;
-import java.awt.Font;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -28,21 +27,222 @@ import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
-import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
-import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 
 public class Main {
+
+    // -------------------------------------------------------------------------
+    // エントリポイント
+    // -------------------------------------------------------------------------
+
+    public static void main(String[] args) {
+        // セットアップ未完了なら自動実行（バックグラウンド）
+        // Main.class を渡すのは、切り出し前と同じ基準でパスを解決するため（SetupBootstrap の Javadoc 参照）
+        SetupBootstrap.runIfNeeded(Main.class);
+
+        // プロジェクトルートを引数のファイルの親ディレクトリか user.dir から決定
+        String initialPath = (args.length > 0) ? args[0] : null;
+        String initialText;
+        if (initialPath != null) {
+            try {
+                initialText = Files.readString(Path.of(initialPath)).replace("\r\n", "\n");
+            } catch (IOException e) {
+                System.err.println("Error opening file: " + e.getMessage());
+                return;
+            }
+        } else {
+            initialText = "";
+        }
+
+        // 作業ディレクトリマネージャを初期化（引数ファイルの親を hint として渡す）
+        Path initialHint = (initialPath != null)
+            ? Path.of(initialPath).toAbsolutePath().getParent()
+            : null;
+        WD_MANAGER = new WorkingDirectoryManager(initialHint);
+        Path projectRoot = WD_MANAGER.getWorkingDirectory();
+
+        // 作業ディレクトリに依存する索引（補完・単語）の構築を開始する。
+        // ★必ず SwingUtilities.invokeLater より前で呼ぶこと（構築開始が遅れると
+        //   起動直後の Ctrl+Space / Alt+/ が空振りする）。
+        SERVICES.startProjectIndexing(projectRoot);
+
+        final GraphicsConfiguration targetScreen = detectMouseScreen();
+        double displayScale = computeDisplayScale(targetScreen);
+        int[] cellSize = computeInitialCellSize(displayScale);
+        initialCellW = cellSize[0];
+        initialCellH = cellSize[1];
+        int[] windowSize = computeInitialWindowSize(targetScreen, displayScale);
+        final String text = initialText;
+        final String path = initialPath;
+        final boolean splash = (initialPath == null);
+
+        SwingUtilities.invokeLater(() -> {
+            JFrame frame = new JFrame(buildTitle(WD_MANAGER.getWorkingDirectory()), targetScreen);
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setSize(windowSize[0], windowSize[1]);
+            centerOnScreen(frame, targetScreen);
+
+            PaneTree.Leaf firstLeaf = createLeaf(text, path);
+            if (splash) firstLeaf.canvas().setShowSplash(true);
+            // 初期ファイルをバッファレジストリに登録
+            if (path != null) {
+                BUFFER_REGISTRY.register(new dev.javatexteditor.telescope.BufferPicker.BufferEntry(
+                    Path.of(path).getFileName().toString(), path));
+            }
+
+            PaneTree.PaneNode[] root   = { firstLeaf };
+            PaneTree.Leaf[]     active = { firstLeaf };
+
+            // 作業ディレクトリ変更時: 全エディタと JFrame タイトルを更新
+            WD_MANAGER.addChangeListener(wd -> {
+                for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
+                    l.editor().setProjectRoot(wd);
+                }
+                frame.setTitle(buildTitle(wd));
+            });
+
+            refreshCallbacks(frame, root, active);
+            updateBorders(List.of(firstLeaf), firstLeaf);
+            frame.add(firstLeaf.canvas());
+
+            // KEY_PRESSEDで processKey を呼んだキーは KEY_TYPED でも届くため、
+            // 二重処理を防ぐためにフラグで管理する。
+            boolean[] pressedHandled = { false };
+
+            KeyboardFocusManager.getCurrentKeyboardFocusManager()
+                .addKeyEventDispatcher(e -> {
+                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
+                    java.awt.Window focused = KeyboardFocusManager
+                        .getCurrentKeyboardFocusManager().getFocusedWindow();
+                    if (focused != frame) return false;
+
+                    if (e.getID() == KeyEvent.KEY_PRESSED) {
+                        pressedHandled[0] = false;
+
+                        // Ctrl+Shift+矢印: アクティブペインのビットマップフォントセルサイズを変更
+                        boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
+                        boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
+                        if (ctrl && shift) {
+                            int kc = e.getKeyCode();
+                            if (kc == KeyEvent.VK_RIGHT) {
+                                active[0].canvas().adjustCellWidth(+1);
+                                pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_LEFT) {
+                                active[0].canvas().adjustCellWidth(-1);
+                                pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_DOWN) {
+                                active[0].canvas().adjustCellHeight(+1);
+                                pressedHandled[0] = true; return true;
+                            } else if (kc == KeyEvent.VK_UP) {
+                                active[0].canvas().adjustCellHeight(-1);
+                                pressedHandled[0] = true; return true;
+                            }
+                        }
+
+                        // Ctrl+Alt+矢印: 画面分割中、アクティブペインの縦横幅を伸縮する
+                        boolean alt = (e.getModifiersEx() & KeyEvent.ALT_DOWN_MASK) != 0;
+                        if (ctrl && alt && !shift) {
+                            int kc = e.getKeyCode();
+                            if (kc == KeyEvent.VK_LEFT || kc == KeyEvent.VK_RIGHT
+                                    || kc == KeyEvent.VK_UP || kc == KeyEvent.VK_DOWN) {
+                                resizeActivePane(active[0], kc);
+                                pressedHandled[0] = true; return true;
+                            }
+                        }
+
+                        // F2: カーソル行の診断をモーダルダイアログで表示
+                        if (e.getKeyCode() == KeyEvent.VK_F2) {
+                            DiagnosticPopup.showForCursorRow(
+                                frame, active[0].editor(), active[0].canvas());
+                            pressedHandled[0] = true;
+                            return true;
+                        }
+
+                        // F10/F11/F12: プロジェクト全体のコンパイル・実行（NORMALモードのみ）
+                        if (e.getKeyCode() == KeyEvent.VK_F10
+                                || e.getKeyCode() == KeyEvent.VK_F11
+                                || e.getKeyCode() == KeyEvent.VK_F12) {
+                            dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
+                            if (edBuild.isNormalMode()) {
+                                boolean c = LiveDiagnostics.isCBuffer(edBuild);
+                                switch (e.getKeyCode()) {
+                                    case KeyEvent.VK_F10 -> { if (c) C_BUILD_RUNNER.triggerCompile(edBuild); else JAVA_BUILD_RUNNER.triggerCompile(edBuild); }
+                                    case KeyEvent.VK_F11 -> { if (c) C_BUILD_RUNNER.triggerRun(edBuild); else JAVA_BUILD_RUNNER.triggerRun(edBuild); }
+                                    case KeyEvent.VK_F12 -> { if (c) C_BUILD_RUNNER.triggerCompileAndRun(edBuild); else JAVA_BUILD_RUNNER.triggerCompileAndRun(edBuild); }
+                                }
+                            }
+                            pressedHandled[0] = true;
+                            return true;
+                        }
+
+                        // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
+                        // IMEがコミットした文字は KEY_TYPED で受け取る。
+                        boolean noCtrlAlt = (e.getModifiersEx() &
+                            (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
+                        char kc2 = e.getKeyChar();
+                        boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
+                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
+                        if (noCtrlAlt && isPrintable &&
+                                (ed.isInsertMode() || ed.isCommandMode())) {
+                            return false; // IMEに委譲（pressedHandled は false のまま）
+                        }
+
+                        ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+                        updateBorders(PaneTree.allLeaves(root[0]), active[0]);
+                        pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
+                        return true;
+                    }
+
+                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する。
+                    // KEY_PRESSEDで既に処理したキーは無視する（';'→COMMMANDモードへの遷移後に
+                    // KEY_TYPED の';'がコマンドバッファに追記される問題を防ぐ）。
+                    if (e.getID() == KeyEvent.KEY_TYPED) {
+                        if (pressedHandled[0]) {
+                            pressedHandled[0] = false;
+                            return false;
+                        }
+                        char ch = e.getKeyChar();
+                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
+                        if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
+                                (ed.isInsertMode() || ed.isCommandMode())) {
+                            ed.processKey(0, ch, 0);
+                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
+                            return true;
+                        }
+                    }
+
+                    return false;
+                });
+
+            // マウスクリックでアクティブペインを切り替える
+            frame.getContentPane().addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override
+                public void mousePressed(java.awt.event.MouseEvent ev) {
+                    Component clicked = frame.getContentPane().findComponentAt(ev.getPoint());
+                    for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
+                        if (l.canvas() == clicked) {
+                            active[0] = l;
+                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
+                            active[0].canvas().requestFocusInWindow();
+                            break;
+                        }
+                    }
+                }
+            });
+
+            frame.setVisible(true);
+            // canvasは既定でフォーカスを持たない(JPanel)ため、表示直後に明示的に
+            // フォーカスを与える。IME(InputContext)は実際のフォーカスオーナーである
+            // コンポーネントにしか関連付けられないため、これが無いと変換中文字列の
+            // オーバーレイ表示（EditorCanvas.inputMethodTextChanged）が呼ばれない。
+            active[0].canvas().requestFocusInWindow();
+        });
+    }
 
     private static final Color ACTIVE_BORDER_COLOR = new Color(0x88, 0x88, 0xFF);
     private static final int WINDOW_WIDTH  = 1200;
@@ -55,34 +255,35 @@ public class Main {
     // 作業ディレクトリの中央管理（main() で初期化）
     private static WorkingDirectoryManager WD_MANAGER;
 
-    private static final CompileAnalyzer COMPILE_ANALYZER = new CompileAnalyzer();
-    private static final JdkClassIndex JDK_INDEX = JdkClassIndex.build();
-    private static final SourceAnalyzer SOURCE_ANALYZER = new SourceAnalyzer();
-    private static final ImportSuggester IMPORT_SUGGESTER = new ImportSuggester(JDK_INDEX);
-    private static final AutoImportHandler AUTO_IMPORT_HANDLER =
-        new AutoImportHandler(IMPORT_SUGGESTER, SOURCE_ANALYZER);
-    private static dev.javatexteditor.analysis.CompletionIndex COMPLETION_INDEX = null;
-    private static dev.javatexteditor.analysis.WordIndex WORD_INDEX = null;
+    // 各ペインに配線する解析サービス一式。
+    // ★この宣言はクラスロード時に評価され、その時点で JDK クラス索引の構築が始まる。
+    //   invokeLater の中へ移すと構築開始が遅れ、起動直後の Ctrl+Space が空振りする
+    //   （AnalysisServices の Javadoc「構築開始のタイミング」参照）。
+    // ★LIVE_DIAGNOSTICS が jdkClassIndex() を使うため、必ずその宣言より前に置くこと
+    //   （static フィールドはソース順に初期化される）。
+    private static final AnalysisServices SERVICES = AnalysisServices.createAndStartJdkIndexing();
+    // 編集中バッファのインライン診断（ガター/波下線）と auto-import / auto-#include。
+    // 作業ディレクトリは Supplier で渡す（:cd 後も解析時点の値を読むため。LiveDiagnostics の Javadoc 参照）。
+    private static final LiveDiagnostics LIVE_DIAGNOSTICS = new LiveDiagnostics(
+        new CompileAnalyzer(),
+        new dev.javatexteditor.analysis.CCompileAnalyzer(),
+        SERVICES.jdkClassIndex(),
+        () -> WD_MANAGER.getWorkingDirectory());
 
     // -------------------------------------------------------------------------
     // F10/F11/F12: プロジェクト全体のコンパイル・実行
     // -------------------------------------------------------------------------
-    private static final dev.javatexteditor.projectbuild.ProjectBuilder PROJECT_BUILDER =
-        new dev.javatexteditor.projectbuild.ProjectBuilder();
-    private static final dev.javatexteditor.projectbuild.MainClassFinder MAIN_CLASS_FINDER =
-        new dev.javatexteditor.projectbuild.MainClassFinder();
-    // C版のプロジェクトビルダ（gcc/clang/cc を外部起動。詳細は CProjectBuilder 参照）。
-    private static final dev.javatexteditor.projectbuild.CProjectBuilder C_PROJECT_BUILDER =
-        new dev.javatexteditor.projectbuild.CProjectBuilder();
-    // C版の1ファイル診断アナライザ（gcc -fsyntax-only）。
-    private static final dev.javatexteditor.analysis.CCompileAnalyzer C_COMPILE_ANALYZER =
-        new dev.javatexteditor.analysis.CCompileAnalyzer();
     // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
-    private static Process runningProcess = null;
-    // F11でmainクラスが複数見つかりtelescope選択待ちの間、選択確定後の実行まで
-    // ユーザーが入力した追加クラスパスを持ち越すための一時保存（onRunMainClassSelectedコールバックは
-    // createLeaf内で固定で1回だけ登録されるため、選択待ちの間はここに置くしかない）。
-    private static List<Path> pendingRunExtraClasspath = List.of();
+    // Java版・C版が1つを共有する（言語をまたいだ多重実行防止。RunningProcessHolder の Javadoc 参照）。
+    private static final RunningProcessHolder RUNNING_PROCESS = new RunningProcessHolder();
+    private static final JavaBuildRunner JAVA_BUILD_RUNNER = new JavaBuildRunner(
+        new dev.javatexteditor.projectbuild.ProjectBuilder(),
+        new dev.javatexteditor.projectbuild.MainClassFinder(),
+        RUNNING_PROCESS);
+    // C版のプロジェクトビルダ（gcc/clang/cc を外部起動。詳細は CProjectBuilder 参照）。
+    private static final CBuildRunner C_BUILD_RUNNER = new CBuildRunner(
+        new dev.javatexteditor.projectbuild.CProjectBuilder(),
+        RUNNING_PROCESS);
 
     // -------------------------------------------------------------------------
     // グローバルバッファレジストリ（SPC+b で表示される開いたバッファの一覧）
@@ -200,409 +401,6 @@ public class Main {
         frame.setLocation(x, y);
     }
 
-    private static void setupCompileAnalysis(ModalEditor editor, EditorCanvas canvas) {
-        // onReturnToNormal（INSERT離脱）とonSave（:w等）は同じ"save.from.insert"アクション
-        // （INSERT中のCtrl+[/Ctrl+]保存）や「Escした直後にすぐ:wする」操作で立て続けに両方発火しうる。
-        // その場合、内容が同一の2つのコンパイル解析がほぼ同時にバックグラウンドスレッドで走り、
-        // 完了順序が入れ替わると「先に完了した解析がambiguous importを正しく選択・適用した直後に、
-        // 後から届いた古い（選択前の）診断結果を使うhandleAutoImportが再実行され、既にimport済みの
-        // 候補が除外された結果『残り1件』に見えてしまい確認なしで誤ったimportを追加する」という
-        // 実害のある不具合につながる（AutoImportHandlerTest等では再現しないが、実機で
-        // "cannot find symbol"が解消されないまま import 選択ポップアップが再発し続ける形で観測される）。
-        // compileGeneration で「最後に発行した解析要求」だけを世代番号として追跡し、結果が返って
-        // きた時点で世代が古ければ（＝その後により新しい解析要求が発行済みなら）黙って破棄する。
-        AtomicLong compileGeneration = new AtomicLong(0);
-        Runnable trigger = () -> {
-            if (isJavaBuffer(editor)) {
-                editor.setStatusMessage("auto-import: 解析中...");
-                runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗", compileGeneration);
-            } else if (isCBuffer(editor)) {
-                runCAnalysis(editor, canvas, true);
-            }
-        };
-        // INSERT→NORMAL 遷移時: IMEを半角英数字に切り替え、変換中表示を消してからコンパイル解析を実行する
-        editor.setOnReturnToNormal(() -> {
-            canvas.switchToHalfWidth();
-            canvas.clearImeComposition();
-            trigger.run();
-        });
-        editor.setOnSave(trigger);
-        // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
-        editor.setOnOrganizeImports(() -> {
-            if (isJavaBuffer(editor)) {
-                editor.setStatusMessage("import 整理中...");
-                runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗", compileGeneration);
-            } else if (isCBuffer(editor)) {
-                organizeCIncludes(editor, canvas);
-            } else {
-                editor.setStatusMessage("E: Java/Cファイルではありません");
-            }
-        });
-        // dd/p/u/Ctrl+R等、INSERT離脱・保存を経由しないバッファ変更操作は上記2フックの対象外で、
-        // 行が増減しても診断（ガターの赤線）が古い行番号のまま残り、保存するまで直らない不具合が
-        // あった。バッファのversionが変わるたびに再解析するが、INSERT中は入力途中の構文を
-        // 都度解析しても無駄なため対象外にする（onReturnToNormalが離脱時に既に解析する）。
-        // 連続編集での解析多発を避けるためデバウンスする。
-        javax.swing.Timer debounceTimer = new javax.swing.Timer(400, e -> trigger.run());
-        debounceTimer.setRepeats(false);
-        editor.setOnBufferChanged(() -> {
-            if (!editor.isInsertMode()) {
-                debounceTimer.restart();
-            }
-        });
-    }
-
-    /**
-     * currentFilePath の拡張子が ".java" である場合のみ Javaバッファと判定する
-     * （コンパイル解析が無意味なため）。ファイルパス未設定（:enew 等の疑似バッファ）は
-     * 拡張子が確定していないため、デフォルトではJavaバッファとして扱わない。
-     */
-    private static boolean isJavaBuffer(ModalEditor editor) {
-        String path = editor.getCurrentFilePath();
-        return path != null && path.toLowerCase(java.util.Locale.ROOT).endsWith(".java");
-    }
-
-    /**
-     * currentFilePath の拡張子が ".c" または ".h" である場合のみ Cバッファと判定する
-     * （isJavaBuffer と同じく、ファイルパス未設定の疑似バッファは対象外）。
-     * C の診断・auto-#include・F10/F11/F12 のルーティングに使う。
-     */
-    private static boolean isCBuffer(ModalEditor editor) {
-        String path = editor.getCurrentFilePath();
-        if (path == null) return false;
-        String lower = path.toLowerCase(java.util.Locale.ROOT);
-        return lower.endsWith(".c") || lower.endsWith(".h");
-    }
-
-    /** バックグラウンド仮想スレッドでコンパイル解析し、EDT で診断反映と auto-import を行う。
-     *  @param useRealPathIfSaved true のとき、保存済みファイルなら analyzeWithProject を使う
-     *                            （INSERT→NORMAL / 保存トリガ用。public class 名不一致エラーを防ぐ）。
-     *                            false のとき常に analyzeWithProject を使う（Ctrl+Shift+O 用。複数ファイル対応）。
-     *  @param failureMessage 解析失敗時にステータス行へ出す文言
-     *  @param generation setupCompileAnalysis が編集対象ごとに1つ保持する世代カウンタ。
-     *                     結果反映時にこの呼び出し以降より新しい解析要求が発行されていれば
-     *                     （＝このスレッドが取得した診断は古い）、EDT反映を丸ごと破棄する。 */
-    private static void runCompileAnalysis(ModalEditor editor, EditorCanvas canvas,
-            boolean useRealPathIfSaved, String failureMessage, AtomicLong generation) {
-        String source = editor.getText();
-        String snapshotPath = editor.getCurrentFilePath();
-        long myGeneration = generation.incrementAndGet();
-        Thread.ofVirtual().start(() -> {
-            try {
-                // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
-                JDK_INDEX.awaitReady();
-                Path projectRoot = WD_MANAGER.getWorkingDirectory();
-                List<CompileDiagnostic> diags = (useRealPathIfSaved && snapshotPath != null)
-                    ? COMPILE_ANALYZER.analyzeWithProject(snapshotPath, source, projectRoot)
-                    : COMPILE_ANALYZER.analyzeWithProject("<buffer>", source, projectRoot);
-                SwingUtilities.invokeLater(() -> {
-                    if (generation.get() != myGeneration) return; // より新しい解析要求に上書き済み: 破棄
-                    canvas.setDiagnostics(diags);
-                    // 未使用削除は handleAutoImport の全候補処理完了後に実行
-                    editor.setOnImportComplete(editor::organizeImportsRemoveUnused);
-                    editor.handleAutoImport(diags);
-                });
-            } catch (AnalysisException e) {
-                SwingUtilities.invokeLater(() -> {
-                    if (generation.get() != myGeneration) return;
-                    canvas.setDiagnostics(List.of());
-                    editor.setStatusMessage(failureMessage);
-                });
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        });
-    }
-
-    /**
-     * C バッファ版のバックグラウンド解析。gcc -fsyntax-only の診断をガター表示し、autoInclude が
-     * true なら未定義シンボル（implicit declaration / unknown type name / undeclared）に対応する
-     * 標準ヘッダを自動 #include する（Java の auto-import の C 版）。gcc が無い環境では静かに
-     * 診断なしにフォールバックする。
-     */
-    private static void runCAnalysis(ModalEditor editor, EditorCanvas canvas, boolean autoInclude) {
-        String source = editor.getText();
-        String snapshotPath = editor.getCurrentFilePath();
-        Thread.ofVirtual().start(() -> {
-            try {
-                List<CompileDiagnostic> diags = (snapshotPath != null)
-                    ? C_COMPILE_ANALYZER.analyzeWithPath(snapshotPath, source)
-                    : C_COMPILE_ANALYZER.analyze(source);
-                // 未定義シンボルから必要ヘッダを算出（ガター表示前の source を基準にする）
-                java.util.Set<String> symbols = new java.util.LinkedHashSet<>();
-                for (CompileDiagnostic d : diags) {
-                    String sym = dev.javatexteditor.analysis.CIncludeManager
-                        .extractSymbolFromMessage(d.message());
-                    if (sym != null) symbols.add(sym);
-                }
-                List<String> headers = dev.javatexteditor.analysis.CIncludeManager
-                    .missingHeadersForSymbols(source, symbols);
-                SwingUtilities.invokeLater(() -> {
-                    canvas.setDiagnostics(diags);
-                    if (autoInclude && !headers.isEmpty()) {
-                        int n = editor.applyCIncludes(headers);
-                        if (n > 0) editor.setStatusMessage("#include " + n + "件 追加しました");
-                    }
-                });
-            } catch (AnalysisException e) {
-                SwingUtilities.invokeLater(() -> canvas.setDiagnostics(List.of()));
-            }
-        });
-    }
-
-    /**
-     * :oi / SPC+i+o の C 版。ソース中に現れる標準ライブラリシンボルに対応する未 include のヘッダを
-     * まとめて追加する（ソース走査ベース。gcc 不要で同期実行）。
-     */
-    private static void organizeCIncludes(ModalEditor editor, EditorCanvas canvas) {
-        List<String> headers = dev.javatexteditor.analysis.CIncludeManager
-            .missingHeadersForSource(editor.getText());
-        if (headers.isEmpty()) {
-            editor.setStatusMessage("#include 整理完了（追加なし）");
-            return;
-        }
-        int n = editor.applyCIncludes(headers);
-        editor.setStatusMessage("#include " + n + "件 追加しました");
-    }
-
-    /**
-     * F10: 追加クラスパス（複数ディレクトリ、カンマ区切り）を尋ねてからプロジェクト全体を
-     * コンパイルし、*compile* 疑似バッファに結果を表示する。Escなら追加クラスパスなしで続行する。
-     */
-    private static void triggerCompile(ModalEditor editor, EditorCanvas canvas) {
-        editor.enterClasspathInput("F10",
-            extraClasspath -> doCompile(editor, canvas, extraClasspath, null));
-    }
-
-    /** F11: bin/ に .class がなければ拒否し、あれば追加クラスパスを尋ねて main クラスを解決・実行する。 */
-    private static void triggerRun(ModalEditor editor, EditorCanvas canvas) {
-        Path projectRoot = editor.getBuildRoot();
-        if (!PROJECT_BUILDER.hasCompiledClasses(projectRoot)) {
-            editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
-            return;
-        }
-        editor.enterClasspathInput("F11",
-            extraClasspath -> resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath));
-    }
-
-    /**
-     * F12: 追加クラスパスを尋ねてからコンパイルし、成功した場合のみ同じ追加クラスパスで
-     * main クラスを解決して実行する。
-     */
-    private static void triggerCompileAndRun(ModalEditor editor, EditorCanvas canvas) {
-        editor.enterClasspathInput("F12", extraClasspath -> {
-            Path projectRoot = editor.getBuildRoot();
-            doCompile(editor, canvas, extraClasspath, result -> {
-                if (result.success()) resolveAndRunMainClass(editor, canvas, projectRoot, extraClasspath);
-            });
-        });
-    }
-
-    /**
-     * F10/F12共通のコンパイル実行部。onDone は完了後にEDT上で呼ばれる（null可）。
-     * javacが診断を報告するたび *compile* 疑似バッファへリアルタイムに追記する。
-     */
-    private static void doCompile(ModalEditor editor, EditorCanvas canvas, List<Path> extraClasspath,
-            java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
-        editor.beginCompileOutput();
-        editor.syncCanvas();
-        Path projectRoot = editor.getBuildRoot();
-        Thread.ofVirtual().start(() -> {
-            dev.javatexteditor.projectbuild.BuildResult result =
-                PROJECT_BUILDER.compile(projectRoot, extraClasspath, diag ->
-                    SwingUtilities.invokeLater(() -> {
-                        editor.appendCompileDiagnostic(diag);
-                        editor.syncCanvas();
-                    }));
-            SwingUtilities.invokeLater(() -> {
-                editor.finishCompileOutput(result);
-                editor.syncCanvas();
-                if (onDone != null) onDone.accept(result);
-            });
-        });
-    }
-
-    /**
-     * main メソッドを持つクラスを索引から探し、1件なら即実行、複数なら telescope-picker で選ばせる
-     * （{@link ModalEditor#setOnRunMainClassSelected} 経由で選択結果が {@link #runJavaClass} に届く）。
-     */
-    private static void resolveAndRunMainClass(
-            ModalEditor editor, EditorCanvas canvas, Path projectRoot, List<Path> extraClasspath) {
-        editor.setStatusMessage("mainクラスを検索中...");
-        Thread.ofVirtual().start(() -> {
-            List<String> mainClasses = MAIN_CLASS_FINDER.findMainClasses(projectRoot);
-            SwingUtilities.invokeLater(() -> {
-                if (mainClasses.isEmpty()) {
-                    editor.setStatusMessage("run: mainメソッドを持つクラスが見つかりません");
-                } else if (mainClasses.size() == 1) {
-                    runJavaClass(editor, canvas, projectRoot, mainClasses.get(0), extraClasspath);
-                } else {
-                    pendingRunExtraClasspath = extraClasspath;
-                    editor.enterMainClassPicker(mainClasses);
-                }
-            });
-        });
-    }
-
-    /**
-     * bin/（常にデフォルトで含まれる）＋ユーザー指定の追加クラスパスで別プロセスとして java を起動する。
-     * 実行中プロセスがまだ生きていれば destroy() してから起動し直す（多重実行を避けるため）。
-     * 標準出力/標準エラーは別々のスレッドで読み取り、*run* 疑似バッファへ1行ずつリアルタイムに
-     * 追記する（標準エラー由来の行は赤字表示。EditorCanvas.setErrorLines参照）。
-     */
-    private static void runJavaClass(ModalEditor editor, EditorCanvas canvas, Path projectRoot, String fqcn,
-            List<Path> extraClasspath) {
-        if (runningProcess != null && runningProcess.isAlive()) {
-            runningProcess.destroy();
-        }
-        Path binDir = PROJECT_BUILDER.binDirFor(projectRoot);
-        StringBuilder classpath = new StringBuilder(binDir.toString());
-        for (Path p : extraClasspath) {
-            classpath.append(java.io.File.pathSeparatorChar).append(p);
-        }
-        String command = "java -cp " + classpath + " " + fqcn;
-        editor.beginRunOutput(command, fqcn);
-        editor.syncCanvas();
-        Thread.ofVirtual().start(() -> {
-            int exitCode;
-            try {
-                ProcessBuilder pb = new ProcessBuilder("java", "-cp", classpath.toString(), fqcn);
-                pb.directory(projectRoot.toFile());
-                Process process = pb.start();
-                runningProcess = process;
-                Thread stdoutReader = startRunOutputReader(process.getInputStream(), editor, false);
-                Thread stderrReader = startRunOutputReader(process.getErrorStream(), editor, true);
-                exitCode = process.waitFor();
-                stdoutReader.join();
-                stderrReader.join();
-            } catch (IOException e) {
-                SwingUtilities.invokeLater(() ->
-                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            int finalExitCode = exitCode;
-            SwingUtilities.invokeLater(() -> {
-                editor.finishRunOutput(fqcn, finalExitCode);
-                editor.syncCanvas();
-            });
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // F10/F11/F12 の C 版（gcc/clang/cc を外部起動）。Java 版と同じ *compile*/*run*
-    // 疑似バッファ・ストリーミング表示・多重実行防止（runningProcess）を再利用する。
-    // Java 版と異なりクラスパス入力プロンプト（enterClasspathInput）は挟まず直接コンパイルする
-    // （C にはクラスパスの概念がないため）。
-    // -------------------------------------------------------------------------
-
-    /** F10（C）: projectRoot 配下の全 .c を gcc で1実行ファイルにコンパイルし *compile* に表示する。 */
-    private static void triggerCompileC(ModalEditor editor, EditorCanvas canvas) {
-        doCompileC(editor, canvas, null);
-    }
-
-    /** F11（C）: 実行ファイルが無ければ拒否し、あれば実行する。 */
-    private static void triggerRunC(ModalEditor editor, EditorCanvas canvas) {
-        Path projectRoot = editor.getBuildRoot();
-        if (!C_PROJECT_BUILDER.hasExecutable(projectRoot)) {
-            editor.setStatusMessage("run: 実行ファイルがありません。先にF10でコンパイルしてください");
-            return;
-        }
-        runCExecutable(editor, canvas, projectRoot);
-    }
-
-    /** F12（C）: コンパイル→成功時のみ実行。 */
-    private static void triggerCompileAndRunC(ModalEditor editor, EditorCanvas canvas) {
-        doCompileC(editor, canvas, result -> {
-            if (result.success()) runCExecutable(editor, canvas, editor.getBuildRoot());
-        });
-    }
-
-    /** F10/F12（C）共通のコンパイル実行部。diagnostic をリアルタイムに *compile* へ追記する。 */
-    private static void doCompileC(ModalEditor editor, EditorCanvas canvas,
-            java.util.function.Consumer<dev.javatexteditor.projectbuild.BuildResult> onDone) {
-        editor.beginCompileOutput();
-        editor.syncCanvas();
-        Path projectRoot = editor.getBuildRoot();
-        Thread.ofVirtual().start(() -> {
-            dev.javatexteditor.projectbuild.BuildResult result =
-                C_PROJECT_BUILDER.compile(projectRoot, diag ->
-                    SwingUtilities.invokeLater(() -> {
-                        editor.appendCompileDiagnostic(diag);
-                        editor.syncCanvas();
-                    }));
-            SwingUtilities.invokeLater(() -> {
-                editor.finishCompileOutput(result);
-                editor.syncCanvas();
-                if (onDone != null) onDone.accept(result);
-            });
-        });
-    }
-
-    /**
-     * F11（C）: コンパイル済みの実行ファイルを別プロセスとして起動し、標準出力/標準エラーを
-     * *run* 疑似バッファへリアルタイム表示する（runJavaClass の C 版）。
-     */
-    private static void runCExecutable(ModalEditor editor, EditorCanvas canvas, Path projectRoot) {
-        if (runningProcess != null && runningProcess.isAlive()) {
-            runningProcess.destroy();
-        }
-        Path executable = C_PROJECT_BUILDER.executableFor(projectRoot);
-        String command = executable.toString();
-        editor.beginRunOutput(command, executable.getFileName().toString());
-        editor.syncCanvas();
-        Thread.ofVirtual().start(() -> {
-            int exitCode;
-            try {
-                ProcessBuilder pb = new ProcessBuilder(executable.toString());
-                pb.directory(projectRoot.toFile());
-                Process process = pb.start();
-                runningProcess = process;
-                Thread stdoutReader = startRunOutputReader(process.getInputStream(), editor, false);
-                Thread stderrReader = startRunOutputReader(process.getErrorStream(), editor, true);
-                exitCode = process.waitFor();
-                stdoutReader.join();
-                stderrReader.join();
-            } catch (IOException e) {
-                SwingUtilities.invokeLater(() ->
-                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            int finalExitCode = exitCode;
-            SwingUtilities.invokeLater(() -> {
-                editor.finishRunOutput(executable.getFileName().toString(), finalExitCode);
-                editor.syncCanvas();
-            });
-        });
-    }
-
-    /**
-     * 実行中プロセスの標準出力/標準エラーを1行読むたび *run* 疑似バッファへリアルタイム反映する
-     * 読み取り専用スレッドを起動する（isError=trueなら標準エラー由来として赤字表示される）。
-     */
-    private static Thread startRunOutputReader(java.io.InputStream in, ModalEditor editor, boolean isError) {
-        Thread t = Thread.ofVirtual().unstarted(() -> {
-            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(in))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String finalLine = line;
-                    SwingUtilities.invokeLater(() -> {
-                        editor.appendRunOutputLine(finalLine, isError);
-                        editor.syncCanvas();
-                    });
-                }
-            } catch (IOException ignored) {
-            }
-        });
-        t.start();
-        return t;
-    }
-
     /** リーフの分割コールバックを設定する（splitLeaf 後に呼ぶ）。 */
     private static void setupSplitCallbacks(
             JFrame frame, PaneTree.PaneNode[] root, PaneTree.Leaf[] active, PaneTree.Leaf leaf) {
@@ -674,7 +472,7 @@ public class Main {
         ModalEditor editor = new ModalEditor(text, path, canvas);
         editor.setTheme(theme);
         editor.setFontChoice(fontChoice);
-        setupCompileAnalysis(editor, canvas);
+        LIVE_DIAGNOSTICS.install(editor, canvas);
         // IME（日本語入力等）が確定した文字列を、KEY_TYPEDの1文字コミットと同じ経路で挿入する。
         // 変換中の未確定文字列自体は EditorCanvas 側でカーソル位置にオーバーレイ表示される。
         canvas.setImeCommitHandler(committed -> {
@@ -687,25 +485,19 @@ public class Main {
                 i += Character.charCount(cp);
             }
         });
-        editor.setJdkClassIndex(JDK_INDEX);
+        // 解析サービス一式（JDKクラス索引・auto-import・補完索引・単語索引）を配線する。
+        SERVICES.wireInto(editor);
         // Shift+K の最優先段（Eclipse JDT 流バインディング解決）を有効化する。
         // javac の属性付けはプロジェクト規模に比例して重いため EDT では実行せず、
         // 仮想スレッドで解析して invokeLater で結果を反映する（完全非同期）。
         editor.enableBindingDefinitionLookup(
             task -> Thread.ofVirtual().name("binding-definition-lookup").start(task),
             SwingUtilities::invokeLater);
-        editor.setAutoImportHandler(AUTO_IMPORT_HANDLER);
         editor.setBufferListSupplier(BUFFER_REGISTRY::entries);
         editor.setOnFileOpened(BUFFER_REGISTRY::register);
         editor.setOnBufferDelete(BUFFER_REGISTRY::unregister);
         editor.setOnRunMainClassSelected(
-            fqcn -> runJavaClass(editor, canvas, editor.getBuildRoot(), fqcn, pendingRunExtraClasspath));
-        if (COMPLETION_INDEX != null) {
-            editor.setCompletionIndex(COMPLETION_INDEX);
-        }
-        if (WORD_INDEX != null) {
-            editor.setWordIndex(WORD_INDEX);
-        }
+            fqcn -> JAVA_BUILD_RUNNER.runSelectedMainClass(editor, editor.getBuildRoot(), fqcn));
         // 作業ディレクトリを反映
         if (WD_MANAGER != null) {
             Path wd = WD_MANAGER.getWorkingDirectory();
@@ -781,19 +573,6 @@ public class Main {
     }
 
     /**
-     * F2診断ポップアップの文字サイズを、フレームが乗っている画面の高さに比例して計算する。
-     * 4Kディスプレイ等の高解像度画面でも既定のJOptionPaneフォント（画面によらず固定サイズ）が
-     * 相対的に小さく読みにくくなる問題への対応。14〜28ptの範囲でクランプする。
-     */
-    private static Font computeF2PopupFont(JFrame frame) {
-        int screenHeight = frame.getGraphicsConfiguration().getBounds().height;
-        int size = Math.max(14, Math.min(28, screenHeight / 45));
-        Font base = UIManager.getFont("OptionPane.messageFont");
-        String family = base != null ? base.getFamily() : Font.SANS_SERIF;
-        return new Font(family, Font.PLAIN, size);
-    }
-
-    /**
      * Ctrl+Alt+矢印: アクティブペインを囲む祖先のうち、キーの方向に対応するorientationを持つ
      * 最初のJSplitPaneだけを調整し、現在ペインを伸縮する。対応する分割が見つからなければ何もしない。
      * PaneTree.PaneNode/Splitツリーではなく、実際に画面に貼られたSwingコンポーネント階層を直接辿る
@@ -834,263 +613,6 @@ public class Main {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // エントリポイント
-    // -------------------------------------------------------------------------
-
-    public static void main(String[] args) {
-        // セットアップ未完了なら自動実行（バックグラウンド）
-        runSetupIfNeeded();
-
-        // プロジェクトルートを引数のファイルの親ディレクトリか user.dir から決定
-        String initialPath = (args.length > 0) ? args[0] : null;
-        String initialText;
-        if (initialPath != null) {
-            try {
-                initialText = Files.readString(Path.of(initialPath)).replace("\r\n", "\n");
-            } catch (IOException e) {
-                System.err.println("Error opening file: " + e.getMessage());
-                return;
-            }
-        } else {
-            initialText = "";
-        }
-
-        // 作業ディレクトリマネージャを初期化（引数ファイルの親を hint として渡す）
-        Path initialHint = (initialPath != null)
-            ? Path.of(initialPath).toAbsolutePath().getParent()
-            : null;
-        WD_MANAGER = new WorkingDirectoryManager(initialHint);
-        Path projectRoot = WD_MANAGER.getWorkingDirectory();
-
-        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築
-        COMPLETION_INDEX = dev.javatexteditor.analysis.CompletionIndex.build(JDK_INDEX);
-        // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
-        WORD_INDEX = dev.javatexteditor.analysis.WordIndex.build(projectRoot);
-
-        final GraphicsConfiguration targetScreen = detectMouseScreen();
-        double displayScale = computeDisplayScale(targetScreen);
-        int[] cellSize = computeInitialCellSize(displayScale);
-        initialCellW = cellSize[0];
-        initialCellH = cellSize[1];
-        int[] windowSize = computeInitialWindowSize(targetScreen, displayScale);
-        final String text = initialText;
-        final String path = initialPath;
-        final boolean splash = (initialPath == null);
-
-        SwingUtilities.invokeLater(() -> {
-            JFrame frame = new JFrame(buildTitle(WD_MANAGER.getWorkingDirectory()), targetScreen);
-            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(windowSize[0], windowSize[1]);
-            centerOnScreen(frame, targetScreen);
-
-            PaneTree.Leaf firstLeaf = createLeaf(text, path);
-            if (splash) firstLeaf.canvas().setShowSplash(true);
-            // 初期ファイルをバッファレジストリに登録
-            if (path != null) {
-                BUFFER_REGISTRY.register(new dev.javatexteditor.telescope.BufferPicker.BufferEntry(
-                    Path.of(path).getFileName().toString(), path));
-            }
-
-            PaneTree.PaneNode[] root   = { firstLeaf };
-            PaneTree.Leaf[]     active = { firstLeaf };
-
-            // 作業ディレクトリ変更時: 全エディタと JFrame タイトルを更新
-            WD_MANAGER.addChangeListener(wd -> {
-                for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
-                    l.editor().setProjectRoot(wd);
-                }
-                frame.setTitle(buildTitle(wd));
-            });
-
-            refreshCallbacks(frame, root, active);
-            updateBorders(List.of(firstLeaf), firstLeaf);
-            frame.add(firstLeaf.canvas());
-
-            // KEY_PRESSEDで processKey を呼んだキーは KEY_TYPED でも届くため、
-            // 二重処理を防ぐためにフラグで管理する。
-            boolean[] pressedHandled = { false };
-
-            KeyboardFocusManager.getCurrentKeyboardFocusManager()
-                .addKeyEventDispatcher(e -> {
-                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
-                    java.awt.Window focused = KeyboardFocusManager
-                        .getCurrentKeyboardFocusManager().getFocusedWindow();
-                    if (focused != frame) return false;
-
-                    if (e.getID() == KeyEvent.KEY_PRESSED) {
-                        pressedHandled[0] = false;
-
-                        // Ctrl+Shift+矢印: アクティブペインのビットマップフォントセルサイズを変更
-                        boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
-                        boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
-                        if (ctrl && shift) {
-                            int kc = e.getKeyCode();
-                            if (kc == KeyEvent.VK_RIGHT) {
-                                active[0].canvas().adjustCellWidth(+1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_LEFT) {
-                                active[0].canvas().adjustCellWidth(-1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_DOWN) {
-                                active[0].canvas().adjustCellHeight(+1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_UP) {
-                                active[0].canvas().adjustCellHeight(-1);
-                                pressedHandled[0] = true; return true;
-                            }
-                        }
-
-                        // Ctrl+Alt+矢印: 画面分割中、アクティブペインの縦横幅を伸縮する
-                        boolean alt = (e.getModifiersEx() & KeyEvent.ALT_DOWN_MASK) != 0;
-                        if (ctrl && alt && !shift) {
-                            int kc = e.getKeyCode();
-                            if (kc == KeyEvent.VK_LEFT || kc == KeyEvent.VK_RIGHT
-                                    || kc == KeyEvent.VK_UP || kc == KeyEvent.VK_DOWN) {
-                                resizeActivePane(active[0], kc);
-                                pressedHandled[0] = true; return true;
-                            }
-                        }
-
-                        // F2: カーソル行の診断をモーダルダイアログで表示
-                        if (e.getKeyCode() == KeyEvent.VK_F2) {
-                            dev.javatexteditor.editor.ModalEditor edF2 = active[0].editor();
-                            int row = edF2.getCursorRow();
-                            List<CompileDiagnostic> diags = active[0].canvas().getDiagnostics();
-                            List<CompileDiagnostic> rowDiags = diags.stream()
-                                .filter(d -> d.lineNumber() == row)
-                                .toList();
-                            Font f2Font = computeF2PopupFont(frame);
-                            if (rowDiags.isEmpty()) {
-                                JLabel f2Label = new JLabel("この行にエラー・警告はありません。");
-                                f2Label.setFont(f2Font);
-                                JOptionPane.showMessageDialog(frame,
-                                    f2Label,
-                                    "診断情報（行 " + (row + 1) + "）",
-                                    JOptionPane.INFORMATION_MESSAGE);
-                            } else {
-                                StringBuilder sb = new StringBuilder();
-                                for (int i = 0; i < rowDiags.size(); i++) {
-                                    CompileDiagnostic d = rowDiags.get(i);
-                                    if (i > 0) sb.append("\n\n");
-                                    String kindLabel = switch (d.kind()) {
-                                        case ERROR   -> "エラー";
-                                        case WARNING -> "警告";
-                                    };
-                                    sb.append("[").append(kindLabel).append("]");
-                                    if (d.column() >= 0) {
-                                        sb.append("  列: ").append(d.column() + 1);
-                                    }
-                                    sb.append("\n").append(d.message());
-                                }
-                                int iconType = rowDiags.stream().anyMatch(
-                                    d -> d.kind() == dev.javatexteditor.analysis.DiagnosticKind.ERROR)
-                                    ? JOptionPane.ERROR_MESSAGE
-                                    : JOptionPane.WARNING_MESSAGE;
-                                JTextArea f2Area = new JTextArea(sb.toString());
-                                f2Area.setFont(f2Font);
-                                f2Area.setEditable(false);
-                                f2Area.setLineWrap(true);
-                                f2Area.setWrapStyleWord(true);
-                                f2Area.setBackground(UIManager.getColor("OptionPane.background"));
-                                int screenW = frame.getGraphicsConfiguration().getBounds().width;
-                                int screenH = frame.getGraphicsConfiguration().getBounds().height;
-                                JScrollPane f2Scroll = new JScrollPane(f2Area);
-                                f2Scroll.setBorder(BorderFactory.createEmptyBorder());
-                                f2Scroll.setPreferredSize(new Dimension(
-                                    Math.min(screenW * 3 / 5, 900),
-                                    Math.min(screenH * 2 / 5, 500)));
-                                JOptionPane.showMessageDialog(frame,
-                                    f2Scroll,
-                                    "診断情報（行 " + (row + 1) + "）",
-                                    iconType);
-                            }
-                            pressedHandled[0] = true;
-                            return true;
-                        }
-
-                        // F10/F11/F12: プロジェクト全体のコンパイル・実行（NORMALモードのみ）
-                        if (e.getKeyCode() == KeyEvent.VK_F10
-                                || e.getKeyCode() == KeyEvent.VK_F11
-                                || e.getKeyCode() == KeyEvent.VK_F12) {
-                            dev.javatexteditor.editor.ModalEditor edBuild = active[0].editor();
-                            EditorCanvas canvasBuild = active[0].canvas();
-                            if (edBuild.isNormalMode()) {
-                                boolean c = isCBuffer(edBuild);
-                                switch (e.getKeyCode()) {
-                                    case KeyEvent.VK_F10 -> { if (c) triggerCompileC(edBuild, canvasBuild); else triggerCompile(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F11 -> { if (c) triggerRunC(edBuild, canvasBuild); else triggerRun(edBuild, canvasBuild); }
-                                    case KeyEvent.VK_F12 -> { if (c) triggerCompileAndRunC(edBuild, canvasBuild); else triggerCompileAndRun(edBuild, canvasBuild); }
-                                }
-                            }
-                            pressedHandled[0] = true;
-                            return true;
-                        }
-
-                        // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
-                        // IMEがコミットした文字は KEY_TYPED で受け取る。
-                        boolean noCtrlAlt = (e.getModifiersEx() &
-                            (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
-                        char kc2 = e.getKeyChar();
-                        boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
-                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
-                        if (noCtrlAlt && isPrintable &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
-                            return false; // IMEに委譲（pressedHandled は false のまま）
-                        }
-
-                        ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
-                        updateBorders(PaneTree.allLeaves(root[0]), active[0]);
-                        pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
-                        return true;
-                    }
-
-                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する。
-                    // KEY_PRESSEDで既に処理したキーは無視する（';'→COMMMANDモードへの遷移後に
-                    // KEY_TYPED の';'がコマンドバッファに追記される問題を防ぐ）。
-                    if (e.getID() == KeyEvent.KEY_TYPED) {
-                        if (pressedHandled[0]) {
-                            pressedHandled[0] = false;
-                            return false;
-                        }
-                        char ch = e.getKeyChar();
-                        dev.javatexteditor.editor.ModalEditor ed = active[0].editor();
-                        if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
-                            ed.processKey(0, ch, 0);
-                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
-                            return true;
-                        }
-                    }
-
-                    return false;
-                });
-
-            // マウスクリックでアクティブペインを切り替える
-            frame.getContentPane().addMouseListener(new java.awt.event.MouseAdapter() {
-                @Override
-                public void mousePressed(java.awt.event.MouseEvent ev) {
-                    Component clicked = frame.getContentPane().findComponentAt(ev.getPoint());
-                    for (PaneTree.Leaf l : PaneTree.allLeaves(root[0])) {
-                        if (l.canvas() == clicked) {
-                            active[0] = l;
-                            updateBorders(PaneTree.allLeaves(root[0]), active[0]);
-                            active[0].canvas().requestFocusInWindow();
-                            break;
-                        }
-                    }
-                }
-            });
-
-            frame.setVisible(true);
-            // canvasは既定でフォーカスを持たない(JPanel)ため、表示直後に明示的に
-            // フォーカスを与える。IME(InputContext)は実際のフォーカスオーナーである
-            // コンポーネントにしか関連付けられないため、これが無いと変換中文字列の
-            // オーバーレイ表示（EditorCanvas.inputMethodTextChanged）が呼ばれない。
-            active[0].canvas().requestFocusInWindow();
-        });
-    }
-
     /** JFrame タイトル文字列を構築する（ホームディレクトリは ~ に置換）。 */
     private static String buildTitle(Path wd) {
         try {
@@ -1099,91 +621,5 @@ public class Main {
             return "Java Text Editor — ~/" + rel.toString().replace('\\', '/');
         } catch (IllegalArgumentException ignored) {}
         return "Java Text Editor — " + wd;
-    }
-
-    /**
-     * lib/src.zip または lib/openjdk-native/ が存在しない場合、
-     * セットアップスクリプトをバックグラウンドスレッドで自動実行する。
-     * エディタの起動は待たずに続行する。
-     */
-    private static void runSetupIfNeeded() {
-        Path libDir = resolveLibDir();
-        boolean hasSrcZip    = Files.exists(libDir.resolve("src.zip"));
-        boolean hasNativeSrc = Files.isDirectory(libDir.resolve("openjdk-native"));
-        if (hasSrcZip && hasNativeSrc) return;
-
-        Thread.ofVirtual().name("setup-auto").start(() -> {
-            String os = System.getProperty("os.name", "").toLowerCase();
-            boolean isWindows = os.contains("win");
-            Path scriptDir = resolveScriptDir();
-            Path script = isWindows
-                ? scriptDir.resolve("setup.bat")
-                : scriptDir.resolve("setup.sh");
-
-            if (!Files.exists(script)) {
-                System.err.println("[setup] Script not found: " + script);
-                return;
-            }
-
-            System.out.println("[setup] Running " + script.getFileName() + " in background...");
-            try {
-                ProcessBuilder pb = isWindows
-                    ? new ProcessBuilder("cmd.exe", "/c", script.toString())
-                    : new ProcessBuilder("bash", script.toString());
-                pb.directory(scriptDir.getParent().toFile());
-                pb.redirectErrorStream(true);
-                Process proc = pb.start();
-                // 子プロセス（cmd.exe/xcopy/git 等）の出力はOSのネイティブエンコーディング
-                // （Windowsではコンソールのコードページ、日本語版なら通常 CP932）でバイト列化される。
-                // JDK 18+ の既定文字セットは JEP 400 により常に UTF-8 になっているため、
-                // InputStreamReader をそのまま使うと非ASCII文字（日本語のシステムメッセージ等）が
-                // 文字化けする。native.encoding（無ければ sun.jnu.encoding）で明示的にデコードする。
-                String nativeEncodingName = System.getProperty("native.encoding",
-                    System.getProperty("sun.jnu.encoding", "UTF-8"));
-                java.nio.charset.Charset nativeEncoding;
-                try {
-                    nativeEncoding = java.nio.charset.Charset.forName(nativeEncodingName);
-                } catch (Exception e) {
-                    nativeEncoding = java.nio.charset.Charset.defaultCharset();
-                }
-                try (var reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(proc.getInputStream(), nativeEncoding))) {
-                    reader.lines().forEach(line -> System.out.println("[setup] " + line));
-                }
-                int exit = proc.waitFor();
-                if (exit == 0) {
-                    System.out.println("[setup] Done.");
-                } else {
-                    System.err.println("[setup] Exited with code " + exit);
-                }
-            } catch (Exception e) {
-                System.err.println("[setup] Failed: " + e.getMessage());
-            }
-        });
-    }
-
-    private static Path resolveLibDir() {
-        try {
-            var url = Main.class.getProtectionDomain().getCodeSource().getLocation();
-            if (url != null) {
-                Path code = Paths.get(url.toURI());
-                Path dir = Files.isDirectory(code) ? code : code.getParent();
-                for (int i = 0; i < 4; i++) {
-                    if (dir == null) break;
-                    Path candidate = dir.resolve("lib");
-                    if (Files.isDirectory(candidate)) return candidate;
-                    // lib がなくても返す（初回は存在しないのが普通）
-                    if (Files.isDirectory(dir.resolve("scripts"))) return dir.resolve("lib");
-                    dir = dir.getParent();
-                }
-            }
-        } catch (Exception ignored) {}
-        return Path.of("lib");
-    }
-
-    private static Path resolveScriptDir() {
-        return dev.javatexteditor.analysis.CodeSourceLocator
-                .findUpward(Main.class, "scripts", 4, Files::isDirectory)
-                .orElse(Path.of("scripts"));
     }
 }
