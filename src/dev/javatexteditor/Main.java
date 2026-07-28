@@ -3,7 +3,7 @@ package dev.javatexteditor;
 import dev.javatexteditor.analysis.CompileAnalyzer;
 import dev.javatexteditor.app.AnalysisServices;
 import dev.javatexteditor.app.CBuildRunner;
-import dev.javatexteditor.app.DiagnosticPopup;
+import dev.javatexteditor.app.GlobalKeyDispatcher;
 import dev.javatexteditor.app.JavaBuildRunner;
 import dev.javatexteditor.app.LiveDiagnostics;
 import dev.javatexteditor.app.PaneManager;
@@ -18,7 +18,6 @@ import java.awt.KeyboardFocusManager;
 import java.awt.MouseInfo;
 import java.awt.Point;
 import java.awt.Rectangle;
-import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -97,114 +96,9 @@ public class Main {
 
             frame.add(panes.active().canvas());
 
-            // KEY_PRESSEDで processKey を呼んだキーは KEY_TYPED でも届くため、
-            // 二重処理を防ぐためにフラグで管理する。
-            boolean[] pressedHandled = { false };
-
             KeyboardFocusManager.getCurrentKeyboardFocusManager()
-                .addKeyEventDispatcher(e -> {
-                    // モーダルダイアログが前面にある場合はエディタのキー処理をスキップする
-                    java.awt.Window focused = KeyboardFocusManager
-                        .getCurrentKeyboardFocusManager().getFocusedWindow();
-                    if (focused != frame) return false;
-
-                    if (e.getID() == KeyEvent.KEY_PRESSED) {
-                        pressedHandled[0] = false;
-
-                        // Ctrl+Shift+矢印: アクティブペインのビットマップフォントセルサイズを変更
-                        boolean ctrl  = (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK)  != 0;
-                        boolean shift = (e.getModifiersEx() & KeyEvent.SHIFT_DOWN_MASK) != 0;
-                        if (ctrl && shift) {
-                            int kc = e.getKeyCode();
-                            if (kc == KeyEvent.VK_RIGHT) {
-                                panes.active().canvas().adjustCellWidth(+1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_LEFT) {
-                                panes.active().canvas().adjustCellWidth(-1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_DOWN) {
-                                panes.active().canvas().adjustCellHeight(+1);
-                                pressedHandled[0] = true; return true;
-                            } else if (kc == KeyEvent.VK_UP) {
-                                panes.active().canvas().adjustCellHeight(-1);
-                                pressedHandled[0] = true; return true;
-                            }
-                        }
-
-                        // Ctrl+Alt+矢印: 画面分割中、アクティブペインの縦横幅を伸縮する
-                        boolean alt = (e.getModifiersEx() & KeyEvent.ALT_DOWN_MASK) != 0;
-                        if (ctrl && alt && !shift) {
-                            int kc = e.getKeyCode();
-                            if (kc == KeyEvent.VK_LEFT || kc == KeyEvent.VK_RIGHT
-                                    || kc == KeyEvent.VK_UP || kc == KeyEvent.VK_DOWN) {
-                                panes.resizeActivePane(kc);
-                                pressedHandled[0] = true; return true;
-                            }
-                        }
-
-                        // F2: カーソル行の診断をモーダルダイアログで表示
-                        if (e.getKeyCode() == KeyEvent.VK_F2) {
-                            DiagnosticPopup.showForCursorRow(
-                                frame, panes.active().editor(), panes.active().canvas());
-                            pressedHandled[0] = true;
-                            return true;
-                        }
-
-                        // F10/F11/F12: プロジェクト全体のコンパイル・実行（NORMALモードのみ）
-                        if (e.getKeyCode() == KeyEvent.VK_F10
-                                || e.getKeyCode() == KeyEvent.VK_F11
-                                || e.getKeyCode() == KeyEvent.VK_F12) {
-                            dev.javatexteditor.editor.ModalEditor edBuild = panes.active().editor();
-                            if (edBuild.isNormalMode()) {
-                                boolean c = LiveDiagnostics.isCBuffer(edBuild);
-                                switch (e.getKeyCode()) {
-                                    case KeyEvent.VK_F10 -> { if (c) C_BUILD_RUNNER.triggerCompile(edBuild); else JAVA_BUILD_RUNNER.triggerCompile(edBuild); }
-                                    case KeyEvent.VK_F11 -> { if (c) C_BUILD_RUNNER.triggerRun(edBuild); else JAVA_BUILD_RUNNER.triggerRun(edBuild); }
-                                    case KeyEvent.VK_F12 -> { if (c) C_BUILD_RUNNER.triggerCompileAndRun(edBuild); else JAVA_BUILD_RUNNER.triggerCompileAndRun(edBuild); }
-                                }
-                            }
-                            pressedHandled[0] = true;
-                            return true;
-                        }
-
-                        // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
-                        // IMEがコミットした文字は KEY_TYPED で受け取る。
-                        boolean noCtrlAlt = (e.getModifiersEx() &
-                            (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
-                        char kc2 = e.getKeyChar();
-                        boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
-                        dev.javatexteditor.editor.ModalEditor ed = panes.active().editor();
-                        if (noCtrlAlt && isPrintable &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
-                            return false; // IMEに委譲（pressedHandled は false のまま）
-                        }
-
-                        ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
-                        panes.updateBorders();
-                        pressedHandled[0] = true; // KEY_TYPED で二重処理しないようにマーク
-                        return true;
-                    }
-
-                    // KEY_TYPED: IMEがコミットした文字（日本語など）をINSERT/COMMANDモードで処理する。
-                    // KEY_PRESSEDで既に処理したキーは無視する（';'→COMMMANDモードへの遷移後に
-                    // KEY_TYPED の';'がコマンドバッファに追記される問題を防ぐ）。
-                    if (e.getID() == KeyEvent.KEY_TYPED) {
-                        if (pressedHandled[0]) {
-                            pressedHandled[0] = false;
-                            return false;
-                        }
-                        char ch = e.getKeyChar();
-                        dev.javatexteditor.editor.ModalEditor ed = panes.active().editor();
-                        if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
-                                (ed.isInsertMode() || ed.isCommandMode())) {
-                            ed.processKey(0, ch, 0);
-                            panes.updateBorders();
-                            return true;
-                        }
-                    }
-
-                    return false;
-                });
+                .addKeyEventDispatcher(new GlobalKeyDispatcher(
+                    frame, panes, JAVA_BUILD_RUNNER, C_BUILD_RUNNER));
 
             // マウスクリックでアクティブペインを切り替える
             frame.getContentPane().addMouseListener(new java.awt.event.MouseAdapter() {

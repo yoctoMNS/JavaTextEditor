@@ -169,3 +169,11 @@ Xvfb環境には実際のIMEが存在しないため、7の検証は `java.awt.R
 
 親計画書どおり: `diff` が空、起動スモークテスト `exit=124`、手動検証8項目、
 かつ `wc -l src/dev/javatexteditor/Main.java` が30行以下。
+
+## 進捗記録欄（実行者が埋める）
+
+| サブ段階 | 実施日 | `diff` 空 | スモーク | 手動検証(1-6) | IME確認(7-8) | 行数 | 気づき |
+|---|---|---|---|---|---|---|---|
+| 7-0 | 2026-07-28 | ✅ | ✅ | (対象外) | (対象外) | 343 | 検証環境構築・ベースライン確定・本計画書作成のみ |
+| 7-1 | 2026-07-28 | ✅ | ✅ 124 | ✅（`s v`/`s s`/`s h`/`s l`/`Ctrl+Alt+→`/`:q`/共有バッファすべて確認） | ✅ | 343 → **237**（`GlobalKeyDispatcher.java` 新設・160行） | ①`KeyEventDispatcher` は `java.awt.event` ではなく `java.awt` パッケージ（初回ビルドでimport誤りに気づいた）。②手動検証中に「Escape 1回では INSERT を抜けられない」という事象に遭遇したが、`git stash` でリファクタ前のバイナリに戻して同じ手順を再現し、**リファクタと無関係の既存挙動**であることを確認した（`processInsertKey()` の `completion.isActive()` 分岐: 補完ポップアップが開いている間はEscapeがポップアップを閉じるだけで、INSERTを抜けるには2回目のEscapeが必要。文字入力のたびに `recheckCompletion()` が自動的にポップアップを開く仕様のため、1文字打っただけでも普通に発生する）。③IME確認は実IMEの無いXvfb環境のため、`PaneManager.createLeaf()` が実際に配線する `canvas.setImeCommitHandler` のラムダ本体を再現したうえで `InputMethodEvent` を直接 `canvas.inputMethodTextChanged()` に渡す方式で実施し、「あ」の確定で1文字だけ挿入されること（2文字にならないこと）を確認した。この経路は `GlobalKeyDispatcher`/`pressedHandled` を一切経由しない独立した経路であることもコード上確認済み |
+| 7-2 | | | | | | | |
