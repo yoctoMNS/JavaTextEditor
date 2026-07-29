@@ -28,7 +28,9 @@ description: "Vim/Emacsの良い所を統合したJava SE製テキストエデ�
 | Backspace | FILER（検索中） | クエリ末尾1文字を削除し再フィルタ |
 | Esc | FILER（検索中） | 検索をキャンセルし一覧表示へ戻る |
 | Esc | FILER（一覧表示中） | FILER セッションを終了し `:cd` 実行前のバッファへ復元する |
-| `:`（一覧表示中のみ、検索中は不可） | FILER | `exitFiler()` で元バッファへ復元してから通常の COMMAND モードへ入る（`:cd`/`:e` をそのまま使える。2026-07-29追加） |
+| `:`（一覧表示中のみ、検索中は不可） | FILER | `exitFiler()` で元バッファへ復元してから通常の COMMAND モードへ入る（`:cd`/`:e`/`:pr`/`:mkdir` 等をそのまま使える。2026-07-29追加） |
+| `:pr` | COMMAND | 現在のディレクトリを F10/F11/F12 用プロジェクトルートとして固定。FILER表示中に実行した場合はFILERへ戻る（2026-07-29追加） |
+| `:mkdir <path>` | COMMAND | 現在の作業ディレクトリ基準でディレクトリを新規作成する。`:cd` と異なり作成先へは移動せず親に留まる。FILER表示中に実行した場合は一覧を再読み込みしてFILERへ戻る（2026-07-29追加） |
 | `y`/`Y` | `Mode.CD_CONFIRM_CREATE` | 存在しないディレクトリを新規作成して `:cd` を続行 |
 | `n`/`N`/Esc | `Mode.CD_CONFIRM_CREATE` | 何もせず NORMAL へ戻る |
 
@@ -209,6 +211,35 @@ if (keyChar == ':') {
 `testColonCdNonexistentFromFilerPromptsAndCreates` /
 `testColonEFromFilerOpensExistingFile` /
 `testColonENonexistentFromFilerPromptsAndCreatesBuffer` を参照。
+
+---
+
+## `:pr`/`:mkdir` — バッファを操作しないコマンドはFILERに留まる（2026-07-29追加）
+
+`:cd`/`:e` はバッファを開き直す（＝FILERを抜けるのが自然な）コマンドだが、`:pr`（プロジェクト
+ルート固定）や `:mkdir <path>`（ディレクトリ新規作成。**`:cd` と異なり作成先へは移動せず、
+親ディレクトリに留まる**）は `buffer`/`currentFilePath` を一切触らない。これらを FILER 表示中に
+実行した場合は、一覧を再読み込みしつつ FILER に留まってほしい（毎回 `:cd` 実行前のバッファへ
+戻されると連続してブラウジングできない）。
+
+`exitFiler()` を先に呼んでしまうと「FILER表示中だった」という情報が失われるため、`processFilerKey()`
+の `:` ハンドラで `filerCommandOrigin` フラグを立ててから `exitFiler()`/`enterCommandMode()` する。
+`pinProjectRoot()`/`makeDirectory()` は自分の処理が終わった後に共通ヘルパー
+`returnToFilerIfCommandFromFiler()` を呼び、フラグが立っていれば `enterFiler()` で FILER へ戻る
+（同じディレクトリの一覧を再読み込みするため、新規作成したディレクトリもそのまま表示される）。
+フラグは `processCommandKey()` の Esc/Enter の両方で必ず `false` にクリアする（コマンド側が
+消費し忘れた場合の安全網、かつ次回の `:` 押下に持ち越さないため）。
+
+この方式は「`modeAfterCommand()` が `imageModeOwner`/`binaryModeOwner` の参照一致で
+IMAGE/BINARY に戻る」既存パターンと対になる設計だが、FILER の場合は疑似バッファが `:` 押下時点
+（`exitFiler()` 実行前）で既に破棄されてしまうため参照一致方式が使えず、代わりに単純な
+boolean フラグ方式にした。バッファを操作する新しいコマンドを追加する場合は
+`returnToFilerIfCommandFromFiler()` を呼ばないこと（呼ぶと開いたはずのファイル/疑似バッファが
+即座に上書きされてしまう）。
+
+テストは `testColonPrFromFilerStaysInFilerMode` / `testColonMkdirFromFilerStaysAndReloadsListing` /
+`testColonMkdirOutsideFilerDoesNotEnterFiler`（FILERを経由しない通常の `:mkdir` は FILER へ
+遷移しないことの確認）を参照。
 
 ## 設計判断ログ（詳細は `docs/decision-log.md` を参照）
 

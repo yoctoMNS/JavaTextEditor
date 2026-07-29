@@ -322,6 +322,11 @@ public class ModalEditor {
     private final PseudoBufferStash cdStash = new PseudoBufferStash();
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
     private Path cdConfirmTarget = null; // :cd 先が存在しない場合の y/n 確認プロンプト対象パス
+    // FILER表示中に ':' でCOMMANDモードへ入った場合に true。バッファを操作しないコマンド
+    // （:pr・:mkdir 等）はこのフラグを見て、実行後に enterFiler() でFILERへ戻る（同じディレクトリの
+    // 一覧を再読み込みして留まる）。:cd/:e 等バッファを操作するコマンドは自分でモード遷移するため
+    // このフラグを消費しない。processCommandKey の Esc/Enter で必ず false に戻す。
+    private boolean filerCommandOrigin = false;
     // :e/:enew/:w タブ補完状態（:cd と同じく一時退避→復元パターン。
     // どのコマンドから起動したかは edVerb に覚えておき、補完確定時に正しいコマンド名で
     // commandBuffer / executeCommand() を組み立てる）
@@ -1874,6 +1879,7 @@ public class ModalEditor {
         if (keyCode == KeyEvent.VK_ESCAPE) {
             commandBuffer.setLength(0);
             mode = Mode.NORMAL;
+            filerCommandOrigin = false;
 
         } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
             if (commandBuffer.length() > 0) {
@@ -1884,6 +1890,7 @@ public class ModalEditor {
             executeCommand(commandBuffer.toString());
             commandBuffer.setLength(0);
             if (mode == Mode.COMMAND) mode = modeAfterCommand();
+            filerCommandOrigin = false;
 
         } else if (keyCode == KeyEvent.VK_TAB) {
             String cmd = commandBuffer.toString();
@@ -3048,6 +3055,7 @@ public class ModalEditor {
         r.on(this::pinProjectRoot,                   "pr");
         r.on(this::reportProjectRoot,                "pr?");
         r.onPrefix("cd ", this::changeDirectory);
+        r.onPrefix("mkdir ", this::makeDirectory);
 
         // --- JDK/javac の起動点へジャンプ ---
         r.on(() -> executeMain(""),                  "main");
@@ -3086,6 +3094,7 @@ public class ModalEditor {
     private void pinProjectRoot() {
         projectRootOverride = getProjectRoot();
         statusMessage = "project root: " + projectRootOverride;
+        returnToFilerIfCommandFromFiler();
     }
 
     /** :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。 */
@@ -3093,6 +3102,43 @@ public class ModalEditor {
         statusMessage = (projectRootOverride != null)
             ? "project root: " + projectRootOverride
             : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
+        returnToFilerIfCommandFromFiler();
+    }
+
+    /**
+     * :mkdir <path> — 現在の作業ディレクトリ（:cd 先）を基準にディレクトリを新規作成する。
+     * :cd と異なりそのディレクトリへは移動しない（作成元の親ディレクトリに留まる）。
+     * FILER表示中に実行した場合は、作成後に enterFiler() で同じ階層の一覧を再読み込みし、
+     * 新規作成したディレクトリを一覧に反映した上でFILERに留まる。
+     */
+    private void makeDirectory(String pathStr) {
+        try {
+            pathStr = UserPathResolver.expandHome(pathStr);
+            Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
+            if (Files.exists(target)) {
+                statusMessage = "E: すでに存在します: " + target;
+                return;
+            }
+            Files.createDirectories(target);
+            statusMessage = "ディレクトリを作成しました: " + target;
+        } catch (Exception ex) {
+            statusMessage = "E: " + ex.getMessage();
+            return;
+        }
+        returnToFilerIfCommandFromFiler();
+    }
+
+    /**
+     * :pr/:pr?/:mkdir 等バッファを操作しないコマンド専用のヘルパー。FILER表示中に ':' で
+     * COMMANDモードへ入っていた場合（filerCommandOrigin）だけ enterFiler() でFILERへ戻り、
+     * 一覧を再読み込みする。:cd/:e のようにバッファを開くコマンドは自分でモード遷移するため
+     * このヘルパーを呼ばない（詳細は simple-filer スキル参照）。
+     */
+    private void returnToFilerIfCommandFromFiler() {
+        if (filerCommandOrigin) {
+            filerCommandOrigin = false;
+            enterFiler();
+        }
     }
 
     /**
@@ -5725,6 +5771,7 @@ public class ModalEditor {
             // changeDirectory() が改めて enterFiler() を呼ぶため、ディレクトリ一覧は自動的に
             // 再読み込みされる。
             if (keyChar == ':') {
+                filerCommandOrigin = true;
                 exitFiler();
                 enterCommandMode();
             }

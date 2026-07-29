@@ -47,6 +47,9 @@ public class FilerTest {
         testColonCdNonexistentFromFilerPromptsAndCreates();
         testColonEFromFilerOpensExistingFile();
         testColonENonexistentFromFilerPromptsAndCreatesBuffer();
+        testColonPrFromFilerStaysInFilerMode();
+        testColonMkdirFromFilerStaysAndReloadsListing();
+        testColonMkdirOutsideFilerDoesNotEnterFiler();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -456,6 +459,57 @@ public class FilerTest {
             editor.processKey(KeyEvent.VK_Y, 'y', 0);
             assertTrue(":e y exits to normal mode", editor.isNormalMode());
             assertEquals("new file buffer opened", target.toString(), editor.getCurrentFilePath());
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    static void testColonPrFromFilerStaysInFilerMode() throws Exception {
+        Path root = Files.createTempDirectory("filer_colon_pr_");
+        try {
+            Files.writeString(root.resolve("a.txt"), "a");
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+
+            typeCommand(editor, "pr");
+            assertTrue(":pr from filer stays in filer mode", editor.isFilerMode());
+            assertEquals("project root pinned to current dir", root.toString(), editor.getProjectRootOverride().toString());
+            assertTrue("listing still shows a.txt",
+                editor.getFilerFiltered().stream().anyMatch(e -> e.name().equals("a.txt")));
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    static void testColonMkdirFromFilerStaysAndReloadsListing() throws Exception {
+        Path root = Files.createTempDirectory("filer_colon_mkdir_");
+        try {
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+            assertTrue("new dir not yet in listing",
+                editor.getFilerFiltered().stream().noneMatch(e -> e.name().equals("newdir")));
+
+            typeCommand(editor, "mkdir newdir");
+            assertTrue("directory actually created", Files.isDirectory(root.resolve("newdir")));
+            assertTrue(":mkdir from filer stays in filer mode", editor.isFilerMode());
+            assertEquals("project root unchanged (stays at parent)", root.toString(), editor.getProjectRoot().toString());
+            assertTrue("listing reloaded to show newdir",
+                editor.getFilerFiltered().stream().anyMatch(e -> e.name().equals("newdir")));
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    static void testColonMkdirOutsideFilerDoesNotEnterFiler() throws Exception {
+        Path root = Files.createTempDirectory("filer_mkdir_plain_");
+        try {
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            // FILERを経由せず、通常のNORMALモードから直接 :mkdir を実行する
+            typeCommand(editor, "mkdir plaindir");
+            assertTrue("directory created", Files.isDirectory(root.resolve("plaindir")));
+            assertTrue(":mkdir outside filer does not enter filer mode", editor.isNormalMode());
         } finally {
             deleteDir(root);
         }
