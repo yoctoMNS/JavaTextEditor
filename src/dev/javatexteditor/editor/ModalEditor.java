@@ -5492,6 +5492,14 @@ public class ModalEditor {
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
     public boolean isBinaryMode()         { return mode == Mode.BINARY; }
+
+    /**
+     * {@code r}（NORMAL）/ 矩形置換 {@code r}（VISUAL BLOCK）の2打鍵目、すなわち
+     * 置換文字の入力待ち状態かどうか。KEY_PRESSED の keyChar は Shift 修飾文字について
+     * 環境依存で信頼できないことがあるため（GlobalKeyDispatcher 参照）、置換文字の受け取りを
+     * KEY_TYPED に委譲すべきタイミングの判定に使う。
+     */
+    public boolean isAwaitingReplaceChar() { return pendingSequence.equals("r"); }
     public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
     public boolean isCdConfirmCreateMode() { return mode == Mode.CD_CONFIRM_CREATE; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }

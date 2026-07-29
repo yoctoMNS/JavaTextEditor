@@ -121,14 +121,22 @@ public final class GlobalKeyDispatcher implements KeyEventDispatcher {
 
             // INSERT/COMMANDモードで印字可能文字（Ctrl/Altなし）はIMEに委譲する。
             // IMEがコミットした文字は KEY_TYPED で受け取る。
+            //
+            // r（NORMALの1文字置換）/ VISUAL BLOCKの矩形置換 r の2打鍵目も同様に KEY_TYPED へ委譲する。
+            // KEY_PRESSED の getKeyChar() は Shift 修飾文字（大文字等）について、環境（プラットフォーム・
+            // キーボードレイアウト）によっては正しく反映されないことがある一方、KEY_TYPED の keyChar は
+            // 常に確定済みの文字を返すため信頼できる（このクラス冒頭の pressedHandled の説明にある
+            // IME委譲と同じ理由）。r 自体（1打鍵目）は printable 文字入力ではなく既存のNORMALモード
+            // アクションとして KEY_PRESSED のまま処理してよいため、ここで isAwaitingReplaceChar() を
+            // 見るのは「r が押された直後で2打鍵目を待っている」状態のみ。
             boolean noCtrlAlt = (e.getModifiersEx() &
                 (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
             char kc2 = e.getKeyChar();
             boolean isPrintable = kc2 != KeyEvent.CHAR_UNDEFINED && kc2 >= ' ';
             dev.javatexteditor.editor.ModalEditor ed = panes.active().editor();
             if (noCtrlAlt && isPrintable &&
-                    (ed.isInsertMode() || ed.isCommandMode())) {
-                return false; // IMEに委譲（pressedHandled は false のまま）
+                    (ed.isInsertMode() || ed.isCommandMode() || ed.isAwaitingReplaceChar())) {
+                return false; // IME/KEY_TYPEDに委譲（pressedHandled は false のまま）
             }
 
             ed.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
@@ -148,7 +156,7 @@ public final class GlobalKeyDispatcher implements KeyEventDispatcher {
             char ch = e.getKeyChar();
             dev.javatexteditor.editor.ModalEditor ed = panes.active().editor();
             if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
-                    (ed.isInsertMode() || ed.isCommandMode())) {
+                    (ed.isInsertMode() || ed.isCommandMode() || ed.isAwaitingReplaceChar())) {
                 ed.processKey(0, ch, 0);
                 panes.updateBorders();
                 return true;

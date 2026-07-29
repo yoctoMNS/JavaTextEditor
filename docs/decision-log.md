@@ -1635,3 +1635,37 @@ y/n で尋ね、y なら新規作成・n なら何もしない」という要望
   という新規ファイル保存の回帰テスト）は `:w newname.txt` 実行後に `y` キー入力を追加する形で
   新仕様に合わせて更新した。全93テストクラスを個別JVMで実行し、既知のベースラインFAIL
   （`ScrollTest` 2件・`ModalEditorTest` 1件）以外はすべてPASSであることを確認済み。
+
+## `r` コマンドの2打鍵目が特定環境で大文字を受け付けない不具合の修正（2026-07-29）
+
+- **症状**: ユーザーの実環境で「`r` を押した後 `Shift+K`/`Shift+O` を押しても大文字で置換されない」
+  という不具合が再現した。一方、この環境（Xvfb 経由のヘッドレスコンテナ）では
+  `ModalEditor.processKey(keyCode, 'K', SHIFT_DOWN_MASK)` を直接呼ぶユニットテストでは
+  問題が一切再現しなかった（`ModalEditor` 側の `pendingSequence == "r"` 分岐は
+  `keyChar >= ' '` のみで判定しており、大文字小文字を区別していないことを確認済み）。
+- **根本原因**: バグは `ModalEditor` ではなく `app/GlobalKeyDispatcher.java` 側にあった。
+  `KEY_PRESSED` イベントの `getKeyChar()` は、Shift修飾文字（大文字等）についてプラットフォーム・
+  キーボードレイアウト依存で正しい値を返さないことがある（Javaの `KeyEvent` 仕様上、
+  文字情報として信頼できるのは `KEY_TYPED` の `getKeyChar()` のみ）。`GlobalKeyDispatcher` は
+  既に INSERT/COMMAND モードの通常文字入力についてはこの理由で `KEY_TYPED` に委譲していたが
+  （クラス冒頭の `pressedHandled` の説明を参照）、NORMAL モードの `r`（1文字置換）の2打鍵目は
+  対象外のまま `KEY_PRESSED` の `getKeyChar()` を直接 `ModalEditor.processKey()` に渡していたため、
+  その値が信頼できない環境ではユーザー入力を正しく受け取れなかった。
+- **修正**: `ModalEditor` に `isAwaitingReplaceChar()`（`pendingSequence.equals("r")`。NORMALの
+  `r`・VISUAL BLOCKの矩形置換 `r` の両方を1つのフィールドで共有しているため、この1メソッドで
+  両方をカバーする）を追加。`GlobalKeyDispatcher` の「印字可能文字を KEY_TYPED に委譲する」
+  既存の判定条件（`ed.isInsertMode() || ed.isCommandMode()`）に `|| ed.isAwaitingReplaceChar()`
+  を追加し、`KEY_TYPED` 側の受け取り条件にも同様に追加した。これにより `r` の2打鍵目は
+  INSERT モードの文字入力と全く同じ経路（IME委譲と共通の仕組み）で確実な文字を受け取る。
+  `r` 自体（1打鍵目）は printable 文字入力ではなく既存の NORMAL モードアクションのままなので
+  `KEY_PRESSED` 側の処理は変更していない。
+- **テストで再現できなかった理由の記録**: 本プロジェクトのユニットテスト（`ReplaceCharTest`等）は
+  `ed.processKey(keyCode, keyChar, modifiers)` を直接呼ぶため、`GlobalKeyDispatcher` の
+  `KEY_PRESSED`/`KEY_TYPED` 振り分けロジック自体を経由しない。実際のキーボード入力に近い検証には
+  `RobotKeyInputTest.java` があるが、同ファイルの `activeDispatcher`（テスト用の簡易ディスパッチャ）
+  は元々 `KEY_PRESSED` のみを処理する実装で、本番の `GlobalKeyDispatcher` の `KEY_TYPED` 委譲ロジックを
+  再現していなかった。今回、同ディスパッチャに本番と同じ委譲条件（`isInsertMode`/`isCommandMode`/
+  `isAwaitingReplaceChar` で `KEY_TYPED` に委譲）を追加した上で、`r` + `Shift+K`/`Shift+O` の
+  回帰テスト（`testNormalReplaceCharUppercase()`）を追加した。次にこのファイルへ機能を追加する際、
+  「`KEY_PRESSED` の `getKeyChar()` は Shift修飾文字について無条件に信頼できる」という誤った前提で
+  簡易ディスパッチャを書かないよう、この節を参照すること。

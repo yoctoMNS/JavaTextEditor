@@ -69,6 +69,7 @@ public class RobotKeyInputTest {
         testNormalVisualMode();
         testNormalYankDelete();
         testNormalPasteBefore();       // 'P' Shift バグ修正確認
+        testNormalReplaceCharUppercase(); // r + Shift+英字 Shift バグ修正確認
         testNormalUndoRedo();
         testInsertModeTyping();
         testInsertModeBackspace();
@@ -144,10 +145,32 @@ public class RobotKeyInputTest {
         editor = new ModalEditor(text);
         editor.setExitCallback(() -> {});
 
+        // GlobalKeyDispatcher の「印字可能文字は KEY_TYPED に委譲する」ロジック（r の2打鍵目・
+        // INSERT/COMMAND入力）をここでも再現する。KEY_PRESSED の keyChar は Shift 修飾文字について
+        // 環境依存で信頼できないことがあるため、本番と同じ経路を通さないと r+Shift+英字 の
+        // 回帰（大文字置換不具合）を検出できない。
         activeDispatcher = e -> {
-            if (e.getID() != KeyEvent.KEY_PRESSED) return false;
-            editor.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
-            return true;
+            if (e.getID() == KeyEvent.KEY_PRESSED) {
+                boolean noCtrlAlt = (e.getModifiersEx() &
+                    (KeyEvent.CTRL_DOWN_MASK | KeyEvent.ALT_DOWN_MASK)) == 0;
+                char kc = e.getKeyChar();
+                boolean isPrintable = kc != KeyEvent.CHAR_UNDEFINED && kc >= ' ';
+                if (noCtrlAlt && isPrintable &&
+                        (editor.isInsertMode() || editor.isCommandMode() || editor.isAwaitingReplaceChar())) {
+                    return false; // KEY_TYPEDに委譲
+                }
+                editor.processKey(e.getKeyCode(), e.getKeyChar(), e.getModifiersEx());
+                return true;
+            }
+            if (e.getID() == KeyEvent.KEY_TYPED) {
+                char ch = e.getKeyChar();
+                if (ch != KeyEvent.CHAR_UNDEFINED && ch >= ' ' &&
+                        (editor.isInsertMode() || editor.isCommandMode() || editor.isAwaitingReplaceChar())) {
+                    editor.processKey(0, ch, 0);
+                    return true;
+                }
+            }
+            return false;
         };
         KeyboardFocusManager.getCurrentKeyboardFocusManager()
             .addKeyEventDispatcher(activeDispatcher);
@@ -260,6 +283,26 @@ public class RobotKeyInputTest {
         // 'P' で前に貼り付け
         pressShiftKey(KeyEvent.VK_P);    // Shift+p = 'P'
         check("P (Shift+p)後テキスト: ABCDCDE", "ABCDCDE", editor.getText());
+    }
+
+    /**
+     * r（1文字置換）の2打鍵目に大文字を渡した場合の回帰テスト。
+     * KEY_PRESSED の keyChar が Shift 修飾文字について信頼できない環境があるため、
+     * r の2打鍵目は KEY_TYPED に委譲する必要がある（GlobalKeyDispatcher 参照）。
+     * Shift+K / Shift+O はどちらも別のNORMALモード機能（jdk.doc等）にも使われる文字だが、
+     * r-pending中はそれらへ解決されず置換文字として使われることも合わせて確認する。
+     */
+    static void testNormalReplaceCharUppercase() throws Exception {
+        resetEditorTo("hello world");
+        System.out.println("\n--- NORMALモード: r + Shift+英字（大文字置換のSHIFTバグ修正） ---");
+        pressChar('r');
+        pressShiftKey(KeyEvent.VK_K);
+        check("r + Shift+K 後テキスト: Kello world", "Kello world", editor.getText());
+
+        resetEditorTo("hello world");
+        pressChar('r');
+        pressShiftKey(KeyEvent.VK_O);
+        check("r + Shift+O 後テキスト: Oello world", "Oello world", editor.getText());
     }
 
     static void testNormalUndoRedo() throws Exception {
