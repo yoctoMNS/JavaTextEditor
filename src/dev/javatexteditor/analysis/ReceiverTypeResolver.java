@@ -26,8 +26,11 @@ public class ReceiverTypeResolver {
         "synchronized", "import", "package"
     );
 
-    /** 宣言の発見箇所。row は宣言が見つかった行番号、type は基底の型名（ジェネリクス・配列を除去済み）。 */
-    private record Declaration(int row, String type) {}
+    /**
+     * 宣言の発見箇所。row は宣言が見つかった行番号、type は基底の型名（ジェネリクス・配列を除去済み）、
+     * declaredType はソースに書かれていたままの型（{@code List<String>}・{@code String[]}）。
+     */
+    private record Declaration(int row, String type, String declaredType) {}
 
     /**
      * lines[0..cursorRow] を近い順（cursorRow から 0 へ）に走査し、varName の宣言型を推定する。
@@ -36,6 +39,16 @@ public class ReceiverTypeResolver {
      */
     public Optional<String> resolveType(String[] lines, int cursorRow, String varName) {
         return findNearestDeclaration(lines, cursorRow, varName).map(Declaration::type);
+    }
+
+    /**
+     * {@link #resolveType} と同じ探索を行うが、ソースに書かれていたままの型
+     * （{@code List<String>}・{@code String[]}）を返す。
+     * 入力補完が「配列かどうか」を見分けるために使う（配列は要素型ではなく length と
+     * Object のメソッドだけを持つため、基底型に正規化してしまうと候補を誤る）。
+     */
+    public Optional<String> resolveDeclaredType(String[] lines, int cursorRow, String varName) {
+        return findNearestDeclaration(lines, cursorRow, varName).map(Declaration::declaredType);
     }
 
     /**
@@ -69,7 +82,8 @@ public class ReceiverTypeResolver {
                 }
             }
             if (lastOnLine != null) {
-                return Optional.of(new Declaration(row, stripGenericsAndArray(lastOnLine)));
+                return Optional.of(
+                    new Declaration(row, stripGenericsAndArray(lastOnLine), lastOnLine));
             }
         }
         return Optional.empty();

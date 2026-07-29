@@ -93,6 +93,11 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     // 入力補完ポップアップ状態
     private CompletionView completion = CompletionView.hidden();
+    /**
+     * 補完ポップアップに一度に見せる候補数。これを超える分はスクロールで見せる
+     * （IntelliJ IDEA の候補一覧も同様に、件数に関わらず高さを一定に保つ）。
+     */
+    private static final int COMPLETION_VISIBLE_ROWS = 10;
 
     // telescope オーバーレイ状態
     private TelescopeView telescope = TelescopeView.hidden();
@@ -619,25 +624,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         requestRepaint();
     }
 
-    /**
-     * 入力補完ポップアップの状態をセットする。
-     * labels / kinds は CompletionItem のリストから変換して渡す。
-     */
     /** 補完ポップアップの描画状態をまとめて差し替える。 */
     public void setCompletionView(CompletionView view) {
         this.completion = (view != null) ? view : CompletionView.hidden();
         requestRepaint();
-    }
-
-    /**
-     * 補完ポップアップの状態をセットする。
-     *
-     * <p>移行期間中の委譲。新しい呼び出しは {@link #setCompletionView(CompletionView)} を使うこと。
-     * 既存の呼び出し側との互換のために残してある。
-     */
-    public void setCompletionState(boolean active, List<String> labels, List<String> kinds,
-                                   int selectedIdx, int anchorRow, int anchorCol) {
-        setCompletionView(new CompletionView(active, labels, kinds, selectedIdx, anchorRow, anchorCol));
     }
 
     /** 候補一覧オーバーレイの描画状態をまとめて差し替える。 */
@@ -1358,20 +1348,29 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      * テキスト本体より前面・telescope より後面に描画される。
      */
     private void drawCompletionPopup(Graphics2D g2, int charWidth, int lineHeight, int gutterWidth) {
-        if (completion.labels().isEmpty()) return;
+        if (completion.rows().isEmpty()) return;
 
         int cw = cellW;
         int fh = lineHeight;
         int pad = 4;
         int kindW = uiTextWidth("mth", cw) + pad; // kind ラベルの幅
 
-        // 最長ラベル幅を計算してポップアップ幅を決定
-        int maxLabelW = 0;
-        for (String label : completion.labels()) {
-            maxLabelW = Math.max(maxLabelW, uiTextWidth(label, cw));
+        // 表示するのは選択位置を含む一定件数だけ（IntelliJ の候補一覧と同じくスクロールする）
+        List<CompletionView.Row> rows = completion.rows();
+        int visibleCount = Math.min(rows.size(), COMPLETION_VISIBLE_ROWS);
+        int firstVisible = firstVisibleCompletionRow(completion.selectedIdx(), rows.size(), visibleCount);
+
+        // 「名前 + 引数リスト」と「型」の2列分の幅を測ってポップアップ幅を決める
+        int maxMainW = 0;
+        int maxTypeW = 0;
+        for (int i = firstVisible; i < firstVisible + visibleCount; i++) {
+            CompletionView.Row row = rows.get(i);
+            maxMainW = Math.max(maxMainW, uiTextWidth(row.label() + row.tailText(), cw));
+            maxTypeW = Math.max(maxTypeW, uiTextWidth(row.typeText(), cw));
         }
-        int popupW = kindW + maxLabelW + pad * 3;
-        int popupH = completion.labels().size() * fh + pad * 2;
+        int typeGap = (maxTypeW > 0) ? uiTextWidth("  ", cw) : 0;
+        int popupW = kindW + maxMainW + typeGap + maxTypeW + pad * 3;
+        int popupH = visibleCount * fh + pad * 2;
 
         // カーソル行の文字列でセルオフセットを計算（全角対応）
         String[] lines = cachedLines;
@@ -1413,24 +1412,68 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         g2.setColor(theme.accent);
         g2.drawRect(popupX, popupY, popupW, popupH);
 
-        // 各候補を描画
-        for (int i = 0; i < completion.labels().size(); i++) {
-            int iy = popupY + pad + (i + 1) * fh;
-            int rowTop = popupY + pad + i * fh;
-            String kind = completion.kindAt(i);
+        // 各候補を描画（種別タグ / 名前 + 引数リスト / 右寄せの型）
+        Color dimColor = blend(theme.foreground, theme.background, 0.45f);
+        for (int i = firstVisible; i < firstVisible + visibleCount; i++) {
+            CompletionView.Row row = rows.get(i);
+            int screenIdx = i - firstVisible;
+            int iy = popupY + pad + (screenIdx + 1) * fh;
+            int rowTop = popupY + pad + screenIdx * fh;
+            boolean selected = (i == completion.selectedIdx());
 
-            if (i == completion.selectedIdx()) {
+            Color mainColor = selected ? theme.background : theme.foreground;
+            Color tagColor  = selected ? theme.background : theme.accent;
+            Color subColor  = selected ? theme.background : dimColor;
+            if (selected) {
                 g2.setColor(theme.accent);
                 g2.fillRect(popupX + 1, rowTop, popupW - 2, fh);
-                // kind ラベル（選択行）
-                drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.background);
-                drawUiText(g2, completion.labels().get(i), popupX + pad + kindW, iy, cw, fh, theme.background);
-            } else {
-                // kind ラベルをアクセント色で
-                drawUiText(g2, kind, popupX + pad, iy, cw, fh, theme.accent);
-                drawUiText(g2, completion.labels().get(i), popupX + pad + kindW, iy, cw, fh, theme.foreground);
+            }
+
+            drawUiText(g2, row.kind(), popupX + pad, iy, cw, fh, tagColor);
+            int x = popupX + pad + kindW;
+            // 入力に一致した文字だけ色を変えて、なぜこの候補が出ているのかを見えるようにする
+            for (int c = 0; c < row.label().length(); c++) {
+                String ch = row.label().substring(c, c + 1);
+                Color color = (!selected && row.isHighlighted(c)) ? theme.accent : mainColor;
+                drawUiText(g2, ch, x, iy, cw, fh, color);
+                x += uiTextWidth(ch, cw);
+            }
+            if (!row.tailText().isEmpty()) {
+                drawUiText(g2, row.tailText(), x, iy, cw, fh, subColor);
+            }
+            if (!row.typeText().isEmpty()) {
+                int typeX = popupX + popupW - pad - uiTextWidth(row.typeText(), cw);
+                drawUiText(g2, row.typeText(), typeX, iy, cw, fh, subColor);
             }
         }
+
+        // 表示しきれていない候補があることを右端の目印で示す
+        if (rows.size() > visibleCount) {
+            g2.setColor(theme.accent);
+            int barH = Math.max(fh, popupH * visibleCount / rows.size());
+            int barY = popupY + (popupH - barH) * firstVisible / Math.max(1, rows.size() - visibleCount);
+            g2.fillRect(popupX + popupW - 3, barY, 2, barH);
+        }
+    }
+
+    /**
+     * 選択中の候補が必ず見えるようにスクロール位置（先頭に表示する候補の番号）を決める。
+     * 選択が表示範囲の端に来たときだけずらす、一般的なリスト表示と同じ挙動。
+     */
+    private static int firstVisibleCompletionRow(int selectedIdx, int total, int visibleCount) {
+        if (total <= visibleCount) return 0;
+        int first = selectedIdx - visibleCount / 2;
+        first = Math.max(0, Math.min(first, total - visibleCount));
+        return first;
+    }
+
+    /** 2色を ratio（0.0=c1, 1.0=c2）で混ぜる。淡色表示（引数リスト・型）に使う。 */
+    private static Color blend(Color c1, Color c2, float ratio) {
+        float r = Math.max(0f, Math.min(1f, ratio));
+        return new Color(
+            Math.round(c1.getRed()   * (1 - r) + c2.getRed()   * r),
+            Math.round(c1.getGreen() * (1 - r) + c2.getGreen() * r),
+            Math.round(c1.getBlue()  * (1 - r) + c2.getBlue()  * r));
     }
 
     /**

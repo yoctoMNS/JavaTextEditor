@@ -18,19 +18,12 @@ import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
-import java.io.IOException;
 import java.net.URI;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Eclipse JDT の Open Declaration（F3）と同じ「バインディング解決」方式で、
@@ -60,21 +53,6 @@ import java.util.Set;
  * トレース（OpenjdkSourceTracer の C/C++ 検索）とは完全に独立しており、一切関与しない。
  */
 public class BindingDefinitionResolver {
-
-    /**
-     * projectRoot 配下から収集する .java ファイル数の上限。これを超える場合は
-     * 解析を諦めて {@link NotFound} を返す（呼び出し側の既存ヒューリスティックに委ねる）。
-     * 作業ディレクトリの既定値はホームディレクトリになりうるため（WorkingDirectoryManager 参照）、
-     * 無制限に収集すると javac の属性付けが数十秒〜数分かかる恐れがある。
-     */
-    private static final int MAX_SOURCE_FILES = 2000;
-
-    /**
-     * 走査時にスキップするディレクトリ名。FileNameSearcher.SKIP_DIRS と同じ集合
-     * （search パッケージへの依存を避けるためここに複製。値を変える場合は両方を揃えること）。
-     */
-    private static final Set<String> SKIP_DIRS =
-        Set.of(".git", "build", "target", ".gradle", "node_modules", ".idea", ".vscode");
 
     /** 解決結果。3種のいずれか。 */
     public sealed interface Resolution permits ProjectLocation, JdkElementLocation, NotFound {}
@@ -127,8 +105,8 @@ public class BindingDefinitionResolver {
             Map<URI, String> realPathByUri = new HashMap<>();
             realPathByUri.put(mainFileObj.toUri(), currentFilePath);
 
-            List<JavaFileObject> sources = collectSources(mainFileObj, currentFilePath,
-                projectRoot, realPathByUri);
+            List<JavaFileObject> sources = JavaSourceCollector.collect(mainFileObj,
+                currentFilePath, projectRoot, realPathByUri);
             if (sources == null) {
                 return new NotFound("too many source files under " + projectRoot);
             }
@@ -172,67 +150,6 @@ public class BindingDefinitionResolver {
             // 呼び出し側の既存ヒューリスティックに委ねる。
             return new NotFound("analysis failed: " + e);
         }
-    }
-
-    /**
-     * 現在バッファ + projectRoot 配下の全 .java を compilation unit として収集する。
-     * MAX_SOURCE_FILES を超えた場合は null を返す（解析断念）。
-     */
-    private List<JavaFileObject> collectSources(StringJavaFileObject mainFileObj,
-                                                String currentFilePath, Path projectRoot,
-                                                Map<URI, String> realPathByUri) {
-        List<JavaFileObject> sources = new ArrayList<>();
-        sources.add(mainFileObj);
-        if (projectRoot == null || !Files.isDirectory(projectRoot)) {
-            return sources;
-        }
-        try {
-            Files.walkFileTree(projectRoot, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    Path name = dir.getFileName();
-                    if (name != null && SKIP_DIRS.contains(name.toString())) {
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (!file.toString().endsWith(".java")) {
-                        return FileVisitResult.CONTINUE;
-                    }
-                    // 現在編集中のファイルはバッファ内容（未保存の変更を含む）を既に
-                    // 追加済みなので、ディスク上の古い内容と二重にしない
-                    if (file.toString().equals(currentFilePath)) {
-                        return FileVisitResult.CONTINUE;
-                    }
-                    if (sources.size() >= MAX_SOURCE_FILES + 1) {
-                        return FileVisitResult.TERMINATE;
-                    }
-                    try {
-                        String content = Files.readString(file);
-                        StringJavaFileObject obj = new StringJavaFileObject(file.toString(), content);
-                        realPathByUri.put(obj.toUri(), file.toString());
-                        sources.add(obj);
-                    } catch (IOException ignored) {
-                        // 非UTF-8等の読めないファイルは解析対象外として無視
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFileFailed(Path file, IOException exc) {
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        } catch (IOException e) {
-            return sources; // 走査途中の失敗: 収集できた分だけで解析を試みる
-        }
-        if (sources.size() > MAX_SOURCE_FILES) {
-            return null;
-        }
-        return sources;
     }
 
     /**
