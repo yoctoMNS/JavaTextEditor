@@ -1642,3 +1642,21 @@ y/n で尋ね、y なら新規作成・n なら何もしない」という要望
   という新規ファイル保存の回帰テスト）は `:w newname.txt` 実行後に `y` キー入力を追加する形で
   新仕様に合わせて更新した。全93テストクラスを個別JVMで実行し、既知のベースラインFAIL
   （`ScrollTest` 2件・`ModalEditorTest` 1件）以外はすべてPASSであることを確認済み。
+
+## `:cd` の CD_CONFIRM_CREATE で `y` を押した後もステータスラインの確認メッセージが残る不具合の修正（2026-07-29）
+
+- **症状**: `:cd <存在しないパス>` で `Mode.CD_CONFIRM_CREATE` に入り「ディレクトリが存在しません:
+  ... 新規作成しますか? (y/n)」が表示された状態で `y` を押すと、ディレクトリ作成・FILER遷移は
+  正常に行われるが、ステータスラインには古い確認メッセージがそのまま残り続けていた。
+- **原因**: `processCdConfirmCreateKey()` の `y`/`Y` 分岐は `Files.createDirectories()` →
+  `applyChangeDirectory()` を呼ぶだけで、`statusMessage` を一切更新していなかった。
+  `applyChangeDirectory()` が呼ぶ `enterFiler()`/`renderFilerBuffer()` も `statusMessage` には
+  触れない設計（FILER自体は通常メッセージなしで一覧を表示する）ため、確認プロンプトの文言が
+  そのまま残っていた。
+- **修正**: `processCdConfirmCreateKey()` の `y`/`Y` 分岐で `applyChangeDirectory(target)` 実行後、
+  `mode == Mode.FILER`（＝成功してFILERへ遷移できた場合）なら `statusMessage = ""` にクリアする
+  一行を追加した。失敗時（`changeWdCallback` がエラーを返した場合）は `applyChangeDirectory()`
+  内で `mode` が `NORMAL` のまま `statusMessage = "E: " + err` が設定されるため、この分岐には
+  入らずエラーメッセージは保持される。`enterFiler()`/`applyChangeDirectory()` 自体は変更していない
+  （既存の `:cd` 直接成功パス・FILER内でのサブディレクトリ移動には元々ステータスメッセージを
+  汚さない前提があるため、影響範囲を y/n 確認フローの後始末だけに限定した）。
