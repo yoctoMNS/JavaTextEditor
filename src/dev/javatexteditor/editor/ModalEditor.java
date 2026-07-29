@@ -5396,6 +5396,13 @@ public class ModalEditor {
             statusMessage = "E: " + e.getMessage();
             filerEntries = List.of();
         }
+        Path parent = getProjectRoot().getParent();
+        if (parent != null) {
+            List<DirEntry> withParent = new java.util.ArrayList<>(filerEntries.size() + 1);
+            withParent.add(new DirEntry("..", parent, DirEntry.Kind.DIRECTORY));
+            withParent.addAll(filerEntries);
+            filerEntries = withParent;
+        }
         filerFiltered = filerEntries;
         filerSelectedIdx = 0;
         filerSearchMode = false;
