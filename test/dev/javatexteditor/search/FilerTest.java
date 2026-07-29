@@ -50,6 +50,7 @@ public class FilerTest {
         testColonPrFromFilerStaysInFilerMode();
         testColonMkdirFromFilerStaysAndReloadsListing();
         testColonMkdirOutsideFilerDoesNotEnterFiler();
+        testSemicolonInFilerEntersCommandModeAndCdWorks();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -510,6 +511,36 @@ public class FilerTest {
             typeCommand(editor, "mkdir plaindir");
             assertTrue("directory created", Files.isDirectory(root.resolve("plaindir")));
             assertTrue(":mkdir outside filer does not enter filer mode", editor.isNormalMode());
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    /** `;` はFILER一覧表示中でも `:` と同じくCOMMANDモードへ入るエイリアスとして扱われる（2026-07-29追加）。 */
+    private static void typeCommandSemicolon(ModalEditor editor, String cmd) {
+        editor.processKey(0, ';', 0);
+        for (char c : cmd.toCharArray()) {
+            editor.processKey(0, c, 0);
+        }
+        editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+    }
+
+    static void testSemicolonInFilerEntersCommandModeAndCdWorks() throws Exception {
+        Path root = Files.createTempDirectory("filer_semicolon_cd_root_");
+        try {
+            Path child = Files.createDirectory(root.resolve("child"));
+            Files.writeString(child.resolve("inner.txt"), "inner");
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+
+            // FILER表示中に ';' でCOMMANDモードへ入り、そのまま :cd 相当のコマンドを実行できる
+            typeCommandSemicolon(editor, "cd " + child.toString());
+            assertTrue("still/again in filer mode after ; cd from filer", editor.isFilerMode());
+            assertEquals("project root switched to child via ;", child.toString(), editor.getProjectRoot().toString());
+            List<DirEntry> entries = editor.getFilerFiltered();
+            assertTrue("listing reloaded to show child's contents",
+                entries.stream().anyMatch(e -> e.name().equals("inner.txt")));
         } finally {
             deleteDir(root);
         }

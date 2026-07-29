@@ -3856,8 +3856,9 @@ public class ModalEditor {
     private static final int IMAGE_PAN_STEP_CELLS = 3;
 
     /**
-     * Mode.IMAGE 専用のキー処理。`:` でCOMMANDモードへ（`:q`/`:e`等の既存コマンドをそのまま使う）、
-     * `+`/`-`で手動ズーム（自動フィットを解除）、`0`で自動フィットへリセット、hjkl/矢印キーで
+     * Mode.IMAGE 専用のキー処理。`:`（または `;`、NORMAL/VISUAL系と同じVim式エイリアス）で
+     * COMMANDモードへ（`:q`/`:e`等の既存コマンドをそのまま使う）、`+`/`-`で手動ズーム
+     * （自動フィットを解除）、`0`で自動フィットへリセット、hjkl/矢印キーで
      * パン（F3、既存テキストスクロールと同じ canvas.scrollRow/scrollCol をそのまま流用する）。
      */
     private void processImageKey(int keyCode, char keyChar, int modifiers) {
@@ -3867,7 +3868,7 @@ public class ModalEditor {
             if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); }
             return;
         }
-        if (keyChar == ':') {
+        if (keyChar == ':' || keyChar == ';') {
             commandBuffer.setLength(0);
             statusMessage = "";
             mode = Mode.COMMAND;
@@ -4042,7 +4043,8 @@ public class ModalEditor {
     }
 
     private void processBinaryKey(int keyCode, char keyChar, int modifiers) {
-        if (keyChar == ':') {
+        // `;` は NORMAL/VISUAL系と同じVim式の `:` エイリアス
+        if (keyChar == ':' || keyChar == ';') {
             commandBuffer.setLength(0);
             statusMessage = "";
             mode = Mode.COMMAND;
@@ -5764,13 +5766,14 @@ public class ModalEditor {
                 filerQuery.setLength(0);
                 renderFilerBuffer();
             }
-            // `:` でCOMMANDモードへ（:cd/:e等の既存コマンドをそのまま使う）。
+            // `:`（または `;`、NORMAL/VISUAL系と同じVim式エイリアス）でCOMMANDモードへ
+            // （:cd/:e等の既存コマンドをそのまま使う）。
             // FILER セッションを先に終了し元バッファへ復元してから通常のCOMMANDモードに入ることで、
             // changeDirectory()/loadFromFile() が呼ぶ pushBuffer()/saveToStash() が正しい
             // （疑似バッファではない）バッファを対象にできるようにする。:cd 成功時は
             // changeDirectory() が改めて enterFiler() を呼ぶため、ディレクトリ一覧は自動的に
             // 再読み込みされる。
-            if (keyChar == ':') {
+            if (keyChar == ':' || keyChar == ';') {
                 filerCommandOrigin = true;
                 exitFiler();
                 enterCommandMode();

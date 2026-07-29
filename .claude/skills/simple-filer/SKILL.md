@@ -28,7 +28,7 @@ description: "Vim/Emacsの良い所を統合したJava SE製テキストエデ�
 | Backspace | FILER（検索中） | クエリ末尾1文字を削除し再フィルタ |
 | Esc | FILER（検索中） | 検索をキャンセルし一覧表示へ戻る |
 | Esc | FILER（一覧表示中） | FILER セッションを終了し `:cd` 実行前のバッファへ復元する |
-| `:`（一覧表示中のみ、検索中は不可） | FILER | `exitFiler()` で元バッファへ復元してから通常の COMMAND モードへ入る（`:cd`/`:e`/`:pr`/`:mkdir` 等をそのまま使える。2026-07-29追加） |
+| `:`/`;`（一覧表示中のみ、検索中は不可） | FILER | `exitFiler()` で元バッファへ復元してから通常の COMMAND モードへ入る（`:cd`/`:e`/`:pr`/`:mkdir` 等をそのまま使える。`;` は NORMAL/VISUAL系と同じVim式の `:` エイリアス。2026-07-29追加、`;` 対応は同日追記） |
 | `:pr` | COMMAND | 現在のディレクトリを F10/F11/F12 用プロジェクトルートとして固定。FILER表示中に実行した場合はFILERへ戻る（2026-07-29追加） |
 | `:mkdir <path>` | COMMAND | 現在の作業ディレクトリ基準でディレクトリを新規作成する。`:cd` と異なり作成先へは移動せず親に留まる。FILER表示中に実行した場合は一覧を再読み込みしてFILERへ戻る（2026-07-29追加） |
 | `y`/`Y` | `Mode.CD_CONFIRM_CREATE` | 存在しないディレクトリを新規作成して `:cd` を続行 |
@@ -182,11 +182,20 @@ FILER で一覧を表示している最中でも `:` キーで COMMAND モード
 
 ```java
 // processFilerKey() 内、一覧表示中（!filerSearchMode）の分岐
-if (keyChar == ':') {
+if (keyChar == ':' || keyChar == ';') {
+    filerCommandOrigin = true;
     exitFiler();
     enterCommandMode();
 }
 ```
+
+`;` は NORMAL/VISUAL系モードで既に `KeymapRegistry` により `:` のVim式エイリアスとして
+束縛されているのと同じ理由で追加した（`keymap-conflict-resolution` スキル参照）。FILER は
+`KeymapRegistry` を経由しない独自のキー処理（`processFilerKey()`）のため、ここは同様に
+`keyChar == ';'` を素朴に追記するだけで対応している。同じ理由で `Mode.IMAGE`
+（`processImageKey()`）・`Mode.BINARY`（`processBinaryKey()`）の `:` ハードコード判定にも
+同時に `;` を追加した（いずれも同じ「読み取り専用/バイナリ編集の疑似バッファからCOMMANDへ
+入る」パターンのため。2026-07-29追記）。
 
 **設計判断**: 「FILER 用に `:cd`/`:e` を個別分岐する」のではなく、**まず `exitFiler()` で
 `:cd` 実行前の元バッファへ復元してから、通常の `enterCommandMode()` に入る**方式にした。
