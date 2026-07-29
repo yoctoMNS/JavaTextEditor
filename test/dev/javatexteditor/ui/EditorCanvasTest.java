@@ -441,13 +441,13 @@ public class EditorCanvasTest {
             pass += ok ? 1 : 0;
         }
 
-        // Test 29: adjustCellHeight - 最大値 80 でクランプされる
+        // Test 29: adjustCellHeight - 最大値 150 でクランプされる
         {
             EditorCanvas canvas = new EditorCanvas();
             canvas.adjustCellHeight(+1000);
-            boolean ok = canvas.getCellH() == 80;
+            boolean ok = canvas.getCellH() == 150;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
-                + "adjustCellHeight 最大クランプ == 80, actual=" + canvas.getCellH());
+                + "adjustCellHeight 最大クランプ == 150, actual=" + canvas.getCellH());
             pass += ok ? 1 : 0;
         }
 
