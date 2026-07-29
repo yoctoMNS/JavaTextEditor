@@ -23,11 +23,23 @@ import java.nio.file.Path;
  * TTF実体は lib/fonts/IBMPlexMono-Regular.ttf に配置される（scripts/setup.sh/setup.bat が
  * ダウンロードする外部リソース。lib/ は .gitignore 対象のためリポジトリには含まれない）。
  * 見つからない場合は Font.MONOSPACED にフォールバックする。
+ *
+ * <p>{@link #BASE_CELL_W}/{@link #BASE_CELL_H}（Ctrl+Shift+矢印で一度もリサイズしていない
+ * :font 1 選択直後の既定セルサイズ）は MiscFixedBold9x15 の値を流用せず、IBM Plex Mono
+ * Regular 自体のフォントメトリクスから算出した値。TTF の hhea/hmtx テーブルを実測すると
+ * unitsPerEm=1000・ascender=1025・descender=-275・advanceWidth('M')=600 であり、
+ * このクラスが実際に描画で使う {@link FontMetrics}（AWT実測、ascent+descentがフォントの
+ * 行高）でも advance/cellH ≒ 0.458（600/1310px相当、REF_SIZE=100pt換算で実測: advance=60,
+ * ascent+descent=131）と、hhea由来の比率(600/1300≒0.4615)にほぼ一致する。この実測比率を
+ * MiscFixedの既定高さ(15px)に当てはめて BASE_CELL_H=15・BASE_CELL_W=round(15*0.458)=7 とした
+ * （幅だけを見て「9x15をそのまま流用」にならないよう、高さを既定値に合わせた上で幅を
+ * 比率から逆算する形にしている。単純な3:5(0.6)ではなく実測比率を採用した理由は
+ * font-and-statusline-animation SKILL.md 参照）。
  */
 public final class IbmPlexMonoFont implements MonoFont {
 
-    public static final int BASE_CELL_W = 10;
-    public static final int BASE_CELL_H = 20;
+    public static final int BASE_CELL_W = 7;
+    public static final int BASE_CELL_H = 15;
     public static final int FIRST_CHAR  = 0x20;
     public static final int LAST_CHAR   = 0x7E;
 
