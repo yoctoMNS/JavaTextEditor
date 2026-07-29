@@ -18,6 +18,8 @@ public class ReplaceCharTest {
         testReplaceCursorPosition();
         testReplaceStaysInNormalMode();
         testReplaceUndo();
+        testReplaceUppercaseChar();
+        testReplaceUppercaseWithRealKeyEvent();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -99,6 +101,34 @@ public class ReplaceCharTest {
         pressKey(ed, 'u');
         pressKey(ed, 'u');
         check("undoで置換前のテキストに戻る", ed.getText().equals("abcdef"));
+    }
+
+    // r 後の大文字置換（A-Z）が弾かれないことの回帰テスト。
+    // pressKey() 経由（keyCode=VK_UNDEFINED, modifiers=0）での確認。
+    static void testReplaceUppercaseChar() {
+        System.out.println("[r: 大文字での置換]");
+        ModalEditor ed = new ModalEditor("abcdef");
+        pressKey(ed, 'r');
+        pressKey(ed, 'A');
+        check("大文字1文字で置換される", ed.getText().equals("Abcdef"));
+
+        ModalEditor ed2 = new ModalEditor("abcdef");
+        pressKey(ed2, '3');
+        pressKey(ed2, 'r');
+        pressKey(ed2, 'Q');
+        check("カウント付きでも大文字で置換される", ed2.getText().equals("QQQdef"));
+    }
+
+    // GlobalKeyDispatcher が KEY_PRESSED で実際に渡す形（keyCode=VK_x, keyChar=大文字,
+    // modifiers=SHIFT_DOWN_MASK）を直接再現した確認。pressKey() のような keyCode=VK_UNDEFINED
+    // の簡易呼び出しだけでは、実キー入力時の keyCode 経由の分岐（matches() 等）を通さないため、
+    // 実際のキーイベントに近い形でも別途確認する。
+    static void testReplaceUppercaseWithRealKeyEvent() {
+        System.out.println("[r: 実キーイベント相当（keyCode+SHIFT_DOWN_MASK）での大文字置換]");
+        ModalEditor ed = new ModalEditor("hello world");
+        ed.processKey(KeyEvent.VK_R, 'r', 0);
+        ed.processKey(KeyEvent.VK_Z, 'Z', KeyEvent.SHIFT_DOWN_MASK);
+        check("keyCode+SHIFT_DOWN_MASKで渡された大文字でも置換される", ed.getText().equals("Zello world"));
     }
 
     // ユーティリティ
