@@ -3201,10 +3201,10 @@ public class ModalEditor {
                     return false;
                 }
                 Files.write(targetPath, bytes);
-                statusMessage = "\"" + targetPath + "\" written (" + bytes.length + " bytes)";
+                statusMessage = "\"" + PathDisplay.baseName(targetPath.toString()) + "\" written (" + bytes.length + " bytes)";
             } else {
                 Files.writeString(targetPath, buffer.getText());
-                statusMessage = "\"" + targetPath + "\" written";
+                statusMessage = "\"" + PathDisplay.baseName(targetPath.toString()) + "\" written";
             }
             buffer.markSaved();
             // 相対パス指定 or 新規ファイルの初回保存でも、以後は常に絶対パスで
@@ -3662,7 +3662,7 @@ public class ModalEditor {
         pendingNewFilePath = displayPath;
         pendingNewFileAction = onConfirmed;
         mode = Mode.CONFIRM_NEW_FILE;
-        statusMessage = "\"" + displayPath + "\" は存在しません。新規作成しますか？ (y/n)";
+        statusMessage = "\"" + PathDisplay.baseName(displayPath) + "\" は存在しません。新規作成しますか？ (y/n)";
     }
 
     private void processConfirmNewFileKey(int keyCode, char keyChar) {
@@ -3690,7 +3690,7 @@ public class ModalEditor {
             cursorRow = 0;
             cursorCol = 0;
             resetSearchAndResultState();
-            statusMessage = "\"" + path + "\" [新規ファイル]";
+            statusMessage = "\"" + PathDisplay.baseName(path) + "\" [新規ファイル]";
             // 既存ファイルを開く場合と同様に登録する。登録しないと switchToRelativeBuffer()
             // が BUFFER_REGISTRY 上でこのバッファを見つけられず、Ctrl+U/Ctrl+P で
             // 元々開いていた他のバッファへ戻れなくなる（新規ファイル作成直後の既知の不具合）。
@@ -3710,16 +3710,16 @@ public class ModalEditor {
                 currentFilePath = null;
                 cursorRow = 0;
                 cursorCol = 0;
-                statusMessage = "\"" + path + "\" [class, read-only preview]";
+                statusMessage = "\"" + PathDisplay.baseName(path) + "\" [class, read-only preview]";
             } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), name, path);
-                statusMessage = "\"" + path + "\" [binary] " + result.rawBytes().length + " bytes";
+                statusMessage = "\"" + PathDisplay.baseName(path) + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
                 buffer = acquireBufferForOpen(path, result.text());
                 currentFilePath = path;
                 cursorRow = 0;
                 cursorCol = 0;
-                statusMessage = "\"" + path + "\" opened";
+                statusMessage = "\"" + PathDisplay.baseName(path) + "\" opened";
             }
             trackClassFileBuffer(result);
             if (result.classFileBytes() == null && onFileOpened != null) {
@@ -5218,7 +5218,7 @@ public class ModalEditor {
             if (!Files.exists(target)) {
                 cdConfirmTarget = target;
                 mode = Mode.CD_CONFIRM_CREATE;
-                statusMessage = "ディレクトリが存在しません: " + target + " 新規作成しますか? (y/n)";
+                statusMessage = "ディレクトリが存在しません: " + PathDisplay.baseName(target.toString()) + " 新規作成しますか? (y/n)";
                 return;
             }
             applyChangeDirectory(target);
