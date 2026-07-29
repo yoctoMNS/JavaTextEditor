@@ -21,6 +21,7 @@ public class FontSizeCommandTest {
         testStepZeroIsBaseSize();
         testStepNineIsMaxSize();
         testStepIsIdempotentRegardlessOfCurrentSize();
+        testSequentialStepSwitchesAlwaysLandOnSameAbsoluteSize();
         testInvalidArgShowsErrorAndDoesNotChangeSize();
         testOutOfRangeStepIsRejected();
         testNoCanvasShowsError();
@@ -71,6 +72,28 @@ public class FontSizeCommandTest {
         sendCommand(ed, "fs 3");
         check(":fs 3 は現在サイズに関わらず幅36になる (9*4)", 36, canvas.getCellW());
         check(":fs 3 は現在サイズに関わらず高さ60になる (15*4)", 60, canvas.getCellH());
+    }
+
+    /**
+     * :fs 3 の後に :fs 1 に戻れなくなる不具合の再発防止テスト。
+     * 同一のcanvas/editorインスタンスに対し、:fs N を昇順・降順・ランダムな順序で
+     * 連続実行しても、各Nは常にテーブル上の同じ絶対値(9*(N+1) x 15*(N+1))になることを確認する。
+     */
+    static void testSequentialStepSwitchesAlwaysLandOnSameAbsoluteSize() {
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setInitialCellSize(9, 15);
+        ModalEditor ed = new ModalEditor("abc", canvas);
+
+        int[] order = {0, 3, 1, 9, 5, 3, 1, 0, 2, 8, 1};
+        for (int step : order) {
+            sendCommand(ed, "fs " + step);
+            int expectedW = 9 * (step + 1);
+            int expectedH = 15 * (step + 1);
+            check(":fs " + step + " は実行順序に関わらず幅が " + expectedW + " になる",
+                expectedW, canvas.getCellW());
+            check(":fs " + step + " は実行順序に関わらず高さが " + expectedH + " になる",
+                expectedH, canvas.getCellH());
+        }
     }
 
     static void testInvalidArgShowsErrorAndDoesNotChangeSize() {
