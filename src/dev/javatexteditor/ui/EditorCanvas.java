@@ -70,6 +70,15 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     // スプラッシュ画面フラグ（true のとき通常テキストの代わりにスプラッシュを描画）
     private boolean showSplash = false;
 
+    // 画像プレビュー（C2方式: EditorCanvas単一のまま内部に画像描画モードを持つ。CardLayout不採用）。
+    // 実際の拡縮・描画ロジックは ImageRenderer に委譲する。scrollRow/scrollCol は既存の
+    // テキストスクロールと全く同じフィールドをパンオフセット（セル単位）として流用する（F3）。
+    private BufferedImage imageBuffer = null;
+    private boolean imageViewActive = false;
+    private boolean imageAutoFit = true;
+    private double imageZoom = ImageRenderer.DEFAULT_ZOOM;
+    private boolean imageLoading = false;
+
     // IME変換中の未確定文字列（preedit）。確定前のためバッファには含まれないが、
     // カーソル位置にオーバーレイ表示することでリアルタイムに何を入力中か分かるようにする。
     // ネイティブIME側の候補ウィンドウ（getTextLocation参照）とは表示位置を意図的にずらし、
@@ -808,6 +817,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         requestRepaint();
     }
 
+    /**
+     * 画像プレビュー表示状態をまとめて反映する。ModalEditor.syncCanvas() の batchUpdate 内から呼ぶ。
+     * active=false のときは他のフィールドの値に関わらず通常のテキスト描画へ戻る。
+     */
+    public void setImageView(BufferedImage image, boolean active, boolean autoFit, double zoom, boolean loading) {
+        this.imageBuffer = image;
+        this.imageViewActive = active;
+        this.imageAutoFit = autoFit;
+        this.imageZoom = zoom;
+        this.imageLoading = loading;
+        requestRepaint();
+    }
+
+    public boolean isImageViewActive() { return imageViewActive; }
+
     public boolean isShowSplash() { return showSplash; }
 
     /**
@@ -1143,6 +1167,20 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         if (showSplash) {
             drawSplashScreen(g2, charWidth, lineHeight);
             g2.setFont(getSwingFont()); // splash が内部でフォントを変えるのでリセット
+            drawStatusLine(g2, lineHeight);
+            return;
+        }
+
+        // 画像プレビュー（C2方式）: 実処理は ImageRenderer に委譲する薄い分岐のみここに置く。
+        if (imageViewActive) {
+            int viewportH = getHeight() - lineHeight; // 最下部1行はステータス行に確保する
+            if (imageLoading || imageBuffer == null) {
+                ImageRenderer.paintCenteredMessage(g2, ImageRenderer.LOADING_TEXT,
+                    0, 0, getWidth(), viewportH, theme.foreground);
+            } else {
+                ImageRenderer.paint(g2, imageBuffer, 0, 0, getWidth(), viewportH,
+                    imageAutoFit, imageZoom, scrollCol, scrollRow, charWidth, lineHeight);
+            }
             drawStatusLine(g2, lineHeight);
             return;
         }
