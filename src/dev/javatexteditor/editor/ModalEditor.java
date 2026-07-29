@@ -1685,11 +1685,12 @@ public class ModalEditor {
      * COMMAND モードでコマンド実行後に戻るべきモードを判定する。
      * buffer が Mode.BINARY 用に作られたインスタンス（binaryModeOwner）と参照一致するなら
      * :w 等の他コマンド実行後もそのまま BINARY へ戻す（さもないと hexdump の固定レイアウトの
-     * 上に通常の NORMAL 編集キーが効いてしまい構造が壊れる）。:b 自身が呼ばれた場合は
-     * toggleBinaryMode() が mode を明示的に変更済みのため、この判定は素通りする
-     * （呼び出し元は mode==COMMAND のときのみこの戻り値を使うガードになっている）。
+     * 上に通常の NORMAL 編集キーが効いてしまい構造が壊れる）。imageModeOwner も同じ理由で
+     * IMAGE へ戻す。:b 自身が呼ばれた場合は toggleBinaryMode() が mode を明示的に変更済みのため、
+     * この判定は素通りする（呼び出し元は mode==COMMAND のときのみこの戻り値を使うガードになっている）。
      */
     private Mode modeAfterCommand() {
+        if (imageModeOwner == buffer) return Mode.IMAGE;
         return (binaryModeOwner == buffer) ? Mode.BINARY : Mode.NORMAL;
     }
 
@@ -2395,13 +2396,15 @@ public class ModalEditor {
 
     /** telescope セッションを終了し、beginTelescopeSession() で退避した元バッファに戻す。 */
     private void exitTelescope() {
-        mode = Mode.NORMAL;
         telescopePicker = null;
         telescopePurpose = TelescopePurpose.NAVIGATE;
         telescopeResults = List.of();
         telescopeQuery.setLength(0);
         telescopeSelectedIdx = 0;
         restoreFromStash(telescopeStash);
+        // SPC+b は Mode.IMAGE からも開けるため（modeAfterCommand()と同じ参照一致判定で
+        // 呼び出し元のモードへ戻す。restoreFromStash() 後の buffer で判定する必要がある）。
+        mode = modeAfterCommand();
         grepResults = telescopeSavedGrepResults;
         grepBaseDir = telescopeSavedGrepBaseDir;
         fileNameResults = telescopeSavedFileNameResults;
@@ -3636,10 +3639,24 @@ public class ModalEditor {
      * パン（F3、既存テキストスクロールと同じ canvas.scrollRow/scrollCol をそのまま流用する）。
      */
     private void processImageKey(int keyCode, char keyChar, int modifiers) {
+        if (pendingSequence.equals(" ")) {
+            pendingSequence = "";
+            statusMessage = "";
+            if (matches(keyCode, keyChar, KeyEvent.VK_B, 'b')) { enterTelescope("buffers"); }
+            return;
+        }
         if (keyChar == ':') {
             commandBuffer.setLength(0);
             statusMessage = "";
             mode = Mode.COMMAND;
+            return;
+        }
+        // SPC+b: telescope buffers（画像プレビュー中もバッファ一覧を開けるようにする。
+        // NORMALモードのhandlePendingSequence()と同じ2打鍵方式だが、IMAGEではb以外は使わないため
+        // 専用の簡略実装にした）。
+        if (keyChar == ' ') {
+            pendingSequence = " ";
+            statusMessage = "SPC-";
             return;
         }
         if (keyChar == '+' || keyChar == '=') {
@@ -5618,10 +5635,16 @@ public class ModalEditor {
 
                 canvas.setSelectionView(currentSelectionView());
 
-                canvas.ensureCursorVisible(cursorRow);
                 String[] lines = canvasCachedLines;
                 String curLine = (cursorRow < lines.length) ? lines[cursorRow] : "";
-                canvas.ensureCursorColVisible(cursorCol, curLine);
+                // Mode.IMAGEではcursorRow/Colは常に0のまま使われず、scrollRow/scrollColは
+                // カーソル追従ではなく手動パン（processImageKeyのhjkl/矢印）専用の意味に変わる。
+                // ここでensureCursorVisible*を呼ぶとカーソル(0,0)を可視化しようとして毎回
+                // scrollRow/scrollColが0へ巻き戻され、パンが効かなくなるため呼ばない。
+                if (mode != Mode.IMAGE) {
+                    canvas.ensureCursorVisible(cursorRow);
+                    canvas.ensureCursorColVisible(cursorCol, curLine);
+                }
 
                 // ステータスバー用カーソル位置ラベル "(行数:トータル文字数)"。
                 // 全角/半角とも1文字として数える（String基準のcursorCol/lines[].length()をそのまま使うため、

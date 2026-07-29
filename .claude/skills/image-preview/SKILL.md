@@ -100,6 +100,30 @@ Swing非依存の静的メソッドとして切り出してあり、`ImageRender
 | テスト用に`simulateImageLoadFailureForTest(Path)`をpackage-private公開 | `SwingWorker`の`doInBackground()`は別スレッドで実行されるため、「`isImageFile()`の事前チェック後、非同期読み込みが完了する前にファイルが壊れる」という失敗経路をテストで安定的にレースさせることはできない（`editor-testing-strategy`スキルの方針どおり、GUIスレッド依存の厳密な検証は避けた）。かわりに`applyImageLoadFailure()`を直接呼び出せるテスト専用フックを追加し、フォールバック処理そのものを決定的に検証している。 |
 | 非同期読み込み成功パスは`SwingUtilities.invokeAndWait`でEventQueueを手動ポンプして待つ | `ImagePreviewTest`はヘッドレス環境で実行されるが、`SwingWorker`は可視コンポーネントを必要としないため`EventQueue`自体は動作する。`done()`が`invokeLater`でキューされるのを待つため、`isImageLoadPending()`がfalseになるかタイムアウトするまで`Thread.sleep`+`SwingUtilities.invokeAndWait(() -> {})`を繰り返すポーリングを行っている。 |
 
+## 既知の不具合と修正（2026-07-29 実装当日中に発覚・修正）
+
+初回実装直後、以下2点が動作しないという報告を受け、同日中に修正した。
+
+- **hjkl/矢印キーによるパンが効かない**: `ModalEditor.syncCanvas()`が、モードに関わらず
+  `canvas.ensureCursorVisible(cursorRow)`/`canvas.ensureCursorColVisible(cursorCol, curLine)`を
+  無条件に呼んでいた。Mode.IMAGEでは`cursorRow`/`cursorCol`は常に`0`のまま未使用だが、
+  `scrollRow`/`scrollCol`は`processImageKey`のパン専用フィールドとして流用されているため、
+  「カーソル(0,0)を可視化する」ロジックが`processKey()`末尾の`syncCanvas()`呼び出しのたびに
+  `scrollRow`/`scrollCol`を`0`へ強制的に巻き戻し、パンした直後の描画で毎回打ち消されていた。
+  `syncCanvas()`側で`mode != Mode.IMAGE`のときのみこの2呼び出しを行うよう修正した。
+- **画像プレビュー中に`SPC+b`（バッファ一覧）が開けない**: `SPC+b`はNORMALモードの
+  `handlePendingSequence()`にのみ実装されていたため、`processImageKey()`はそもそも`SPC`を
+  認識しなかった。`processImageKey()`に最小限の2打鍵シーケンス（`pendingSequence`を`" "`として
+  再利用）を追加し、`enterTelescope("buffers")`を呼べるようにした。あわせて
+  `exitTelescope()`が`mode`を無条件に`Mode.NORMAL`へ戻していたため、Mode.IMAGEから開いた
+  バッファ一覧をEscでキャンセルすると画像プレビューへ戻れず通常のNORMAL編集画面に落ちてしまう
+  不具合も発覚し、`modeAfterCommand()`（`buffer`の参照一致で戻り先モードを判定する既存ヘルパー、
+  元は`:`コマンド用）に`imageModeOwner`判定を追加し、`exitTelescope()`側でも`restoreFromStash()`
+  後にこれを再利用して戻り先を決定するよう修正した。`openTelescopeSelection()`は
+  `exitTelescope()`の直後に`openBufferEntry()`で実際に選択されたファイルを開くため、
+  選択して確定する経路（Enter）はこの修正の影響を受けない（常に選択先のファイル種別で
+  正しいモードへ入る）。
+
 ## 意図的にスコープ外とした点
 
 - **画像の編集（回転・トリミング・リサイズ保存等）は一切実装していない**。読み取り専用プレビュー
@@ -117,7 +141,7 @@ Swing非依存の静的メソッドとして切り出してあり、`ImageRender
   `computeFitSize`（横長/縦長画像・拡大/縮小両対応・境界値・不正入力）・`computeZoomSize`・
   `zoomIn`/`zoomOut`のクランプ・`clampOffset`（範囲内/負値/上限超過/ビューポートより小さい画像）
   を検証。Swing非依存のため純粋ロジックとして直接テストできる。
-- `test/dev/javatexteditor/editor/ImagePreviewTest.java`（25テスト）: `Main.isImageFile()`の
+- `test/dev/javatexteditor/editor/ImagePreviewTest.java`（32テスト）: `Main.isImageFile()`の
   拡張子+`ImageIO.read()`二段判定（正常png/非画像拡張子/拡張子だけ画像の壊れたファイル/存在しない
   ファイル）、`:e`で画像を開くと即座にMode.IMAGEへ入ること、非同期読み込み完了後に正しい
   `BufferedImage`（幅・高さ一致）が反映されること、別バッファへ切り替えると`imageModeOwner`の

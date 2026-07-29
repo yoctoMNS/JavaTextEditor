@@ -31,6 +31,8 @@ public class ImagePreviewTest {
         testZoomKeysDisableAutoFitAndClamp();
         testResetKeyRestoresAutoFit();
         testCorruptImageFallsBackWithErrorMessage();
+        testPanKeysMoveScrollAndSurviveSyncCanvas();
+        testSpaceBOpensBufferPickerFromImageModeAndReturnsOnEscape();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -192,5 +194,51 @@ public class ImagePreviewTest {
         assertTrue("読み込み失敗後はMode.IMAGEを抜ける", !ed.isImageMode());
         assertTrue("読み込み失敗のエラーメッセージが表示される",
             ed.getStatusMessage().contains("表示できません"));
+    }
+
+    /**
+     * 回帰テスト: syncCanvas()がensureCursorVisible*を無条件に呼んでいたため、
+     * cursorRow/Col=0のままのMode.IMAGEではパン直後にscrollRow/Colが毎回0へ巻き戻され、
+     * hjkl/矢印キーによるパンが実質効かなかった不具合。
+     */
+    static void testPanKeysMoveScrollAndSurviveSyncCanvas() throws Exception {
+        Path png = writeTempPng("image-preview-k", 2000, 2000);
+        dev.javatexteditor.ui.EditorCanvas canvas = new dev.javatexteditor.ui.EditorCanvas();
+        canvas.setSize(200, 200);
+        ModalEditor ed = new ModalEditor("", canvas);
+        openViaCommand(ed, png.toString());
+        waitForImageLoad(ed);
+
+        ed.processKey(KeyEvent.VK_UNDEFINED, '+', 0);
+        for (int i = 0; i < 10; i++) ed.processKey(KeyEvent.VK_UNDEFINED, '+', 0);
+        for (int i = 0; i < 5; i++) ed.processKey(KeyEvent.VK_UNDEFINED, 'l', 0);
+        assertTrue("lキーでパンした後もscrollColが0に巻き戻らない", canvas.getScrollCol() > 0);
+        for (int i = 0; i < 5; i++) ed.processKey(KeyEvent.VK_UNDEFINED, 'j', 0);
+        assertTrue("jキーでパンした後もscrollRowが0に巻き戻らない", canvas.getScrollRow() > 0);
+
+        ed.processKey(KeyEvent.VK_UNDEFINED, 'h', 0);
+        ed.processKey(KeyEvent.VK_UNDEFINED, 'k', 0);
+        assertTrue("hキーでscrollColが減る", canvas.getScrollCol() >= 0);
+        assertTrue("kキーでscrollRowが減る", canvas.getScrollRow() >= 0);
+    }
+
+    /**
+     * 回帰テスト: SPC+bはNORMALモード専用実装だったため、Mode.IMAGE中はバッファ一覧を
+     * 開けなかった。processImageKey()にSPC+bを追加し、exitTelescope()もimageModeOwnerを
+     * 見てMode.IMAGEへ戻すよう修正した（modeAfterCommand()と同じ参照一致判定を再利用）。
+     */
+    static void testSpaceBOpensBufferPickerFromImageModeAndReturnsOnEscape() throws Exception {
+        Path png = writeTempPng("image-preview-l", 6, 6);
+        ModalEditor ed = new ModalEditor("");
+        openViaCommand(ed, png.toString());
+        waitForImageLoad(ed);
+        assertTrue("画像読み込み後はMode.IMAGE", ed.isImageMode());
+
+        ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
+        ed.processKey(KeyEvent.VK_B, 'b', 0);
+        assertTrue("SPC+bでMode.IMAGEからもTELESCOPEへ入れる", ed.isTelescopeMode());
+
+        ed.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+        assertTrue("Escでキャンセルすると元のMode.IMAGEへ戻る", ed.isImageMode());
     }
 }
