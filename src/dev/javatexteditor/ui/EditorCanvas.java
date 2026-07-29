@@ -666,10 +666,12 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /**
      * 起動時に一度だけ、絶対値でセルサイズを設定する（4K等の高解像度ディスプレイでフォントが
      * 小さすぎるのを防ぐため）。以後はユーザーが Ctrl+Shift+矢印で自由に変更できる。
+     * 上限は :fs コマンド（MiscFixedの9x15整数倍10段階、最大90x150）を収める値まで
+     * 拡張してある（2026-07-29決定。下限はCtrl+Shift+矢印の既存挙動を壊さないため維持）。
      */
     public void setInitialCellSize(int w, int h) {
-        cellW = Math.max(5, Math.min(40, w));
-        cellH = Math.max(8, Math.min(80, h));
+        cellW = Math.max(5, Math.min(90, w));
+        cellH = Math.max(8, Math.min(150, h));
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         cachedLineHeight = cellH;
