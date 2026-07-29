@@ -1,5 +1,6 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.Main;
 import dev.javatexteditor.analysis.AutoImportHandler;
 import dev.javatexteditor.analysis.BindingDefinitionResolver;
 import dev.javatexteditor.analysis.CIncludeManager;
@@ -42,11 +43,15 @@ import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
 import dev.javatexteditor.ui.IbmPlexMonoFont;
 import dev.javatexteditor.ui.MiscFixedBold9x15;
+import dev.javatexteditor.ui.ImageRenderer;
 import dev.javatexteditor.ui.SelectionView;
 import dev.javatexteditor.ui.TelescopeView;
 import dev.javatexteditor.ui.Theme;
 import java.awt.event.KeyEvent;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
+import javax.imageio.ImageIO;
+import javax.swing.SwingWorker;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -76,7 +81,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE, IMAGE }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -366,6 +371,16 @@ public class ModalEditor {
     private final PseudoBufferStash markdownViewStash = new PseudoBufferStash();
     private UndoablePieceTable markdownViewOwner = null;
 
+    // 画像プレビュー（image-preview-spec-2026-07-29.md）。C2方式: EditorCanvasは単一のまま、
+    // 状態は ModalEditor 側に保持する。imageModeOwner は binaryModeOwner/classFileBufferOwner と
+    // 同じ「参照一致による自動失効」パターン（buffer は約25箇所で再代入されるため）。
+    private UndoablePieceTable imageModeOwner = null;
+    private BufferedImage imageBuffer = null;
+    private boolean imageAutoFit = true;
+    private double imageZoom = ImageRenderer.DEFAULT_ZOOM;
+    private boolean imageLoadPending = false;
+    private SwingWorker<BufferedImage, Void> imageLoadWorker = null;
+
     // 入力補完状態（INSERT モード内で管理）
     private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
     private final CompletionPopupState completion = new CompletionPopupState();
@@ -612,6 +627,7 @@ public class ModalEditor {
                 case FILER         -> processFilerKey(keyCode, keyChar, modifiers);
                 case CLASSPATH_INPUT -> processClasspathInputKey(keyCode, keyChar);
                 case BINARY        -> processBinaryKey(keyCode, keyChar, modifiers);
+                case IMAGE         -> processImageKey(keyCode, keyChar, modifiers);
                 case CONFIRM_NEW_FILE -> processConfirmNewFileKey(keyCode, keyChar);
                 case CD_CONFIRM_CREATE -> processCdConfirmCreateKey(keyCode, keyChar);
             }
@@ -2307,6 +2323,15 @@ public class ModalEditor {
             return;
         }
         if (target.filePath() == null) return;
+        releaseImageBufferIfActive();
+        Path p0 = Path.of(target.filePath());
+        if (Main.isImageFile(p0)) {
+            fileNameResults = null;
+            grepResults = null;
+            clearSearchHighlights();
+            enterImageMode(p0, p0.getFileName().toString());
+            return;
+        }
         try {
             Path p = Path.of(target.filePath());
             FileLoadResult result = readFileContentForBuffer(p);
@@ -2445,6 +2470,13 @@ public class ModalEditor {
         String relPath = fileNameResults.get(resultIdx);
         Path base = (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
         Path target = base.resolve(relPath);
+        releaseImageBufferIfActive();
+        if (Main.isImageFile(target)) {
+            fileNameResults = null;
+            clearSearchHighlights();
+            enterImageMode(target, relPath);
+            return;
+        }
         try {
             FileLoadResult result = readFileContentForBuffer(target);
             fileNameResults = null;
@@ -3485,6 +3517,163 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
+    // 画像プレビュー（Mode.IMAGE。png/jpg/jpeg/gif/bmp を開いた際の全画面プレビュー）
+    // -------------------------------------------------------------------------
+
+    /**
+     * 進行中の画像読み込み・保持中の画像リソースを解放する。binaryModeOwner 等と同じ
+     * 「参照一致による自動失効」パターンに加え、BufferedImage は明示的な flush() が必要なため
+     * （image-preview-spec §4「解放」）、新しい画像を開く直前・別種のファイルへ切り替える直前の
+     * 両方でこのメソッドを呼ぶ。冪等（既に何も保持していなければ何もしない）。
+     */
+    private void releaseImageBufferIfActive() {
+        if (imageLoadWorker != null) {
+            imageLoadWorker.cancel(true);
+            imageLoadWorker = null;
+        }
+        if (imageBuffer != null) {
+            imageBuffer.flush();
+            imageBuffer = null;
+        }
+        imageModeOwner = null;
+        imageLoadPending = false;
+        imageAutoFit = true;
+        imageZoom = ImageRenderer.DEFAULT_ZOOM;
+    }
+
+    /**
+     * 画像ファイルを開く。呼び出し側で {@link Main#isImageFile} により既に画像と判定済みの
+     * パスを渡すこと。{@link SwingWorker} で非同期に {@link ImageIO#read} する（A2）。
+     * 読み込み中はプレースホルダの疑似バッファ（currentFilePath=null、classfile/markdownビューアと
+     * 同じ読み取り専用プレビュー方式）を表示する。
+     */
+    private void enterImageMode(Path path, String displayLabel) {
+        releaseImageBufferIfActive();
+        buffer = new UndoablePieceTable("*image* " + displayLabel + "\n\n" + ImageRenderer.LOADING_TEXT + "\n");
+        currentFilePath = null;
+        cursorRow = 0;
+        cursorCol = 0;
+        resetSearchAndResultState();
+        imageModeOwner = buffer;
+        imageLoadPending = true;
+        mode = Mode.IMAGE;
+        statusMessage = "\"" + displayLabel + "\" [image] " + ImageRenderer.LOADING_TEXT;
+        if (canvas != null) {
+            canvas.setScrollRow(0);
+            canvas.setScrollCol(0);
+        }
+
+        UndoablePieceTable owner = buffer;
+        SwingWorker<BufferedImage, Void> worker = new SwingWorker<>() {
+            @Override
+            protected BufferedImage doInBackground() throws IOException {
+                return ImageIO.read(path.toFile());
+            }
+
+            @Override
+            protected void done() {
+                if (isCancelled()) return;
+                if (imageModeOwner != owner) return; // 既に別バッファへ切り替え済み
+                BufferedImage loaded;
+                try {
+                    loaded = get();
+                } catch (Exception e) {
+                    loaded = null;
+                }
+                imageLoadPending = false;
+                if (loaded == null) {
+                    applyImageLoadFailure(path, owner);
+                } else {
+                    imageBuffer = loaded;
+                    statusMessage = "\"" + displayLabel + "\" [image] " + loaded.getWidth() + "x" + loaded.getHeight();
+                    syncCanvas();
+                }
+            }
+        };
+        imageLoadWorker = worker;
+        worker.execute();
+    }
+
+    /**
+     * 読み込み失敗時のフォールバック（E3、spec §5）。画像として表示できない旨のエラーメッセージを
+     * 出しつつ、既存の readFileContentForBuffer() による通常のファイルオープン処理へ素通りする。
+     * 実際の画像バイナリはUTF-8として不正なため BinaryFileDetector により自動的に Mode.BINARY
+     * （既存の :b と同じ hexdump プレビュー）へ入る。文字化けや破損ファイルとフォーマット非対応は
+     * 区別しない（spec §5）。
+     */
+    private void applyImageLoadFailure(Path path, UndoablePieceTable owner) {
+        if (imageModeOwner != owner) return;
+        imageModeOwner = null;
+        try {
+            FileLoadResult result = readFileContentForBuffer(path);
+            String name = path.getFileName().toString();
+            if (result.classFileBytes() != null) {
+                buffer = new UndoablePieceTable(result.text());
+                currentFilePath = null;
+            } else if (result.binary()) {
+                enterBinaryMode(result.rawBytes(), name, path.toString());
+            } else {
+                buffer = acquireBufferForOpen(path.toString(), result.text());
+                currentFilePath = path.toString();
+            }
+            trackClassFileBuffer(result);
+            if (mode == Mode.IMAGE) mode = Mode.NORMAL;
+            cursorRow = 0;
+            cursorCol = 0;
+            statusMessage = "この画像を表示できません（:b でバイナリ表示）";
+        } catch (IOException e) {
+            if (mode == Mode.IMAGE) mode = Mode.NORMAL;
+            statusMessage = "この画像を表示できません（:b でバイナリ表示）";
+        }
+        syncCanvas();
+    }
+
+    private static final int IMAGE_PAN_STEP_CELLS = 3;
+
+    /**
+     * Mode.IMAGE 専用のキー処理。`:` でCOMMANDモードへ（`:q`/`:e`等の既存コマンドをそのまま使う）、
+     * `+`/`-`で手動ズーム（自動フィットを解除）、`0`で自動フィットへリセット、hjkl/矢印キーで
+     * パン（F3、既存テキストスクロールと同じ canvas.scrollRow/scrollCol をそのまま流用する）。
+     */
+    private void processImageKey(int keyCode, char keyChar, int modifiers) {
+        if (keyChar == ':') {
+            commandBuffer.setLength(0);
+            statusMessage = "";
+            mode = Mode.COMMAND;
+            return;
+        }
+        if (keyChar == '+' || keyChar == '=') {
+            imageAutoFit = false;
+            imageZoom = ImageRenderer.zoomIn(imageZoom);
+            return;
+        }
+        if (keyChar == '-') {
+            imageAutoFit = false;
+            imageZoom = ImageRenderer.zoomOut(imageZoom);
+            return;
+        }
+        if (keyChar == '0') {
+            imageAutoFit = true;
+            imageZoom = ImageRenderer.DEFAULT_ZOOM;
+            if (canvas != null) {
+                canvas.setScrollRow(0);
+                canvas.setScrollCol(0);
+            }
+            return;
+        }
+        if (canvas == null) return;
+        if (keyCode == KeyEvent.VK_LEFT || keyChar == 'h') {
+            canvas.setScrollCol(Math.max(0, canvas.getScrollCol() - IMAGE_PAN_STEP_CELLS));
+        } else if (keyCode == KeyEvent.VK_RIGHT || keyChar == 'l') {
+            canvas.setScrollCol(canvas.getScrollCol() + IMAGE_PAN_STEP_CELLS);
+        } else if (keyCode == KeyEvent.VK_UP || keyChar == 'k') {
+            canvas.setScrollRow(Math.max(0, canvas.getScrollRow() - IMAGE_PAN_STEP_CELLS));
+        } else if (keyCode == KeyEvent.VK_DOWN || keyChar == 'j') {
+            canvas.setScrollRow(canvas.getScrollRow() + IMAGE_PAN_STEP_CELLS);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Mode.BINARY（:b コマンド・非UTF-8ファイルの自動判定オープンで入る、
     // hexdumpをその場で1バイトずつ上書き編集できるバイナリエディタ）
     // -------------------------------------------------------------------------
@@ -3683,6 +3872,12 @@ public class ModalEditor {
 
     private void loadFromFile(String path) {
         Path p = Path.of(path);
+        releaseImageBufferIfActive();
+        if (Files.exists(p) && Main.isImageFile(p)) {
+            pushBuffer();
+            enterImageMode(p, p.getFileName().toString());
+            return;
+        }
         if (!Files.exists(p)) {
             pushBuffer();
             buffer = acquireBufferForOpen(path, "");
@@ -3883,6 +4078,14 @@ public class ModalEditor {
         SearchResult r = grepResults.get(resultIdx);
         Path base = (grepBaseDir != null) ? grepBaseDir : getProjectRoot();
         Path target = base.resolve(r.filePath());
+        releaseImageBufferIfActive();
+        if (Main.isImageFile(target)) {
+            inJdkSourceBuffer = false;
+            grepResults = null;
+            clearSearchHighlights();
+            enterImageMode(target, r.filePath());
+            return;
+        }
         try {
             FileLoadResult result = readFileContentForBuffer(target);
             inJdkSourceBuffer = false;
@@ -5407,6 +5610,11 @@ public class ModalEditor {
                 canvas.setErrorLines(errorLines);
                 canvas.setCursor(cursorRow, cursorCol);
                 canvas.setInsertMode(mode == Mode.INSERT);
+                if (imageModeOwner == buffer) {
+                    canvas.setImageView(imageBuffer, true, imageAutoFit, imageZoom, imageLoadPending);
+                } else {
+                    canvas.setImageView(null, false, true, ImageRenderer.DEFAULT_ZOOM, false);
+                }
 
                 canvas.setSelectionView(currentSelectionView());
 
@@ -5489,6 +5697,19 @@ public class ModalEditor {
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
     public boolean isVisualBlockMode() { return mode == Mode.VISUAL_BLOCK; }
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
+    /** テスト・外部連携用: 画像プレビュー(Mode.IMAGE)表示中かどうか。 */
+    public boolean isImageMode()          { return mode == Mode.IMAGE; }
+    public boolean isImageAutoFit()       { return imageAutoFit; }
+    public double getImageZoom()          { return imageZoom; }
+    public boolean isImageLoadPending()   { return imageLoadPending; }
+    public BufferedImage getImageBufferForTest() { return imageBuffer; }
+    /**
+     * テスト専用: SwingWorkerの非同期タイミングに依存せず読み込み失敗フォールバック（spec§5）を
+     * 決定的に再現するためのフック。事前に画像を開いて Mode.IMAGE に入った状態から呼ぶこと。
+     */
+    void simulateImageLoadFailureForTest(Path path) {
+        applyImageLoadFailure(path, imageModeOwner);
+    }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
     public boolean isBinaryMode()         { return mode == Mode.BINARY; }

@@ -111,6 +111,7 @@ project-root/
 | ㉘ | `vim-case-conversion` | Vim式大文字小文字変換（NORMALの`~`・`guu`/`gUU`/`g~~`、VISUAL/VISUAL_LINE/VISUAL_BLOCKの`u`/`U`/`~`） | ✅ 完了（23/23テスト・operator-pendingモーション（`guiw`等）は②の既存スコープ外判断を踏襲し未対応・doubled-letter方式のみ実装） |
 | ㉙ | `classfile-viewer` | `.class`ファイルを開いた際のJVM仕様通りの構造ビュー表示（マジックナンバー/定数プール/フィールド/メソッド/属性）・`:nimo`コマンドによるニーモニック（javap -c風）バイトコード逆アセンブル表示 | ✅ 完了（60/60テスト・`dev.javatexteditor.classfile`パッケージ新設・`readFileContentForBuffer`にマジックナンバー判定を追加・`:nimo`は`outputErrorLinesOwner`と同じ参照一致による自動失効パターン。`:b`コマンド（Mode.BINARY）とは別物の読み取り専用プレビューとしてマージ済み） |
 | ㉚ | `markdown-viewer` | `.md`/`.markdown`ファイルを開いた際は生ソースを表示し、`:view`コマンドで見出し下線・リスト正規化・インライン記法除去等を行う読み取り専用の閲覧ビューへ切り替え、`:mark`でソースへ戻す | ✅ 完了（98/98テスト・`dev.javatexteditor.markdown`パッケージ新設・`MarkdownRenderer`はSwing非依存の純粋ロジックで出力はASCII印字可能文字のみに限定・`classFileBufferOwner`と同じ参照一致による自動失効パターン・`currentFilePath`をnullにする読み取り専用プレビュー方式（jdk-source方式は不採用、理由はSKILL.md参照）） |
+| ㉛ | `image-preview` | 画像ファイル（png/jpg/jpeg/gif/bmp）を開いた際の全画面プレビュー（アスペクト比維持の自動フィット・`+`/`-`/`0`による手動ズーム・`hjkl`/矢印キーによるパン）、`SwingWorker`による非同期読み込み、読み込み失敗時はMode.BINARYへ自動フォールバック | ✅ 完了（38/38テスト・`Main.isImageFile()`（拡張子+`ImageIO.read()`二段判定）・`ui.ImageRenderer`（Swing非依存の拡縮計算+描画委譲）・新規`Mode.IMAGE`（`Mode.BINARY`と同じ独立モード方式、`KeymapRegistry`不使用）・`imageModeOwner`は既存の参照一致による自動失効パターンを踏襲・パンは既存の`scrollRow`/`scrollCol`をそのまま流用しJScrollPane/CardLayoutは不採用） |
 
 ### 依存関係（Skillを作る順序の制約）
 
