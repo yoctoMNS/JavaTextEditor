@@ -43,6 +43,10 @@ public class FilerTest {
         testCdCompleteJKNavigation();
         testCdTabEmptyPrefixListsAllDirs();
         testParentDirEntryNavigatesUp();
+        testColonInFilerEntersCommandModeAndCdSwitchesAndReloads();
+        testColonCdNonexistentFromFilerPromptsAndCreates();
+        testColonEFromFilerOpensExistingFile();
+        testColonENonexistentFromFilerPromptsAndCreatesBuffer();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -376,6 +380,84 @@ public class FilerTest {
             assertTrue("parent listing contains child dir", hasChild);
         } finally {
             deleteDir(parent);
+        }
+    }
+
+    // ── FILER表示中の :cd / :e 直接実行テスト（2026-07-29追加）────────────────
+
+    static void testColonInFilerEntersCommandModeAndCdSwitchesAndReloads() throws Exception {
+        Path root = Files.createTempDirectory("filer_colon_cd_root_");
+        try {
+            Path child = Files.createDirectory(root.resolve("child"));
+            Files.writeString(child.resolve("inner.txt"), "inner");
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+
+            // FILER表示中に ':' でCOMMANDモードへ入り、そのまま :cd を実行できる
+            typeCommand(editor, "cd " + child.toString());
+            assertTrue("still/again in filer mode after :cd from filer", editor.isFilerMode());
+            assertEquals("project root switched to child", child.toString(), editor.getProjectRoot().toString());
+            List<DirEntry> entries = editor.getFilerFiltered();
+            boolean hasInner = entries.stream().anyMatch(e -> e.name().equals("inner.txt"));
+            assertTrue("listing reloaded to show child's contents", hasInner);
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    static void testColonCdNonexistentFromFilerPromptsAndCreates() throws Exception {
+        Path root = Files.createTempDirectory("filer_colon_cd_new_");
+        try {
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+
+            Path target = root.resolve("brand_new_dir");
+            typeCommand(editor, "cd " + target);
+            assertTrue("nonexistent :cd from filer prompts y/n", editor.isCdConfirmCreateMode());
+            editor.processKey(KeyEvent.VK_Y, 'y', 0);
+            assertTrue("directory created", Files.isDirectory(target));
+            assertTrue("enters filer mode showing new dir", editor.isFilerMode());
+            assertEquals("project root switched to new dir", target.toString(), editor.getProjectRoot().toString());
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    static void testColonEFromFilerOpensExistingFile() throws Exception {
+        Path root = Files.createTempDirectory("filer_colon_e_");
+        try {
+            Path file = root.resolve("note.txt");
+            Files.writeString(file, "Hello from :e\n");
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+
+            typeCommand(editor, "e " + file.toString());
+            assertTrue(":e from filer exits to normal mode", editor.isNormalMode());
+            assertEquals("current file path is the opened file", file.toString(), editor.getCurrentFilePath());
+            assertTrue("file content loaded", editor.getText().contains("Hello from :e"));
+        } finally {
+            deleteDir(root);
+        }
+    }
+
+    static void testColonENonexistentFromFilerPromptsAndCreatesBuffer() throws Exception {
+        Path root = Files.createTempDirectory("filer_colon_e_new_");
+        try {
+            ModalEditor editor = makeEditorWithFilerSupport(root);
+            typeCommand(editor, "cd " + root.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+
+            Path target = root.resolve("brand_new_file.txt");
+            typeCommand(editor, "e " + target);
+            assertTrue("nonexistent :e from filer prompts y/n", editor.isConfirmNewFileMode());
+            editor.processKey(KeyEvent.VK_Y, 'y', 0);
+            assertTrue(":e y exits to normal mode", editor.isNormalMode());
+            assertEquals("new file buffer opened", target.toString(), editor.getCurrentFilePath());
+        } finally {
+            deleteDir(root);
         }
     }
 

@@ -5718,6 +5718,16 @@ public class ModalEditor {
                 filerQuery.setLength(0);
                 renderFilerBuffer();
             }
+            // `:` でCOMMANDモードへ（:cd/:e等の既存コマンドをそのまま使う）。
+            // FILER セッションを先に終了し元バッファへ復元してから通常のCOMMANDモードに入ることで、
+            // changeDirectory()/loadFromFile() が呼ぶ pushBuffer()/saveToStash() が正しい
+            // （疑似バッファではない）バッファを対象にできるようにする。:cd 成功時は
+            // changeDirectory() が改めて enterFiler() を呼ぶため、ディレクトリ一覧は自動的に
+            // 再読み込みされる。
+            if (keyChar == ':') {
+                exitFiler();
+                enterCommandMode();
+            }
         }
     }
 
@@ -5921,6 +5931,7 @@ public class ModalEditor {
     public boolean isBinaryMode()         { return mode == Mode.BINARY; }
     public boolean isClasspathInputMode() { return mode == Mode.CLASSPATH_INPUT; }
     public boolean isCdConfirmCreateMode() { return mode == Mode.CD_CONFIRM_CREATE; }
+    public boolean isConfirmNewFileMode() { return mode == Mode.CONFIRM_NEW_FILE; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
     public boolean isCompletionActive()   { return completion.isActive(); }
     public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() {

@@ -28,6 +28,7 @@ description: "Vim/Emacsの良い所を統合したJava SE製テキストエデ�
 | Backspace | FILER（検索中） | クエリ末尾1文字を削除し再フィルタ |
 | Esc | FILER（検索中） | 検索をキャンセルし一覧表示へ戻る |
 | Esc | FILER（一覧表示中） | FILER セッションを終了し `:cd` 実行前のバッファへ復元する |
+| `:`（一覧表示中のみ、検索中は不可） | FILER | `exitFiler()` で元バッファへ復元してから通常の COMMAND モードへ入る（`:cd`/`:e` をそのまま使える。2026-07-29追加） |
 | `y`/`Y` | `Mode.CD_CONFIRM_CREATE` | 存在しないディレクトリを新規作成して `:cd` を続行 |
 | `n`/`N`/Esc | `Mode.CD_CONFIRM_CREATE` | 何もせず NORMAL へ戻る |
 
@@ -167,6 +168,47 @@ FILER 本体とは別の、`:cd` コマンドライン入力を助ける機能�
 一切変更せずに動作する。`/` 検索フィルタの対象にも自然に含まれる（`".."` を含む文字列で絞り込む
 ことは通常無いため実用上の影響はない）。ソート処理より前に先頭固定で挿入するため、
 `DirectoryLister` 側のディレクトリ優先ソートには影響しない。
+
+---
+
+## FILER表示中の `:cd`/`:e` 直接実行（2026-07-29追加）
+
+FILER で一覧を表示している最中でも `:` キーで COMMAND モードへ入り、`:cd <path>` や
+`:e <path>` をそのまま実行できる。存在しないパスを指定した場合の新規作成確認
+（`Mode.CD_CONFIRM_CREATE` / `Mode.CONFIRM_NEW_FILE`）も NORMAL モードから実行した場合と
+完全に同じ経路を通る。
+
+```java
+// processFilerKey() 内、一覧表示中（!filerSearchMode）の分岐
+if (keyChar == ':') {
+    exitFiler();
+    enterCommandMode();
+}
+```
+
+**設計判断**: 「FILER 用に `:cd`/`:e` を個別分岐する」のではなく、**まず `exitFiler()` で
+`:cd` 実行前の元バッファへ復元してから、通常の `enterCommandMode()` に入る**方式にした。
+理由は「再帰的なディレクトリ移動と保存タイミングの非対称性」節にある `saveToStash()` の
+1セッション1回制約と衝突するため:
+
+- `changeDirectory()`（`:cd` 本体）は呼ばれるたびに `saveToStash(filerStash)` を実行する。
+  もし FILER 表示中の疑似バッファのまま `:cd` を実行すると、`filerStash` に退避済みの
+  「本来の元バッファ」が疑似バッファで上書きされ、Esc で元のファイルへ戻れなくなる。
+- `:e <path>` も同様に、疑似バッファのまま `loadFromFile()` を呼ぶと `pushBuffer()` が
+  疑似バッファ（FILER の一覧テキスト）を `bufferHistory` に積んでしまう
+  （`openSelectedEntry()` の FILE 分岐が `exitFiler()` を先に呼ぶのと同じ理由、
+  上記「再帰的なディレクトリ移動と保存タイミングの非対称性」節を参照）。
+
+`exitFiler()` を先に呼んでおけば、`:cd` は「NORMAL モードから新規に `:cd` を実行した」のと
+区別がつかない状態になるため、`changeDirectory()`/`loadFromFile()` 側は一切変更不要だった。
+`:cd` 成功時は `changeDirectory()` が改めて `enterFiler()` を呼ぶため、ディレクトリ一覧は
+自動的に再読み込みされる（新規作成したディレクトリもそのまま表示される）。
+
+テストは `test/dev/javatexteditor/search/FilerTest.java` の
+`testColonInFilerEntersCommandModeAndCdSwitchesAndReloads` /
+`testColonCdNonexistentFromFilerPromptsAndCreates` /
+`testColonEFromFilerOpensExistingFile` /
+`testColonENonexistentFromFilerPromptsAndCreatesBuffer` を参照。
 
 ## 設計判断ログ（詳細は `docs/decision-log.md` を参照）
 
