@@ -125,7 +125,7 @@ public class KeymapRegistry {
 | `p` | `paste.after` | ヤンク内容をカーソル後に貼り付け |
 | `P` | `paste.before` | ヤンク内容をカーソル前に貼り付け |
 | `u` | `undo` | アンドゥ |
-| `Ctrl+R` | `redo` | リドゥ |
+| `Ctrl+Shift+R` | `redo` | リドゥ（`Ctrl+R` 単独はEmacs式インクリメンタルサーチの起動キーへ2026-07-29に変更済み。text-search skill参照） |
 
 ### INSERT モード
 

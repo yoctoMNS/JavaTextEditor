@@ -3,10 +3,15 @@ package dev.javatexteditor.search;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
-import java.util.List;
 
 /**
- * テキスト内文字列検索（/、*、#、n、N）のテストハーネス。
+ * テキスト内文字列検索（*、#、n、N）のテストハーネス。
+ *
+ * かつて存在した `/` によるパターン入力検索（Vim式、Enterで確定してn/Nで移動）は、
+ * Emacs式インクリメンタルサーチ（C-s/C-r。NORMAL/INSERT両モードで有効。
+ * {@link EmacsIsearchTest} 参照）に一本化するため廃止した。
+ * *（カーソル位置の単語を前方検索）・#（後方検索）・n/N（次/前マッチへ移動）は
+ * Vimとの互換性のため引き続き提供する。
  */
 public class TextSearchTest {
 
@@ -29,13 +34,6 @@ public class TextSearchTest {
 
     private static void sendCode(ModalEditor ed, int code) {
         sendCode(ed, code, 0);
-    }
-
-    private static void typeSearch(ModalEditor ed, String pattern) {
-        // NORMALモードで / を入力して SEARCH モードへ
-        sendChar(ed, '/');
-        for (char c : pattern.toCharArray()) sendChar(ed, c);
-        sendCode(ed, KeyEvent.VK_ENTER);
     }
 
     private static void assertEq(String label, int expected, int actual) {
@@ -62,70 +60,15 @@ public class TextSearchTest {
 
     // --- テスト ---
 
-    static void testSearchEntersSearchMode() {
-        ModalEditor ed = editor("hello world");
-        assertTrue("initially NORMAL", ed.isNormalMode());
-        sendChar(ed, '/');
-        assertTrue("/ -> SEARCH mode", ed.isSearchMode());
-        assertFalse("not NORMAL during search", ed.isNormalMode());
-    }
-
-    static void testSearchBufferAccumulates() {
-        ModalEditor ed = editor("hello world");
-        sendChar(ed, '/');
-        sendChar(ed, 'h');
-        sendChar(ed, 'e');
-        sendChar(ed, 'l');
-        assertTrue("searchBuffer correct", "hel".equals(ed.getSearchBuffer()));
-    }
-
-    static void testSearchBufferBackspace() {
-        ModalEditor ed = editor("hello");
-        sendChar(ed, '/');
-        sendChar(ed, 'h');
-        sendChar(ed, 'e');
-        sendCode(ed, KeyEvent.VK_BACK_SPACE);
-        assertTrue("backspace in search", "h".equals(ed.getSearchBuffer()));
-    }
-
-    static void testEscCancelsSearch() {
-        ModalEditor ed = editor("hello");
-        sendChar(ed, '/');
-        sendChar(ed, 'h');
-        sendCode(ed, KeyEvent.VK_ESCAPE);
-        assertTrue("ESC -> NORMAL", ed.isNormalMode());
-        assertTrue("searchBuffer cleared", ed.getSearchBuffer().isEmpty());
-    }
-
-    static void testForwardSearchJumpsToMatch() {
-        ModalEditor ed = editor("foo bar foo");
-        // カーソルは先頭 (row=0, col=0)
-        typeSearch(ed, "bar");
-        assertEq("jumped to col 4", 4, ed.getCursorCol());
-        assertTrue("back to NORMAL", ed.isNormalMode());
-    }
-
-    static void testForwardSearchWrapsAround() {
-        ModalEditor ed = editor("foo bar foo");
-        // "foo" は col=0 と col=8 に存在
-        // カーソルは先頭なので最初のマッチは col=0 の次、つまり col=8
-        // wait - cursor at 0, search "foo" -> first match AFTER cursor...
-        // at col=0, so matches[0]={0,3}, matches[1]={8,3}
-        // forward=true, cursorOffset=0: find first match > 0 -> index 1 (col=8)
-        typeSearch(ed, "foo");
-        assertTrue("wraps: col 8 or 0", ed.getCursorCol() == 8 || ed.getCursorCol() == 0);
-    }
-
     static void testSearchMatchCount() {
         ModalEditor ed = editor("aa bb aa cc aa");
-        typeSearch(ed, "aa");
+        sendChar(ed, '*'); // cursor on first "aa"
         assertEq("3 matches", 3, ed.getSearchMatches().size());
     }
 
     static void testNJumpsToNextMatch() {
         ModalEditor ed = editor("foo bar foo baz foo");
-        typeSearch(ed, "foo");
-        // first jump: went past col=0, so col=8
+        sendChar(ed, '*'); // jumps past col=0, so col=8
         int firstCol = ed.getCursorCol();
         sendChar(ed, 'n');
         int secondCol = ed.getCursorCol();
@@ -134,7 +77,7 @@ public class TextSearchTest {
 
     static void testNWrapsAround() {
         ModalEditor ed = editor("foo");
-        typeSearch(ed, "foo");
+        sendChar(ed, '*');
         // only 1 match; pressing n stays there (wraps to same)
         int col = ed.getCursorCol();
         sendChar(ed, 'n');
@@ -143,7 +86,7 @@ public class TextSearchTest {
 
     static void testBigNGoesBackward() {
         ModalEditor ed = editor("foo bar foo");
-        typeSearch(ed, "foo");
+        sendChar(ed, '*');
         // After search: cursor at col=8 (matches[1])
         sendChar(ed, 'N');
         // N reverses direction -> should go to matches[0] at col=0
@@ -177,60 +120,26 @@ public class TextSearchTest {
         assertTrue("still NORMAL", ed.isNormalMode());
     }
 
-    static void testRegexSearch() {
-        ModalEditor ed = editor("foo1 foo2 foo3");
-        typeSearch(ed, "foo[0-9]");
-        assertEq("regex: 3 matches", 3, ed.getSearchMatches().size());
-    }
-
-    static void testRegexSearchCaseInsensitive() {
-        ModalEditor ed = editor("Foo foo FOO");
-        typeSearch(ed, "(?i)foo");
-        assertEq("case-insensitive: 3 matches", 3, ed.getSearchMatches().size());
-    }
-
-    static void testInvalidRegexShowsError() {
-        ModalEditor ed = editor("hello");
-        typeSearch(ed, "[invalid");
-        assertTrue("error msg shown", ed.getStatusMessage().startsWith("E: bad pattern"));
-        assertTrue("back to NORMAL", ed.isNormalMode());
-    }
-
-    static void testPatternNotFoundMessage() {
-        ModalEditor ed = editor("hello world");
-        typeSearch(ed, "xyz");
-        assertTrue("not found msg", ed.getStatusMessage().contains("not found")
-                || ed.getStatusMessage().contains("Pattern not found"));
-    }
-
-    static void testSearchMultilineFile() {
-        ModalEditor ed = editor("line one\nline two\nline three");
-        // "two" is on row 1
-        typeSearch(ed, "two");
-        assertEq("multiline: row 1", 1, ed.getCursorRow());
-        assertEq("multiline: col 5", 5, ed.getCursorCol());
-    }
-
     static void testSearchAcrossLines() {
         ModalEditor ed = editor("abc\ndef\nabc");
-        typeSearch(ed, "abc");
-        // cursor was at row=0,col=0; search finds next abc AFTER cursor -> row=2, col=0
-        // wait - first match is at offset 0 (row0,col0), second at offset 8 (row2,col0)
-        // cursor at offset=0, searching forward: find first match > 0 -> matches[1] = offset 8
+        // cursor at row0,col0 is on "abc"
+        sendChar(ed, '*');
+        // 次の "abc" は row=2
         assertEq("wrap: row 2", 2, ed.getCursorRow());
     }
 
     static void testStatusShowsMatchCount() {
         ModalEditor ed = editor("aa aa aa");
-        typeSearch(ed, "aa");
+        sendChar(ed, '*');
         assertTrue("status shows count", ed.getStatusMessage().contains("3"));
     }
 
     static void testSearchClearedOnNewSearch() {
         ModalEditor ed = editor("foo bar foo");
-        typeSearch(ed, "foo");
+        sendChar(ed, '*'); // cursor on "foo" (col0)
         int firstMatchCount = ed.getSearchMatches().size();
-        typeSearch(ed, "bar");
+        ed.setCursor(0, 4); // "bar"
+        sendChar(ed, '*');
         int secondMatchCount = ed.getSearchMatches().size();
         assertEq("old 2 matches for foo", 2, firstMatchCount);
         assertEq("new 1 match for bar", 1, secondMatchCount);
@@ -251,16 +160,6 @@ public class TextSearchTest {
         assertEq("word boundary: 2 matches", 2, ed.getSearchMatches().size());
     }
 
-    static void testSearchModeStatusLine() {
-        ModalEditor ed = editor("test");
-        sendChar(ed, '/');
-        sendChar(ed, 'h');
-        sendChar(ed, 'i');
-        // The command buffer text is accessible via getSearchBuffer in SEARCH mode
-        assertTrue("search buffer has hi", "hi".equals(ed.getSearchBuffer()));
-        assertTrue("in search mode", ed.isSearchMode());
-    }
-
     private static void sendCommand(ModalEditor ed, String cmd) {
         sendChar(ed, ':');
         for (char c : cmd.toCharArray()) sendChar(ed, c);
@@ -270,7 +169,7 @@ public class TextSearchTest {
     static void testHighlightClearedOnBufferSwitch() {
         EditorCanvas canvas = new EditorCanvas();
         ModalEditor ed = new ModalEditor("foo bar foo", canvas);
-        typeSearch(ed, "foo");
+        sendChar(ed, '*');
         assertEq("before switch: 2 matches", 2, ed.getSearchMatches().size());
         assertFalse("before switch: canvas has highlights", canvas.getSearchHighlights().isEmpty());
 
@@ -284,7 +183,7 @@ public class TextSearchTest {
     static void testHighlightClearedOnBufferHistorySwitch() {
         EditorCanvas canvas = new EditorCanvas();
         ModalEditor ed = new ModalEditor("foo bar foo", canvas);
-        typeSearch(ed, "foo");
+        sendChar(ed, '*');
         assertFalse("history: canvas has highlights before", canvas.getSearchHighlights().isEmpty());
 
         sendCommand(ed, "enew");
@@ -298,7 +197,7 @@ public class TextSearchTest {
     static void testDoubleEscClearsHighlightInNormalMode() {
         EditorCanvas canvas = new EditorCanvas();
         ModalEditor ed = new ModalEditor("foo bar foo", canvas);
-        typeSearch(ed, "foo");
+        sendChar(ed, '*');
         assertEq("before esc: 2 matches", 2, ed.getSearchMatches().size());
 
         // 1回目の Esc: まだクリアしない
@@ -315,7 +214,7 @@ public class TextSearchTest {
     static void testSingleEscDoesNotClearHighlightIfNotRepeated() {
         EditorCanvas canvas = new EditorCanvas();
         ModalEditor ed = new ModalEditor("foo bar foo", canvas);
-        typeSearch(ed, "foo");
+        sendChar(ed, '*');
 
         sendCode(ed, KeyEvent.VK_ESCAPE);
         // Esc の直後に別のキー（カーソル移動）を押すと、ハイライトクリアの保留状態はキャンセルされる
@@ -326,12 +225,6 @@ public class TextSearchTest {
     }
 
     public static void main(String[] args) {
-        testSearchEntersSearchMode();
-        testSearchBufferAccumulates();
-        testSearchBufferBackspace();
-        testEscCancelsSearch();
-        testForwardSearchJumpsToMatch();
-        testForwardSearchWrapsAround();
         testSearchMatchCount();
         testNJumpsToNextMatch();
         testNWrapsAround();
@@ -339,17 +232,11 @@ public class TextSearchTest {
         testStarSearchWordForward();
         testHashSearchWordBackward();
         testStarNoWordAtCursor();
-        testRegexSearch();
-        testRegexSearchCaseInsensitive();
-        testInvalidRegexShowsError();
-        testPatternNotFoundMessage();
-        testSearchMultilineFile();
         testSearchAcrossLines();
         testStatusShowsMatchCount();
         testSearchClearedOnNewSearch();
         testNWithoutPriorSearch();
         testStarWordBoundary();
-        testSearchModeStatusLine();
         testHighlightClearedOnBufferSwitch();
         testHighlightClearedOnBufferHistorySwitch();
         testDoubleEscClearsHighlightInNormalMode();

@@ -531,27 +531,29 @@ public class ModalEditorTest {
     }
 
     // -------------------------------------------------------------------------
-    // Ctrl+R キー: リドゥ
+    // Ctrl+Shift+R キー: リドゥ
     // -------------------------------------------------------------------------
+    // Ctrl+R は Emacs式インクリメンタルサーチ（後方検索）の起動キーへ変更されたため、
+    // redo は Ctrl+Shift+R へ移動した（text-search skill参照）。
 
     static void testRedoKey() {
-        System.out.println("[Ctrl+R キー: リドゥ]");
+        System.out.println("[Ctrl+Shift+R キー: リドゥ]");
 
-        // undo 後に Ctrl+R でテキストが再適用される
+        // undo 後に Ctrl+Shift+R でテキストが再適用される
         ModalEditor ed = new ModalEditor("hello");
         pressKey(ed, 'i');
         typeString(ed, "abc");
         ed.processKey(KeyEvent.VK_ESCAPE, (char) 27, 0);
         String textAfterInput = ed.getText();
         pressKey(ed, 'u');
-        pressCtrl(ed, KeyEvent.VK_R, (char) 18);
-        check("u の後 Ctrl+R → テキストが再適用される",
+        pressCtrlShift(ed, KeyEvent.VK_R, (char) 18);
+        check("u の後 Ctrl+Shift+R → テキストが再適用される",
               ed.getText().equals(textAfterInput));
 
         // リドゥ履歴なし → クラッシュしない
         ModalEditor ed2 = new ModalEditor("hello");
-        pressCtrl(ed2, KeyEvent.VK_R, (char) 18);
-        check("リドゥできない状態で Ctrl+R を押しても何も起きない",
+        pressCtrlShift(ed2, KeyEvent.VK_R, (char) 18);
+        check("リドゥできない状態で Ctrl+Shift+R を押しても何も起きない",
               ed2.getText().equals("hello"));
     }
 
@@ -1897,6 +1899,11 @@ public class ModalEditorTest {
     /** Ctrl修飾付きキー */
     static void pressCtrl(ModalEditor ed, int keyCode, char keyChar) {
         ed.processKey(keyCode, keyChar, KeyEvent.CTRL_DOWN_MASK);
+    }
+
+    /** Ctrl+Shift修飾付きキー */
+    static void pressCtrlShift(ModalEditor ed, int keyCode, char keyChar) {
+        ed.processKey(keyCode, keyChar, KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
     }
 
     /** INSERT中に文字列を1文字ずつ入力する */

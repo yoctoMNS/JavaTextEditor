@@ -84,7 +84,10 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar(':', "enter.command"), "enter.command");
         bind(Mode.NORMAL, KeyBinding.ofChar(';', "enter.command"), "enter.command"); // ; → : (like Vim)
         bind(Mode.NORMAL, KeyBinding.ofChar('u', "undo"), "undo");
-        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK, "redo"), "redo");
+        // Ctrl+R は Emacs式インクリメンタルサーチ（後方検索）の起動キーとして使うため、
+        // redo は Ctrl+Shift+R へ移動した（text-search skill参照）。
+        bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R,
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK, "redo"), "redo");
         bind(Mode.NORMAL, KeyBinding.ofChar('~', "case.toggle.char"), "case.toggle.char");
         bind(Mode.NORMAL, KeyBinding.ofChar('r', "replace.char.pending"), "replace.char.pending");
         bind(Mode.NORMAL, KeyBinding.ofChar('v', "enter.visual"), "enter.visual");
@@ -118,8 +121,8 @@ public class KeymapRegistry {
         bind(Mode.NORMAL, KeyBinding.ofChar('\\', "filesearch.pending"),                   "filesearch.pending");
         bind(Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_BACK_SLASH, 0, "filesearch.pending"), "filesearch.pending");
 
-        // 文字列検索 (Vim 式: / で入力、n/N で移動、*/# で単語検索)
-        bind(Mode.NORMAL, KeyBinding.ofChar('/', "search.enter"),    "search.enter");
+        // 文字列検索 (*/# で単語検索してから n/N で移動。/ によるパターン入力検索は
+        // Emacs式インクリメンタルサーチ（C-s/C-r）に統一するため廃止した。text-search skill参照)
         bind(Mode.NORMAL, KeyBinding.ofChar('n', "search.next"),     "search.next");
         bind(Mode.NORMAL, KeyBinding.ofChar('N', "search.prev"),     "search.prev");
         bind(Mode.NORMAL, KeyBinding.ofChar('*', "search.star"),     "search.star");

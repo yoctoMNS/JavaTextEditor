@@ -41,9 +41,13 @@ public class KeymapRegistryTest {
         action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_UNDEFINED, 'i', 0);
         check("NORMAL 'i' -> enter.insert", action.equals("enter.insert"));
 
-        // NORMAL: Ctrl+R -> redo
-        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char) 18, KeyEvent.CTRL_DOWN_MASK);
-        check("NORMAL Ctrl+R -> redo", action.equals("redo"));
+        // NORMAL: Ctrl+Shift+R -> redo
+        // （Ctrl+R 単独は Emacs式インクリメンタルサーチ(後方検索)の起動キーとして
+        //  KeymapRegistry の外側=ModalEditor.processNormalKey() で先に横取りされるため、
+        //  KeymapRegistry には未登録のまま=redoの既定バインドではなくなった。text-search skill参照）
+        int ctrlShift = KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK;
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char) 18, ctrlShift);
+        check("NORMAL Ctrl+Shift+R -> redo", action.equals("redo"));
 
         // INSERT: ESC -> enter.normal
         action = reg.resolve(KeymapRegistry.Mode.INSERT, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
@@ -88,16 +92,18 @@ public class KeymapRegistryTest {
         System.out.println("[複数修飾子の確認]");
         KeymapRegistry reg = new KeymapRegistry();
 
-        // Shift+Ctrl+R を登録してみる（実際には使用していないが、テストして動作確認）
+        // Alt+Ctrl+R を登録してみる（実際には使用していないが、テストして動作確認。
+        // Shift+Ctrl+R は既定で redo が登録済みのため、別の修飾子の組み合わせを使う）
+        int altCtrl = KeyEvent.ALT_DOWN_MASK | KeyEvent.CTRL_DOWN_MASK;
+        reg.bind(KeymapRegistry.Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R, altCtrl, "custom.redo"), "custom.redo");
+
+        String action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char) 18, altCtrl);
+        check("Alt+Ctrl+R -> custom.redo", action.equals("custom.redo"));
+
+        // Shift+Ctrl+R（既定のredo）は異なるアクションのまま（影響を受けない）
         int shiftCtrl = KeyEvent.SHIFT_DOWN_MASK | KeyEvent.CTRL_DOWN_MASK;
-        reg.bind(KeymapRegistry.Mode.NORMAL, KeyBinding.ofCode(KeyEvent.VK_R, shiftCtrl, "custom.redo"), "custom.redo");
-
-        String action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char) 18, shiftCtrl);
-        check("Shift+Ctrl+R -> custom.redo", action.equals("custom.redo"));
-
-        // Ctrl+R だけは異なるアクション（まだ登録されている）
-        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char) 18, KeyEvent.CTRL_DOWN_MASK);
-        check("Ctrl+R だけ -> redo (Shift+Ctrl+R と異なる)", action.equals("redo"));
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char) 18, shiftCtrl);
+        check("Shift+Ctrl+R -> redo (Alt+Ctrl+R と異なる)", action.equals("redo"));
     }
 
     static void testResolveDifferentModes() {
@@ -241,9 +247,10 @@ public class KeymapRegistryTest {
         action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_V, 'v', 0);
         check("実キーイベント形式: VK_V+'v' -> enter.visual", "enter.visual".equals(action));
 
-        // Ctrl+R: keyCode=VK_R, keyChar=(char)18 — ofCode で登録済み、こちらは keyCode で解決
-        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char)18, KeyEvent.CTRL_DOWN_MASK);
-        check("実キーイベント形式: Ctrl+R -> redo (keyCode 優先)", "redo".equals(action));
+        // Ctrl+Shift+R: keyCode=VK_R, keyChar=(char)18 — ofCode で登録済み、こちらは keyCode で解決
+        action = reg.resolve(KeymapRegistry.Mode.NORMAL, KeyEvent.VK_R, (char)18,
+            KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
+        check("実キーイベント形式: Ctrl+Shift+R -> redo (keyCode 優先)", "redo".equals(action));
 
         // ESC: keyCode=VK_ESCAPE, keyChar=CHAR_UNDEFINED
         action = reg.resolve(KeymapRegistry.Mode.INSERT, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);

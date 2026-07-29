@@ -5,7 +5,10 @@ import dev.javatexteditor.ui.EditorCanvas;
 import java.awt.event.KeyEvent;
 
 /**
- * Emacs式インクリメンタルサーチ（C-s / C-r、INSERTモード専用）のテストハーネス。
+ * Emacs式インクリメンタルサーチ（C-s / C-r、NORMAL/INSERT両モードで有効）のテストハーネス。
+ *
+ * NORMALモードでは Ctrl+R は元々 redo に割り当てられていたが、isearch の後方検索起動キーへ
+ * 変更し、redo は Ctrl+Shift+R へ移動した（text-search skill参照）。
  */
 public class EmacsIsearchTest {
 
@@ -34,6 +37,10 @@ public class EmacsIsearchTest {
 
     private static void ctrlR(ModalEditor ed) {
         sendCode(ed, KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK);
+    }
+
+    private static void ctrlShiftR(ModalEditor ed) {
+        sendCode(ed, KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
     }
 
     private static void enterInsert(ModalEditor ed) {
@@ -68,20 +75,120 @@ public class EmacsIsearchTest {
 
     // --- テスト ---
 
-    static void testCtrlSOnlyActivatesInInsertMode() {
+    static void testCtrlSStartsIsearchInNormalMode() {
         ModalEditor ed = editor("foo bar foo");
-        // NORMALモードでは C-s は何もしない（isearch は起動しない）
+        // NORMALモードのままでも C-s で isearch が起動する
         ctrlS(ed);
-        assertFalse("C-s in NORMAL does not start isearch", ed.isEmacsIsearchActive());
-        assertTrue("still NORMAL", ed.isNormalMode());
+        assertTrue("C-s starts isearch in NORMAL", ed.isEmacsIsearchActive());
+        assertTrue("still logically NORMAL mode", ed.isNormalMode());
+        assertTrue("forward by default", ed.isIsearchForward());
     }
 
-    static void testCtrlRDoesNotStartIsearchInNormalMode() {
-        ModalEditor ed = editor("foo");
-        // NORMAL モードの既存 Ctrl+R (redo) が isearch に奪われていないことを確認
+    static void testCtrlRStartsBackwardIsearchInNormalMode() {
+        ModalEditor ed = editor("foo bar foo");
+        ed.setCursor(0, 11);
         ctrlR(ed);
-        assertFalse("C-r in NORMAL does not start isearch", ed.isEmacsIsearchActive());
-        assertTrue("still NORMAL", ed.isNormalMode());
+        assertTrue("C-r starts isearch in NORMAL", ed.isEmacsIsearchActive());
+        assertFalse("backward by default", ed.isIsearchForward());
+    }
+
+    static void testCtrlShiftRStillRedoesInNormalMode() {
+        ModalEditor ed = editor("hello");
+        sendChar(ed, 'i'); sendChar(ed, 'X');
+        sendCode(ed, KeyEvent.VK_ESCAPE);
+        sendChar(ed, 'u'); // undo -> "hello"
+        assertEq("undo back to hello", 5, ed.getText().length());
+        ctrlShiftR(ed); // redo -> isearchではなくredoが起動することを確認
+        assertFalse("Ctrl+Shift+R does not start isearch", ed.isEmacsIsearchActive());
+        assertTrue("Ctrl+Shift+R redo restored Xhello", ed.getText().equals("Xhello"));
+    }
+
+    static void testTypingJumpsToNearestForwardMatchInNormalMode() {
+        ModalEditor ed = editor("foo bar foo");
+        // cursor at col 0
+        ctrlS(ed);
+        type(ed, "foo");
+        assertEq("jump to nearest forward match (NORMAL)", 8, ed.getCursorCol());
+    }
+
+    static void testRepeatedCtrlSAdvancesFurtherInNormalMode() {
+        ModalEditor ed = editor("foo bar foo baz foo");
+        ctrlS(ed);
+        type(ed, "foo");
+        int first = ed.getCursorCol();
+        ctrlS(ed);
+        int second = ed.getCursorCol();
+        assertTrue("second match further than first (NORMAL)", second > first);
+    }
+
+    static void testBackspaceInNormalMode() {
+        ModalEditor ed = editor("foo bar foo");
+        ctrlS(ed);
+        type(ed, "fooX");
+        assertTrue("no match for fooX (NORMAL)", ed.getSearchMatches().isEmpty());
+        sendCode(ed, KeyEvent.VK_BACK_SPACE);
+        assertEq("backspace re-jumps to foo match (NORMAL)", 8, ed.getCursorCol());
+    }
+
+    static void testEnterCommitsAndReturnsToPlainNormalMode() {
+        ModalEditor ed = editor("foo bar foo");
+        ctrlS(ed);
+        type(ed, "bar");
+        sendCode(ed, KeyEvent.VK_ENTER);
+        assertFalse("isearch ended", ed.isEmacsIsearchActive());
+        assertTrue("still NORMAL mode", ed.isNormalMode());
+        assertEq("cursor stayed at match", 4, ed.getCursorCol());
+        // 通常のNORMAL入力に戻っている（x でカーソル位置の1文字が消せることを確認）
+        sendChar(ed, 'x');
+        assertFalse("normal command works again", ed.getText().contains("bar"));
+    }
+
+    static void testEscapeCancelsAndRestoresCursorInNormalMode() {
+        ModalEditor ed = editor("foo bar foo");
+        // cursor at col 0
+        ctrlS(ed);
+        type(ed, "bar");
+        assertEq("jumped to bar", 4, ed.getCursorCol());
+        sendCode(ed, KeyEvent.VK_ESCAPE);
+        assertFalse("isearch cancelled", ed.isEmacsIsearchActive());
+        assertTrue("still NORMAL mode", ed.isNormalMode());
+        assertEq("cursor restored to origin", 0, ed.getCursorCol());
+    }
+
+    static void testHighlightClearedAfterCommitInNormalMode() {
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("foo bar foo", canvas);
+        ctrlS(ed);
+        type(ed, "foo");
+        assertFalse("highlight present during isearch (NORMAL)", canvas.getSearchHighlights().isEmpty());
+        sendCode(ed, KeyEvent.VK_ENTER);
+        assertTrue("highlight cleared after commit (NORMAL)", canvas.getSearchHighlights().isEmpty());
+    }
+
+    static void testUnhandledKeyEndsIsearchAndFallsThroughInNormalMode() {
+        ModalEditor ed = editor("foo bar foo");
+        ctrlS(ed);
+        type(ed, "bar");
+        // Ctrl+B は isearch 専用キーではないので、isearch を終了させてから
+        // 通常の NORMAL 用 Ctrl+B（scroll.page.up）として処理される（例外を投げず完走することを確認）
+        sendCode(ed, KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK);
+        assertFalse("isearch ended by unrelated key (NORMAL)", ed.isEmacsIsearchActive());
+        assertTrue("still NORMAL mode after fallback", ed.isNormalMode());
+    }
+
+    static void testPendingSequenceDiscardedWhenIsearchStarts() {
+        ModalEditor ed = editor("foo\nbar\nfoo");
+        // 'g' で gg（ファイル先頭ジャンプ）の1打鍵目を保留させる
+        sendChar(ed, 'g');
+        // ここで C-s を押すと、保留中の 'g' は破棄されて isearch が起動する
+        ctrlS(ed);
+        assertTrue("isearch started despite pending 'g'", ed.isEmacsIsearchActive());
+        sendCode(ed, KeyEvent.VK_ESCAPE); // isearchをキャンセルして抜ける
+        // 直後に 'g' 単独を押しても gg 化せず goto.pending の1打鍵目として保留するだけになる
+        // （古い pendingSequence と結合してファイル末尾等へ暴走しないことの確認）
+        int rowBefore = ed.getCursorRow();
+        sendChar(ed, 'g');
+        assertEq("stray 'g' does not jump anywhere by itself", rowBefore, ed.getCursorRow());
     }
 
     static void testCtrlSStartsIsearchInInsertMode() {
@@ -226,8 +333,20 @@ public class EmacsIsearchTest {
     }
 
     public static void main(String[] args) {
-        testCtrlSOnlyActivatesInInsertMode();
-        testCtrlRDoesNotStartIsearchInNormalMode();
+        // NORMALモード
+        testCtrlSStartsIsearchInNormalMode();
+        testCtrlRStartsBackwardIsearchInNormalMode();
+        testCtrlShiftRStillRedoesInNormalMode();
+        testTypingJumpsToNearestForwardMatchInNormalMode();
+        testRepeatedCtrlSAdvancesFurtherInNormalMode();
+        testBackspaceInNormalMode();
+        testEnterCommitsAndReturnsToPlainNormalMode();
+        testEscapeCancelsAndRestoresCursorInNormalMode();
+        testHighlightClearedAfterCommitInNormalMode();
+        testUnhandledKeyEndsIsearchAndFallsThroughInNormalMode();
+        testPendingSequenceDiscardedWhenIsearchStarts();
+
+        // INSERTモード
         testCtrlSStartsIsearchInInsertMode();
         testCtrlRStartsBackwardIsearch();
         testTypingJumpsToNearestForwardMatch();

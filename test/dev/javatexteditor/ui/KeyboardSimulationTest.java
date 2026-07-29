@@ -322,8 +322,8 @@ public class KeyboardSimulationTest {
         reset("hello");
         key('i'); key('X'); esc();  // "Xhello"
         key('u');                    // undo → "hello"
-        ctrlKey(KeyEvent.VK_R);      // redo
-        check("Ctrl+R: Xhello", "Xhello", ed.getText());
+        ctrlShiftKey(KeyEvent.VK_R); // redo（Ctrl+Rはisearch起動キーへ変更されたため Ctrl+Shift+R）
+        check("Ctrl+Shift+R: Xhello", "Xhello", ed.getText());
     }
 
     static void testNormalCursorClamp() {
@@ -604,7 +604,7 @@ public class KeyboardSimulationTest {
         String afterEdit = ed.getText();
         key('u'); key('u'); key('u');
         check("3回アンドゥ後: base", "base", ed.getText());
-        ctrlKey(KeyEvent.VK_R); ctrlKey(KeyEvent.VK_R); ctrlKey(KeyEvent.VK_R);
+        ctrlShiftKey(KeyEvent.VK_R); ctrlShiftKey(KeyEvent.VK_R); ctrlShiftKey(KeyEvent.VK_R);
         check("3回リドゥ後: 元の文書", afterEdit, ed.getText());
     }
 
@@ -712,6 +712,10 @@ public class KeyboardSimulationTest {
 
     static void ctrlKey(int keyCode) {
         ed.processKey(keyCode, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
+    }
+
+    static void ctrlShiftKey(int keyCode) {
+        ed.processKey(keyCode, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK);
     }
 
     /** エディタを指定テキストで初期化 */

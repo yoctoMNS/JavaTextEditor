@@ -74,7 +74,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, SEARCH, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -258,14 +258,14 @@ public class ModalEditor {
     private String pendingNewFilePath;
     /** y が押されたときに実行する処理（実際のファイルオープン/保存）。Mode.CONFIRM_NEW_FILE専用。 */
     private Runnable pendingNewFileAction;
-    // テキスト内検索状態
-    private final StringBuilder searchBuffer = new StringBuilder();
+    // テキスト内検索状態（*/# による単語検索 → n/N での移動用。/ によるパターン入力検索は
+    // Emacs式インクリメンタルサーチに統一するため廃止した）
     private String  lastSearchPattern = "";
     private boolean lastSearchForward = true;
     private List<int[]> searchMatches = List.of(); // 各要素: {offset, length}
     private int currentMatchIdx = -1;
-    // Emacs式インクリメンタルサーチ（C-s/C-r）の状態。INSERTモードでのみ有効。
-    // Mode は増やさず、INSERT のまま完結する疑似サブ状態として持つ（Escでモード外へ出ない Emacs の isearch に合わせる）。
+    // Emacs式インクリメンタルサーチ（C-s/C-r）の状態。NORMAL/INSERTモードで有効。
+    // Mode は増やさず、呼び出し元(NORMAL/INSERT)のまま完結する疑似サブ状態として持つ（Escでモード外へ出ない Emacs の isearch に合わせる）。
     private boolean emacsIsearchActive = false;
     private final StringBuilder isearchQuery = new StringBuilder();
     private boolean isearchForward = true;
@@ -604,7 +604,6 @@ public class ModalEditor {
                 case VISUAL       -> processVisualKey(keyCode, keyChar, modifiers);
                 case VISUAL_LINE  -> processVisualLineKey(keyCode, keyChar, modifiers);
                 case VISUAL_BLOCK -> processVisualBlockKey(keyCode, keyChar, modifiers);
-                case SEARCH        -> processSearchKey(keyCode, keyChar);
                 case FILESEARCH    -> processFileSearchKey(keyCode, keyChar);
                 case TELESCOPE     -> processTelescopeKey(keyCode, keyChar, modifiers);
                 case IMPORT_SELECT -> processImportSelectKey(keyCode, keyChar, modifiers);
@@ -921,14 +920,6 @@ public class ModalEditor {
         mode = Mode.COMMAND;
     }
 
-    /** /: 検索入力を空にして SEARCH モードへ入る（既定は前方検索）。 */
-    private void enterSearchMode() {
-        searchBuffer.setLength(0);
-        mode = Mode.SEARCH;
-        lastSearchForward = true;
-        statusMessage = "";
-    }
-
     /** u: 直前の編集を取り消し、カーソルが範囲外に出ていれば引き戻す。 */
     private void undoEdit() {
         buffer.undo();
@@ -969,6 +960,9 @@ public class ModalEditor {
     }
 
     private void processNormalKey(int keyCode, char keyChar, int modifiers) {
+        // Emacs式インクリメンタルサーチ（C-s/C-r）が起動中/起動キーなら最優先で横取りする。
+        if (interceptEmacsIsearch(keyCode, keyChar, modifiers)) return;
+
         // 画面に出ているものによって意味が決まる割り込みキーを先に処理する
         if (handleNormalModeInterrupt(keyCode, keyChar, modifiers)) return;
 
@@ -1047,7 +1041,6 @@ public class ModalEditor {
             case "jdk.doc" -> lookupJdkDoc();
             case "jump.back" -> jumpBack();
             case "insert.override" -> insertOverrideStub();
-            case "search.enter" -> enterSearchMode();
             case "search.next" -> jumpToNextMatch(lastSearchForward);
             case "search.prev" -> jumpToNextMatch(!lastSearchForward);
             case "search.star" -> searchWordAtCursor(true);
@@ -1106,21 +1099,8 @@ public class ModalEditor {
     }
 
     private void processInsertKey(int keyCode, char keyChar, int modifiers) {
-        // Emacs式インクリメンタルサーチ（C-s/C-r）が起動中は、他のキー処理より先に横取りする。
-        if (emacsIsearchActive) {
-            processEmacsIsearchKey(keyCode, keyChar, modifiers);
-            return;
-        }
-        boolean isearchCtrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
-            && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
-        if (isearchCtrlOnly && keyCode == KeyEvent.VK_S) {
-            enterEmacsIsearch(true);
-            return;
-        }
-        if (isearchCtrlOnly && keyCode == KeyEvent.VK_R) {
-            enterEmacsIsearch(false);
-            return;
-        }
+        // Emacs式インクリメンタルサーチ（C-s/C-r）が起動中/起動キーなら最優先で横取りする。
+        if (interceptEmacsIsearch(keyCode, keyChar, modifiers)) return;
 
         // Ctrl+Space → 補完トリガー（ポップアップが開いていても再トリガー）
         if ((modifiers & KeyEvent.CTRL_DOWN_MASK) != 0 && keyCode == KeyEvent.VK_SPACE) {
@@ -1993,14 +1973,10 @@ public class ModalEditor {
         edSavedCommandText = "";
     }
 
-    // -------------------------------------------------------------------------
-    // SEARCHモード処理
-    // -------------------------------------------------------------------------
-
     /**
      * 1行のテキストを打ち込ませる疑似モード共通のキー処理。
-     * {@code /}（検索）・{@code \\f}/{@code \\g}（ファイル検索）・F10/F11/F12 の追加クラスパス入力が
-     * これに当たる。いずれも振る舞いは4つしかない。
+     * {@code \\f}/{@code \\g}（ファイル検索）・F10/F11/F12 の追加クラスパス入力がこれに当たる。
+     * いずれも振る舞いは4つしかない。
      *
      * <ul>
      *   <li>Esc — 取り消す</li>
@@ -2029,22 +2005,6 @@ public class ModalEditor {
         } else if (keyChar != KeyEvent.CHAR_UNDEFINED && keyChar >= ' ') {
             input.append(keyChar);
         }
-    }
-
-    private void processSearchKey(int keyCode, char keyChar) {
-        handleTextPromptKey(keyCode, keyChar, searchBuffer,
-            () -> {
-                searchBuffer.setLength(0);
-                mode = Mode.NORMAL;
-                clearSearchHighlights();
-            },
-            pattern -> {
-                mode = Mode.NORMAL;
-                if (pattern.isEmpty()) return;
-                lastSearchPattern = pattern;
-                lastSearchForward = true;
-                executeSearch(pattern, true);
-            });
     }
 
     // -------------------------------------------------------------------------
@@ -2610,16 +2570,42 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
-    // Emacs式インクリメンタルサーチ（C-s/C-r、INSERTモード専用）
+    // Emacs式インクリメンタルサーチ（C-s/C-r、NORMAL/INSERTモード共通）
     // -------------------------------------------------------------------------
 
     /**
+     * NORMAL/INSERT 両モードの先頭で呼ぶ横取り判定。isearch セッション中ならキー処理を横取りし、
+     * セッション外で C-s/C-r が押されたらセッションを開始する。横取りした場合は true を返す
+     * （呼び出し側はその場で return する）。
+     */
+    private boolean interceptEmacsIsearch(int keyCode, char keyChar, int modifiers) {
+        if (emacsIsearchActive) {
+            processEmacsIsearchKey(keyCode, keyChar, modifiers);
+            return true;
+        }
+        boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
+            && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
+        if (ctrlOnly && keyCode == KeyEvent.VK_S) {
+            enterEmacsIsearch(true);
+            return true;
+        }
+        if (ctrlOnly && keyCode == KeyEvent.VK_R) {
+            enterEmacsIsearch(false);
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * C-s（forward=true）/ C-r（forward=false）で isearch セッションを開始する。
-     * Vim式の {@code /} と異なり Mode は変えず、INSERT モードのまま完結する
+     * Vim式の旧 {@code /} 検索と異なり Mode は変えず、呼び出し時点の NORMAL/INSERT のまま完結する
      * （キー処理は {@link #processEmacsIsearchKey} が横取りする）。
      */
     private void enterEmacsIsearch(boolean forward) {
         dismissCompletion();
+        // gg/dd/yy 等の保留中シーケンスを抱えたまま isearch へ入ると、isearch終了後に
+        // 古い pendingSequence が次のキー入力と結合してしまうため、Escと同様にここで破棄する。
+        pendingSequence = "";
         emacsIsearchActive = true;
         isearchQuery.setLength(0);
         isearchLegAnchorHistory.clear();
@@ -2630,7 +2616,7 @@ public class ModalEditor {
         statusMessage = emacsIsearchStatusPrefix();
     }
 
-    /** isearch セッション中のキー入力を処理する。通常の INSERT 処理には渡さない。 */
+    /** isearch セッション中のキー入力を処理する。通常の NORMAL/INSERT 処理には渡さない。 */
     private void processEmacsIsearchKey(int keyCode, char keyChar, int modifiers) {
         boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
             && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
@@ -2659,9 +2645,13 @@ public class ModalEditor {
             return;
         }
         // それ以外のキー（矢印キー等）は Emacs 同様 isearch を終了させ、
-        // 現在位置はそのままに通常の INSERT キー処理へ委ねる。
+        // 現在位置はそのままに、isearch を開始した側（NORMAL/INSERT）の通常キー処理へ委ねる。
         commitEmacsIsearch();
-        processInsertKey(keyCode, keyChar, modifiers);
+        if (mode == Mode.INSERT) {
+            processInsertKey(keyCode, keyChar, modifiers);
+        } else {
+            processNormalKey(keyCode, keyChar, modifiers);
+        }
     }
 
     /**
@@ -5416,8 +5406,6 @@ public class ModalEditor {
                 canvas.setCursorPositionLabel("(" + (cursorRow + 1) + ":" + totalChars + ")");
                 if (mode == Mode.COMMAND) {
                     canvas.setCommandLineText(":" + commandBuffer.toString());
-                } else if (mode == Mode.SEARCH) {
-                    canvas.setCommandLineText("/" + searchBuffer.toString());
                 } else if (mode == Mode.FILESEARCH) {
                     String prefix = (fileSearchType == FileSearchType.NAME) ? "\\f" : "\\g";
                     canvas.setCommandLineText(prefix + fileSearchBuffer.toString());
@@ -5477,7 +5465,6 @@ public class ModalEditor {
     public boolean isVisualMode()      { return mode == Mode.VISUAL; }
     public boolean isVisualLineMode()  { return mode == Mode.VISUAL_LINE; }
     public boolean isVisualBlockMode() { return mode == Mode.VISUAL_BLOCK; }
-    public boolean isSearchMode()         { return mode == Mode.SEARCH; }
     public boolean isTelescopeMode()      { return mode == Mode.TELESCOPE; }
     public boolean isImportSelectMode()   { return mode == Mode.IMPORT_SELECT; }
     public boolean isFilerMode()          { return mode == Mode.FILER; }
@@ -5852,7 +5839,6 @@ public class ModalEditor {
     public List<String> getFileNameResults() { return fileNameResults; }
     public String getStatusMessage()      { return statusMessage; }
     public String getCommandBuffer()      { return commandBuffer.toString(); }
-    public String getSearchBuffer()       { return searchBuffer.toString(); }
     public String getLastSearchPattern()  { return lastSearchPattern; }
     public List<int[]> getSearchMatches() { return searchMatches; }
     public int getCurrentMatchIdx()       { return currentMatchIdx; }
