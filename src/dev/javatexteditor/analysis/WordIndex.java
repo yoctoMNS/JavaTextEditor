@@ -161,6 +161,43 @@ public final class WordIndex {
         return result;
     }
 
+    /**
+     * {@link #extractWordsByProximity} と同じ探索順序（カーソル位置から末尾へ、末尾に達したら
+     * 先頭へ折り返す）で走査しつつ、前方一致ではなく {@link CompletionScorer} のマッチ判定を使う版。
+     *
+     * <p>IntelliJ IDEA の補完は前方一致だけでなく CamelCase 頭文字（{@code sb} → {@code stringBuilder}）や
+     * 単語境界からの部分一致（{@code Builder} → {@code stringBuilder}）でも候補を拾う。
+     * 編集中のバッファは走査が1ファイル分で済むため、そこだけはディスク索引（TreeMap の
+     * 前方一致検索）と違って全語をマッチャに掛けられる。
+     *
+     * <p>戻り値の順序は「カーソルに近い順」のままで、スコア順への並べ替えは行わない
+     * （並べ替えは {@link CompletionRanker} が担当し、同スコアの候補は入力順＝近接順を保つ）。
+     *
+     * @param maxResults 収集する語数の上限。巨大ファイルで候補が膨らみすぎないための歯止め
+     */
+    public static List<String> matchWordsByProximity(String text, int cursorOffset,
+                                                     String prefix, int maxResults) {
+        if (prefix == null || prefix.isEmpty() || text == null || maxResults <= 0) return List.of();
+
+        List<String> result = new java.util.ArrayList<>();
+        Set<String> seen = new java.util.HashSet<>();
+        Matcher m = WORD.matcher(text);
+
+        // 1周目: カーソル位置以降〜本文末尾（カーソル位置そのものの語は除く）
+        while (m.find() && result.size() < maxResults) {
+            if (m.start() <= cursorOffset) continue;
+            String word = m.group();
+            if (CompletionScorer.match(prefix, word) != null && seen.add(word)) result.add(word);
+        }
+        // 2周目: 本文先頭〜カーソル位置（末尾から折り返した続き）
+        m.reset();
+        while (m.find() && m.start() < cursorOffset && result.size() < maxResults) {
+            String word = m.group();
+            if (CompletionScorer.match(prefix, word) != null && seen.add(word)) result.add(word);
+        }
+        return result;
+    }
+
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------

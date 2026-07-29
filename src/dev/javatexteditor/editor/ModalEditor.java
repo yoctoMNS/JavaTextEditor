@@ -384,6 +384,21 @@ public class ModalEditor {
     // 入力補完状態（INSERT モード内で管理）
     private dev.javatexteditor.analysis.CompletionIndex completionIndex = null;
     private final CompletionPopupState completion = new CompletionPopupState();
+    // Java バッファの補完（IntelliJ IDEA 式の候補収集・並べ替え・メンバー補完）。
+    // Cバッファ・その他のバッファは従来どおり queryMergedCompletion()/queryWordCompletion() を使う。
+    private final dev.javatexteditor.analysis.JavaCompletionEngine completionEngine =
+        new dev.javatexteditor.analysis.JavaCompletionEngine();
+    // メンバー補完の正確側（javac による型解決）。enableMemberCompletionLookup() が
+    // 呼ばれるまで無効＝リフレクションによる軽量解決のみで動く（既定はテスト向けの安全側）。
+    private boolean memberLookupEnabled = false;
+    private Consumer<Runnable> memberLookupExecutor = Runnable::run;
+    private Consumer<Runnable> memberLookupUiDispatcher = Runnable::run;
+    // stale 結果破棄用の世代カウンタ（bindingLookupGeneration と同じ考え方）
+    private long memberLookupGeneration = 0;
+    // 実行中の型解決要求（同じレシーバに対して javac を二重起動しないための印）
+    private dev.javatexteditor.analysis.JavaCompletionEngine.MemberKey pendingMemberKey = null;
+    // 補完候補のクラス名を確定したときに import を挿入するために使う（null なら import しない）
+    private dev.javatexteditor.analysis.ImportSuggester importSuggester = null;
     // 単語補完（Alt+/）: 作業ディレクトリ配下の全単語・クラス名・変数名等から補完する。
     // Ctrl+N は INSERT モードで Emacs 式「カーソル下移動」に割り当て済み（keymap-conflict-resolution
     // スキル参照）のため、単語補完のトリガーは Alt+/ を使う。
@@ -1255,6 +1270,10 @@ public class ModalEditor {
 
     /** Ctrl+Space で補完ポップアップを起動する。 */
     private void triggerCompletion() {
+        if (isJavaFilePath(currentFilePath)) {
+            if (!updateJavaCompletion(true)) dismissCompletion();
+            return;
+        }
         boolean classReady = completionIndex != null && completionIndex.isReady();
         boolean wordReady = wordIndex != null && wordIndex.isReady();
         if (!classReady && !wordReady) {
@@ -1273,6 +1292,98 @@ public class ModalEditor {
             return;
         }
         activateCompletion(prefix, items, false);
+    }
+
+    /**
+     * Java バッファの補完候補を求めてポップアップへ反映する（Ctrl+Space と自動表示の共通経路）。
+     *
+     * <p>{@code obj.} の直後ではメンバー補完、それ以外では単語・JDK クラス名・キーワードを
+     * IntelliJ IDEA と同じ観点（マッチ品質 → 近接度 → 使用頻度）で並べる。
+     * メンバー補完のときは、より正確な型解決をバックグラウンドの javac に依頼する
+     * （結果が届いたら {@link #applyAccurateMembers} が中身を差し替える）。
+     *
+     * @param explicit Ctrl+Space による明示トリガーなら true（候補が無いことを知らせる）
+     * @return 候補を表示したなら true
+     */
+    private boolean updateJavaCompletion(boolean explicit) {
+        String text = buffer.getText();
+        dev.javatexteditor.analysis.CompletionContext ctx =
+            dev.javatexteditor.analysis.CompletionContext.at(text, offsetOfCursor());
+        // 修飾なしの位置で何も打っていないときは出さない（メンバー補完は "." だけで出す）
+        if (!ctx.isMember() && ctx.prefix().isEmpty()) return false;
+
+        // 依頼を先に出す。本番配線（仮想スレッド）では即座に戻るので下の候補計算に影響しないが、
+        // 同期実行機構を注入したテストではこの時点で正確な候補が揃う。
+        if (ctx.isMember()) requestAccurateMembers(ctx, text);
+
+        java.util.List<dev.javatexteditor.analysis.CompletionRanker.Ranked> ranked =
+            completionEngine.complete(ctx, text, getLines(), cursorRow, currentFilePath,
+                COMPLETION_MAX_RESULTS);
+        if (ranked.isEmpty()) {
+            if (explicit) setStatusMessage("補完候補なし: " + ctx.prefix());
+            return false;
+        }
+        completion.openWith(ctx.prefix(), ranked, false);
+        syncCompletionCanvas();
+        return true;
+    }
+
+    /**
+     * レシーバの型を javac で正確に解決するようバックグラウンドへ依頼する。
+     * 解決済み（キャッシュ済み）・依頼済み・機能が無効な場合は何もしない。
+     */
+    private void requestAccurateMembers(dev.javatexteditor.analysis.CompletionContext ctx, String text) {
+        if (!memberLookupEnabled) return;
+        final dev.javatexteditor.analysis.JavaCompletionEngine.MemberKey key =
+            completionEngine.memberKeyOf(currentFilePath, text, ctx);
+        if (completionEngine.hasAccurateMembers(key) || key.equals(pendingMemberKey)) return;
+
+        pendingMemberKey = key;
+        final long generation = ++memberLookupGeneration;
+        final String filePathAtRequest = currentFilePath;
+        final Path root = getProjectRoot();
+        final UndoablePieceTable bufferAtRequest = buffer;
+        memberLookupExecutor.accept(() -> {
+            java.util.List<dev.javatexteditor.analysis.CompletionItem> members =
+                completionEngine.resolveMembersAccurately(ctx, text, filePathAtRequest, root);
+            memberLookupUiDispatcher.accept(
+                () -> applyAccurateMembers(generation, key, members, bufferAtRequest));
+        });
+    }
+
+    /**
+     * javac が解決したメンバー候補を反映する。
+     * 依頼後に状況が変わっていた場合（別のレシーバへ移った・バッファを切り替えた・
+     * 解決に失敗した）は、表示中の軽量解決の結果をそのまま残す。
+     */
+    private void applyAccurateMembers(long generation,
+            dev.javatexteditor.analysis.JavaCompletionEngine.MemberKey key,
+            java.util.List<dev.javatexteditor.analysis.CompletionItem> members,
+            UndoablePieceTable bufferAtRequest) {
+        if (generation != memberLookupGeneration) return; // 新しい依頼が出ている
+        pendingMemberKey = null;
+        if (members.isEmpty()) return;                    // 解決失敗: 軽量解決の結果を保つ
+        completionEngine.putMembers(key, members, true);
+
+        if (buffer != bufferAtRequest || !completion.isActive() || completion.isWordMode()) return;
+        String text = buffer.getText();
+        dev.javatexteditor.analysis.CompletionContext ctx =
+            dev.javatexteditor.analysis.CompletionContext.at(text, offsetOfCursor());
+        if (!ctx.isMember()) return;
+        if (!completionEngine.memberKeyOf(currentFilePath, text, ctx).equals(key)) return;
+
+        java.util.List<dev.javatexteditor.analysis.CompletionRanker.Ranked> ranked =
+            completionEngine.complete(ctx, text, getLines(), cursorRow, currentFilePath,
+                COMPLETION_MAX_RESULTS);
+        if (ranked.isEmpty()) return;
+        completion.replaceItems(ranked);
+        syncCompletionCanvas();
+        syncCanvas();
+    }
+
+    /** currentFilePath が .java かどうか（isCFilePath と同じ規約: 未設定の疑似バッファは対象外）。 */
+    private static boolean isJavaFilePath(String path) {
+        return path != null && path.toLowerCase(java.util.Locale.ROOT).endsWith(".java");
     }
 
     /**
@@ -1409,11 +1520,29 @@ public class ModalEditor {
         return offsetAt(cursorRow, start);
     }
 
-    /** 補完候補リストを有効化して canvas に反映する（4つのトリガ/再クエリ経路の共通末尾処理）。 */
+    /** 補完候補リストを有効化して canvas に反映する（Alt+/ と非 Java バッファの共通末尾処理）。 */
     private void activateCompletion(String prefix,
             java.util.List<dev.javatexteditor.analysis.CompletionItem> items, boolean wordMode) {
-        completion.openWith(prefix, items, wordMode);
+        completion.openWith(prefix, toRanked(prefix, items), wordMode);
         syncCompletionCanvas();
+    }
+
+    /**
+     * 候補一覧に「入力のどの文字に一致したか」だけを添える。<b>並び順は変えない</b>。
+     *
+     * <p>Alt+/（Vim の i_CTRL-N 相当）の並び順はカーソルからの近接順であることが仕様であり
+     * （CLAUDE.md「補完候補の並び順を Vim の i_CTRL-N に合わせる」節）、
+     * IntelliJ 式の並べ替えを持ち込んではならない。ここで付けるのは強調表示用の位置情報だけ。
+     */
+    private static java.util.List<dev.javatexteditor.analysis.CompletionRanker.Ranked> toRanked(
+            String prefix, java.util.List<dev.javatexteditor.analysis.CompletionItem> items) {
+        java.util.List<dev.javatexteditor.analysis.CompletionRanker.Ranked> ranked =
+            new java.util.ArrayList<>(items.size());
+        for (dev.javatexteditor.analysis.CompletionItem item : items) {
+            ranked.add(new dev.javatexteditor.analysis.CompletionRanker.Ranked(
+                item, dev.javatexteditor.analysis.CompletionScorer.match(prefix, item.label())));
+        }
+        return ranked;
     }
 
     /** 補完ポップアップを閉じる。 */
@@ -1431,6 +1560,10 @@ public class ModalEditor {
     private void recheckCompletion() {
         if (completion.isWordMode()) {
             recheckWordCompletion();
+            return;
+        }
+        if (isJavaFilePath(currentFilePath)) {
+            if (!updateJavaCompletion(false) && completion.isActive()) dismissCompletion();
             return;
         }
         boolean classReady = completionIndex != null && completionIndex.isReady();
@@ -1469,13 +1602,19 @@ public class ModalEditor {
         activateCompletion(prefix, items, true);
     }
 
-    /** 現在選択中の補完候補をバッファに適用する。 */
+    /**
+     * 現在選択中の補完候補をバッファに適用する。
+     *
+     * <p>IntelliJ IDEA と同じく、確定は「文字列を置き換えて終わり」ではない:
+     * メソッドなら {@code ()} まで入れて括弧の内側にカーソルを置き、
+     * クラス名なら必要な import 文を挿入する。
+     */
     private void applyCompletion() {
         dev.javatexteditor.analysis.CompletionItem item = completion.selectedItem();
         if (item == null) return;
-        String label = item.label();
+        String insertText = item.insertText();
 
-        // カーソル前の識別子プレフィックスを削除してラベルを挿入
+        // カーソル前の識別子プレフィックスを削除して挿入テキストに置き換える
         String[] lines = getLines();
         String line = (cursorRow < lines.length) ? lines[cursorRow] : "";
         int col = Math.min(cursorCol, line.length());
@@ -1490,9 +1629,44 @@ public class ModalEditor {
         if (prefixLen > 0) {
             buffer.delete(offsetStart, prefixLen);
         }
-        buffer.insert(offsetStart, label);
-        cursorCol = start + label.length();
+        buffer.insert(offsetStart, insertText);
+        cursorCol = start + insertText.length() - item.caretBackOffset();
+        completionEngine.recordAccepted(item);
+
+        String importFqn = importForAcceptedItem(item);
         dismissCompletion();
+        if (importFqn != null) applyImportKeepingCursor(importFqn);
+    }
+
+    /**
+     * クラス名の候補を確定したときに挿入すべき import の FQN。不要なら null。
+     *
+     * <p>候補が1件に定まる JDK クラスだけをその場で挿入する。プロジェクト内のクラスは
+     * 特定にプロジェクト全体の grep（{@code ProjectClassSuggester}）が要り、確定キーの
+     * 押し心地を損なうため、ここでは扱わずに INSERT モードを抜けた時点で走る既存の
+     * auto-import（⑯ auto-import-handler）へ任せる。候補が複数ある場合も同様に、
+     * 既存の選択 UI（IMPORT_SELECT モード）に委ねる。
+     */
+    private String importForAcceptedItem(dev.javatexteditor.analysis.CompletionItem item) {
+        if (item.needsImport()) return item.importFqn();
+        if (!"cls".equals(item.kind()) || !isJavaFilePath(currentFilePath)) return null;
+        if (importSuggester == null || autoImportHandler == null) return null;
+        java.util.List<String> candidates = importSuggester.suggest(item.label());
+        return (candidates.size() == 1) ? candidates.get(0) : null;
+    }
+
+    /**
+     * import 文を挿入し、カーソルが指していた文字を指したままにする。
+     * import はカーソルより前（ファイル先頭側）に入るため、挿入で増えた分だけ位置がずれる。
+     */
+    private void applyImportKeepingCursor(String fqn) {
+        int caretBefore = offsetOfCursor();
+        String before = buffer.getText();
+        if (!autoImportHandler.applyImport(fqn, buffer)) return;
+        String after = buffer.getText();
+        moveCursorToOffset(caretBefore + (after.length() - before.length()));
+        // 表示中の診断（ガター・波下線）も挿入した行数だけずらす
+        shiftDiagnosticsAfterImportEdit(before, after);
     }
 
     /** カーソル直前の Java 識別子プレフィックスを返す。 */
@@ -1517,12 +1691,14 @@ public class ModalEditor {
             canvas.setCompletionView(CompletionView.hidden());
             return;
         }
-        java.util.List<String> labels = completion.items().stream()
-            .map(dev.javatexteditor.analysis.CompletionItem::label).toList();
-        java.util.List<String> kinds = completion.items().stream()
-            .map(dev.javatexteditor.analysis.CompletionItem::kind).toList();
+        java.util.List<CompletionView.Row> rows = new java.util.ArrayList<>(completion.items().size());
+        for (dev.javatexteditor.analysis.CompletionRanker.Ranked ranked : completion.items()) {
+            dev.javatexteditor.analysis.CompletionItem item = ranked.item();
+            rows.add(new CompletionView.Row(item.label(), item.kind(), item.tailText(),
+                item.typeText(), ranked.highlightPositions()));
+        }
         canvas.setCompletionView(new CompletionView(
-            true, labels, kinds, completion.selectedIdx(), cursorRow, cursorCol));
+            true, rows, completion.selectedIdx(), cursorRow, cursorCol));
     }
 
     private static final java.util.Set<Character> CLOSING_PAIRS =
@@ -5747,7 +5923,9 @@ public class ModalEditor {
     public boolean isCdConfirmCreateMode() { return mode == Mode.CD_CONFIRM_CREATE; }
     public String getClasspathInputBuffer() { return classpathInputBuffer.toString(); }
     public boolean isCompletionActive()   { return completion.isActive(); }
-    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() { return completion.items(); }
+    public java.util.List<dev.javatexteditor.analysis.CompletionItem> getCompletionItems() {
+        return dev.javatexteditor.analysis.CompletionRanker.itemsOf(completion.items());
+    }
     public boolean isCdSelectionActive()  { return cdSelectionActive; }
     public List<String> getCdCandidates() { return cdCandidates; }
     public boolean isEditSelectionActive() { return edSelectionActive; }
@@ -6164,21 +6342,49 @@ public class ModalEditor {
     /** JDK クラスインデックスを設定する（Main.java からバックグラウンド構築後に呼ぶ）。 */
     public void setJdkClassIndex(JdkClassIndex index) {
         this.jdkIndex = index;
+        completionEngine.setJdkClassIndex(index);
     }
 
     /** 入力補完インデックスを設定する。 */
     public void setCompletionIndex(dev.javatexteditor.analysis.CompletionIndex index) {
         this.completionIndex = index;
+        completionEngine.setClassIndex(index);
     }
 
     /** Alt+/ 単語補完インデックスを設定する。 */
     public void setWordIndex(dev.javatexteditor.analysis.WordIndex index) {
         this.wordIndex = index;
+        completionEngine.setWordIndex(index);
     }
 
     /** auto-import ハンドラを設定する。 */
     public void setAutoImportHandler(AutoImportHandler handler) {
         this.autoImportHandler = handler;
+    }
+
+    /**
+     * クラス名の補完候補を確定したときに import を挿入するための候補解決器を設定する。
+     * 未設定のままでも補完自体は動く（import 挿入だけが INSERT モード離脱時まで遅れる）。
+     */
+    public void setImportSuggester(dev.javatexteditor.analysis.ImportSuggester suggester) {
+        this.importSuggester = suggester;
+    }
+
+    /**
+     * メンバー補完（{@code obj.} の後）の正確な型解決を有効にする。
+     *
+     * <p>javac の属性付けはプロジェクト規模に比例して重いため EDT では実行できない。
+     * Shift+K のバインディング解決（{@link #enableBindingDefinitionLookup}）と同じく、
+     * 本番配線では仮想スレッド + invokeLater を渡し、テストでは同期実行機構
+     * （{@code Runnable::run}）を渡して processKey 直後に結果を検証できるようにする。
+     *
+     * <p>呼ばれるまではリフレクションによる軽量解決だけで動作する。
+     */
+    public void enableMemberCompletionLookup(Consumer<Runnable> backgroundExecutor,
+                                             Consumer<Runnable> uiDispatcher) {
+        this.memberLookupEnabled = true;
+        this.memberLookupExecutor = backgroundExecutor;
+        this.memberLookupUiDispatcher = uiDispatcher;
     }
 
     /**

@@ -49,6 +49,13 @@
 
 ## 単語補完（Alt+/）の設計決定事項
 
+> **2026-07-29 追記**: 本節と後続の「Ctrl+Space 補完を WordIndex に一本化」節が述べる候補の集め方は、
+> **`.java` バッファでは `.claude/skills/intellij-style-completion/SKILL.md` の実装に置き換わっている**
+> （IntelliJ IDEA 方式のメンバー補完・並べ替え・確定処理）。
+> C言語ファイル・ファイルパス未設定のバッファでは本節の記述が引き続き有効。
+> **`Alt+/`（Vim の `i_CTRL-N` 相当）はファイル種別によらず本節のまま**であり、
+> カーソルからの近接順という並び順も変更していない。
+
 - **INSERT モードで `Alt+/` を押すと、作業ディレクトリ配下の単語・クラス名・変数名・定数名・メソッド名を補完できる**（Vim の `i_CTRL-N` 相当）。当初はユーザー要望通り `Ctrl+N` に割り当てようとしたが、INSERT モードの `Ctrl+N` は `.claude/skills/keymap-conflict-resolution/SKILL.md` で既に Emacs 式「カーソル下移動」に確定済みであり、ユーザーに確認したところ「別キーを使う」を選択したため `Alt+/` を新規に割り当てた（`Ctrl+N` のカーソル下移動は維持）。
 - **既存の `CompletionIndex`（Ctrl+Space、当時は javac の AST 解析で JDK クラス名 + プロジェクトのクラス/メソッド/フィールド名を収集していた）とは別に `dev.javatexteditor.analysis.WordIndex` を新設した**。`CompletionIndex` は宣言されたシンボルしか拾えず、ローカル変数・定数・Java 以外のファイルの単語は対象外なため、「単語」を要求するこの機能には正規表現ベースの軽量なインデックスが必要だったため。AST解析（javac 呼び出し）が不要な分、`CompletionIndex` よりビルドが高速。（のちに `CompletionIndex` 側のプロジェクト AST 解析は重すぎるため廃止され、Ctrl+Space も本節末尾の「Ctrl+Space 補完を WordIndex に一本化」のとおり `WordIndex` を使うようになった。）
 - **高速化のため TreeSet + `subSet(prefix, prefix+Character.MAX_VALUE)` による O(log n + k) のプレフィックス検索を採用**（k = 一致件数のみを走査。全件を毎回スコアリングする `CompletionIndex.query()` より高速）。ビルドは `Files.walkFileTree` を1回だけバックグラウンド仮想スレッドで実行し、`.git`/`build`/`target`/`node_modules`等の慣例的なスキップ対象ディレクトリと、2MB超のファイル・既知のテキスト拡張子以外のファイルを除外して高速化・バイナリファイル誤読を防いでいる。ビルド完了後の `TreeSet` は不変として扱い、参照の差し替え（`volatile` フィールド）だけでスレッド間可視性を保証するため、通常の読み取りに `synchronized` は不要（ロックフリー）。

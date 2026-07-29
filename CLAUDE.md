@@ -113,6 +113,8 @@ project-root/
 | ㉚ | `markdown-viewer` | `.md`/`.markdown`ファイルを開いた際は生ソースを表示し、`:view`コマンドで見出し下線・リスト正規化・インライン記法除去等を行う読み取り専用の閲覧ビューへ切り替え、`:mark`でソースへ戻す | ✅ 完了（98/98テスト・`dev.javatexteditor.markdown`パッケージ新設・`MarkdownRenderer`はSwing非依存の純粋ロジックで出力はASCII印字可能文字のみに限定・`classFileBufferOwner`と同じ参照一致による自動失効パターン・`currentFilePath`をnullにする読み取り専用プレビュー方式（jdk-source方式は不採用、理由はSKILL.md参照）） |
 | ㉛ | `image-preview` | 画像ファイル（png/jpg/jpeg/gif/bmp）を開いた際の全画面プレビュー（アスペクト比維持の自動フィット・`+`/`-`/`0`による手動ズーム・`hjkl`/矢印キーによるパン）、`SwingWorker`による非同期読み込み、読み込み失敗時はMode.BINARYへ自動フォールバック | ✅ 完了（38/38テスト・`Main.isImageFile()`（拡張子+`ImageIO.read()`二段判定）・`ui.ImageRenderer`（Swing非依存の拡縮計算+描画委譲）・新規`Mode.IMAGE`（`Mode.BINARY`と同じ独立モード方式、`KeymapRegistry`不使用）・`imageModeOwner`は既存の参照一致による自動失効パターンを踏襲・パンは既存の`scrollRow`/`scrollCol`をそのまま流用しJScrollPane/CardLayoutは不採用） |
 
+| ㉜ | `intellij-style-completion` | Javaバッファの入力補完をIntelliJ IDEA方式にする（`obj.`のメンバー補完＋ハイブリッド型解決・候補のシグネチャ/型表示・CamelCase/単語境界マッチ・一致品質→近接度→使用頻度の並べ替え・メソッド確定時の`()`挿入・クラス確定時のimport挿入） | ✅ 完了（新規64テスト・キーバインドは一切変更なし＝Ctrl+Space/自動表示/Tab・Enterのまま・Alt+/のVim式近接順は不変・PLAIN位置でjavacを使わない判断は費用対効果によるスコープ外） |
+
 ### 依存関係（Skillを作る順序の制約）
 
 | Skill | 依存先（先に固まっていないと着手すべきでない） |

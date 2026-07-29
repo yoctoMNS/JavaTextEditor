@@ -101,6 +101,8 @@ public final class AnalysisServices {
     public void wireInto(ModalEditor editor) {
         editor.setJdkClassIndex(jdkClassIndex);
         editor.setAutoImportHandler(autoImportHandler);
+        // クラス名の補完候補を確定したその場で import を挿入するために使う
+        editor.setImportSuggester(importSuggester);
         if (completionIndex != null) {
             editor.setCompletionIndex(completionIndex);
         }

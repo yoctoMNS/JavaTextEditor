@@ -340,6 +340,11 @@ public final class PaneManager implements EditorHost {
         editor.enableBindingDefinitionLookup(
             task -> Thread.ofVirtual().name("binding-definition-lookup").start(task),
             javax.swing.SwingUtilities::invokeLater);
+        // メンバー補完（obj. の後）の正確な型解決も同じ理由で完全非同期にする。
+        // 有効化しない場合はリフレクションによる軽量解決だけで動作する。
+        editor.enableMemberCompletionLookup(
+            task -> Thread.ofVirtual().name("member-completion-lookup").start(task),
+            javax.swing.SwingUtilities::invokeLater);
         editor.setBufferListSupplier(bufferRegistry::entries);
         editor.setOnFileOpened(bufferRegistry::register);
         editor.setOnBufferDelete(bufferRegistry::unregister);
