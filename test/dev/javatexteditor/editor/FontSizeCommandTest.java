@@ -10,7 +10,8 @@ import java.awt.event.KeyEvent;
  *
  * MiscFixed(:font 0)選択中は9x15の整数倍固定10段階（N=0〜9、
  * cellW=9*(N+1)・cellH=15*(N+1)）のべき等な絶対値テーブル。
- * IBM Plex Mono(:font 1)選択中は暫定的に旧来の「現在サイズへの倍率」方式を維持する
+ * IBM Plex Mono(:font 1)選択中は7x15（IbmPlexMonoFont.BASE_CELL_W/H）の整数倍固定10段階
+ * （N=0〜9、cellW=7*(N+1)・cellH=15*(N+1)）の、MiscFixedとは独立した同形式の絶対値テーブル
  * （2026-07-29決定。詳細はfont-and-statusline-animationスキル参照）。
  */
 public class FontSizeCommandTest {
@@ -25,7 +26,8 @@ public class FontSizeCommandTest {
         testOutOfRangeStepIsRejected();
         testNoCanvasShowsError();
         testCommandReturnsToNormalMode();
-        testPlexMonoStillUsesMultiplier();
+        testPlexMonoUsesOwnAbsoluteTable();
+        testPlexMonoFsDoesNotAffectMiscFixedStash();
 
         int fail = total - pass;
         System.out.println("---");
@@ -108,14 +110,37 @@ public class FontSizeCommandTest {
         check(":fs 実行後はNORMALモードに戻る", true, ed.isNormalMode());
     }
 
-    static void testPlexMonoStillUsesMultiplier() {
+    static void testPlexMonoUsesOwnAbsoluteTable() {
         EditorCanvas canvas = new EditorCanvas();
-        canvas.setInitialCellSize(9, 15);
+        canvas.setInitialCellSize(63, 90);
         ModalEditor ed = new ModalEditor("abc", canvas);
         ed.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        sendCommand(ed, "fs 0");
+        check(":font 1中の:fs 0はPlex Mono基準サイズ幅7になる（現在サイズに依存しない）", 7, canvas.getCellW());
+        check(":font 1中の:fs 0はPlex Mono基準サイズ高さ15になる（現在サイズに依存しない）", 15, canvas.getCellH());
+
         sendCommand(ed, "fs 2");
-        check("Plex Mono中の:fs 2は現在サイズの2倍になる (幅)", 18, canvas.getCellW());
-        check("Plex Mono中の:fs 2は現在サイズの2倍になる (高さ)", 30, canvas.getCellH());
+        check(":font 1中の:fs 2は幅21になる (7*3)", 21, canvas.getCellW());
+        check(":font 1中の:fs 2は高さ45になる (15*3)", 45, canvas.getCellH());
+
+        sendCommand(ed, "fs 9");
+        check(":font 1中の:fs 9は幅70になる (7*10)", 70, canvas.getCellW());
+        check(":font 1中の:fs 9は高さ150になる (15*10)", 150, canvas.getCellH());
+    }
+
+    static void testPlexMonoFsDoesNotAffectMiscFixedStash() {
+        EditorCanvas canvas = new EditorCanvas();
+        ModalEditor ed = new ModalEditor("abc", canvas);
+
+        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        ed.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        sendCommand(ed, "fs 9");
+        check(":font 1で:fs 9を実行した直後は幅70になる", 70, canvas.getCellW());
+        check(":font 1で:fs 9を実行した直後は高さ150になる", 150, canvas.getCellH());
+
+        canvas.setFontChoice(FontChoice.MISC_FIXED);
+        check("Plex Monoの:fsはMiscFixedの既定サイズ(幅9)に影響しない", 9, canvas.getCellW());
+        check("Plex Monoの:fsはMiscFixedの既定サイズ(高さ15)に影響しない", 15, canvas.getCellH());
     }
 
     static void check(String name, Object expected, Object actual) {

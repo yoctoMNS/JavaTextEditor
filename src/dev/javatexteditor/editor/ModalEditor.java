@@ -40,6 +40,7 @@ import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.CompletionView;
 import dev.javatexteditor.ui.EditorCanvas;
 import dev.javatexteditor.ui.FontChoice;
+import dev.javatexteditor.ui.IbmPlexMonoFont;
 import dev.javatexteditor.ui.MiscFixedBold9x15;
 import dev.javatexteditor.ui.SelectionView;
 import dev.javatexteditor.ui.TelescopeView;
@@ -2900,17 +2901,20 @@ public class ModalEditor {
     }
 
     /**
-     * MiscFixed（:font 0）用の絶対フォントサイズテーブル。9x15の整数倍(N+1)倍で
-     * 10段階固定（N=0〜9）。:fs Nは前回の状態に依存しないべき等な絶対値参照とする
-     * （2026-07-29 決定。詳細はfont-and-statusline-animationスキル参照）。
+     * :font 0 (MiscFixed)・:font 1 (IBM Plex Mono) それぞれ専用の絶対フォントサイズテーブル。
+     * どちらもそのフォント固有の既定セルサイズ(N=0)の整数倍(N+1)倍で10段階固定（N=0〜9）。
+     * :fs Nは前回の状態に依存しないべき等な絶対値参照とする（2026-07-29 決定）。
+     * 2つのテーブルは互いに独立しており、一方の:fs実行がもう一方のフォントの
+     * セルサイズ状態（EditorCanvasのmiscCellW/H・plexCellW/H）に影響することはない
+     * （詳細はfont-and-statusline-animationスキル参照）。
      */
-    private static final int MISC_FIXED_FS_STEPS = 10;
+    private static final int FONT_FS_STEPS = 10;
 
     /**
      * :fs <N> — フォントセルサイズを絶対値テーブルで変更する。
      * MiscFixed(:font 0)選択中は9x15の整数倍固定10段階（N=0〜9、cellW=9*(N+1)・cellH=15*(N+1)）。
-     * IBM Plex Mono(:font 1)選択中は暫定的に現行の「現在サイズへの倍率」方式を維持する
-     * （アウトラインフォント用の基準pt・刻み幅は未検証のため今回はスコープ外。2026-07-29決定）。
+     * IBM Plex Mono(:font 1)選択中はPlex Mono固有の既定セルサイズ(7x15、IbmPlexMonoFont.BASE_CELL_W/H)
+     * を基準(N=0)とした同形式の10段階（cellW=7*(N+1)・cellH=15*(N+1)）。
      * Ctrl+Shift+矢印と同じ canvas.setInitialCellSize() 経由で反映する（範囲は同じ 5〜90 / 8〜150 にクランプされる）。
      * canvas を持たないテスト環境では no-op としエラーメッセージのみ表示する。
      */
@@ -2919,42 +2923,31 @@ public class ModalEditor {
             statusMessage = "E: no canvas";
             return;
         }
-        if (fontChoice == FontChoice.MISC_FIXED) {
-            int step;
-            try {
-                step = Integer.parseInt(arg.trim());
-            } catch (NumberFormatException e) {
-                statusMessage = "E: usage :fs 0-9 (0=9x15 .. 9=90x150, Misc Fixed 10 steps)";
-                return;
-            }
-            if (step < 0 || step >= MISC_FIXED_FS_STEPS) {
-                statusMessage = "E: usage :fs 0-9 (0=9x15 .. 9=90x150, Misc Fixed 10 steps)";
-                return;
-            }
-            int newW = MiscFixedBold9x15.BASE_CELL_W * (step + 1);
-            int newH = MiscFixedBold9x15.BASE_CELL_H * (step + 1);
-            canvas.setInitialCellSize(newW, newH);
-            canvas.repaint();
-            statusMessage = "font size: " + canvas.getCellW() + " x " + canvas.getCellH();
-            return;
-        }
-        double multiplier;
+        int baseW = (fontChoice == FontChoice.MISC_FIXED)
+            ? MiscFixedBold9x15.BASE_CELL_W
+            : IbmPlexMonoFont.BASE_CELL_W;
+        int baseH = (fontChoice == FontChoice.MISC_FIXED)
+            ? MiscFixedBold9x15.BASE_CELL_H
+            : IbmPlexMonoFont.BASE_CELL_H;
+        String usage = "E: usage :fs 0-9 (0=" + baseW + "x" + baseH + " .. 9="
+            + (baseW * FONT_FS_STEPS) + "x" + (baseH * FONT_FS_STEPS) + ", "
+            + (fontChoice == FontChoice.MISC_FIXED ? "Misc Fixed" : "IBM Plex Mono") + " 10 steps)";
+        int step;
         try {
-            multiplier = Double.parseDouble(arg);
+            step = Integer.parseInt(arg.trim());
         } catch (NumberFormatException e) {
-            statusMessage = "E: usage :fs <multiplier> (e.g. :fs 2, :fs 1.5)";
+            statusMessage = usage;
             return;
         }
-        if (multiplier <= 0) {
-            statusMessage = "E: usage :fs <multiplier> (e.g. :fs 2, :fs 1.5)";
+        if (step < 0 || step >= FONT_FS_STEPS) {
+            statusMessage = usage;
             return;
         }
-        int newW = (int) Math.round(canvas.getCellW() * multiplier);
-        int newH = (int) Math.round(canvas.getCellH() * multiplier);
+        int newW = baseW * (step + 1);
+        int newH = baseH * (step + 1);
         canvas.setInitialCellSize(newW, newH);
         canvas.repaint();
-        statusMessage = "font size: " + canvas.getCellW() + " x " + canvas.getCellH()
-                + " (Plex Mono: relative multiplier, not the 10-step table)";
+        statusMessage = "font size: " + canvas.getCellW() + " x " + canvas.getCellH();
     }
 
     /**
