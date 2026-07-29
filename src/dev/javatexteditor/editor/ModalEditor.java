@@ -5703,6 +5703,9 @@ public class ModalEditor {
             try {
                 Files.createDirectories(target);
                 applyChangeDirectory(target);
+                if (mode == Mode.FILER) {
+                    statusMessage = "";
+                }
             } catch (Exception ex) {
                 statusMessage = "E: " + ex.getMessage();
             }
