@@ -157,6 +157,17 @@ FILER 本体とは別の、`:cd` コマンドライン入力を助ける機能�
 
 ---
 
+## 親ディレクトリへの移動（`..` エントリ、2026-07-29追加）
+
+`enterFiler()` は `DirectoryLister.listDirectoryEntries()` の結果の先頭に、`getProjectRoot()`
+に親ディレクトリが存在する場合のみ `DirEntry("..", parent, Kind.DIRECTORY)` を1件だけ追加する
+（ファイルシステムのルートで親が無い場合は追加しない＝`Path.getParent()` が `null` を返すかで判定）。
+`..` は通常のディレクトリエントリと同じ `DirEntry` として扱うため、`openSelectedEntry()` 等の
+既存のディレクトリ遷移ロジック（Enter で `changeWdCallback.apply()` → `enterFiler()` 再実行）を
+一切変更せずに動作する。`/` 検索フィルタの対象にも自然に含まれる（`".."` を含む文字列で絞り込む
+ことは通常無いため実用上の影響はない）。ソート処理より前に先頭固定で挿入するため、
+`DirectoryLister` 側のディレクトリ優先ソートには影響しない。
+
 ## 設計判断ログ（詳細は `docs/decision-log.md` を参照）
 
 - **「FILERモードの設計決定事項」節**: `Mode.FILER` 新設・`currentDirectory` を `projectRoot`

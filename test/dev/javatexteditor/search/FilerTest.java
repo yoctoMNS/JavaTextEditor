@@ -42,6 +42,7 @@ public class FilerTest {
         testCdCompleteQCancelsAndRestoresBuffer();
         testCdCompleteJKNavigation();
         testCdTabEmptyPrefixListsAllDirs();
+        testParentDirEntryNavigatesUp();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -209,9 +210,12 @@ public class FilerTest {
             Files.writeString(tmp.resolve("only.txt"), "x");
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommand(editor, "cd " + tmp.toString());
-            assertEquals("single item index is 0", 0, editor.getFilerSelectedIdx());
+            assertEquals("initial index is 0", 0, editor.getFilerSelectedIdx());
+            // 一覧は ".." + only.txt の2件になるため、last item は index 1
             editor.processKey(KeyEvent.VK_N, 'n', InputEvent.CTRL_DOWN_MASK);
-            assertEquals("Ctrl+N clamps at last item", 0, editor.getFilerSelectedIdx());
+            assertEquals("Ctrl+N moves to last item", 1, editor.getFilerSelectedIdx());
+            editor.processKey(KeyEvent.VK_N, 'n', InputEvent.CTRL_DOWN_MASK);
+            assertEquals("Ctrl+N clamps at last item", 1, editor.getFilerSelectedIdx());
         } finally {
             deleteDir(tmp);
         }
@@ -225,7 +229,7 @@ public class FilerTest {
             Files.writeString(tmp.resolve("Readme.md"),   "z");
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommand(editor, "cd " + tmp.toString());
-            assertEquals("all 3 entries visible initially", 3, editor.getFilerFiltered().size());
+            assertEquals("all 4 entries visible initially (incl. ..)", 4, editor.getFilerFiltered().size());
             // Press '/' to enter search mode, then type "main"
             editor.processKey(0, '/', 0);
             assertTrue("slash enters search mode", editor.isFilerSearchMode());
@@ -270,8 +274,9 @@ public class FilerTest {
             }
             editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
             assertTrue("Enter on dir stays in filer mode", editor.isFilerMode());
-            assertEquals("currentDirectory updated to tmp", 1, editor.getFilerFiltered().size());
-            assertEquals("single entry is file.txt", "file.txt", editor.getFilerFiltered().get(0).name());
+            assertEquals("currentDirectory updated to tmp", 2, editor.getFilerFiltered().size());
+            assertEquals("first entry is ..", "..", editor.getFilerFiltered().get(0).name());
+            assertEquals("second entry is file.txt", "file.txt", editor.getFilerFiltered().get(1).name());
         } finally {
             deleteDir(tmp);
         }
@@ -290,7 +295,7 @@ public class FilerTest {
             assertTrue("still in filer mode after search Esc", editor.isFilerMode());
             assertTrue("search mode cleared", !editor.isFilerSearchMode());
             assertEquals("query cleared", "", editor.getFilerQuery());
-            assertEquals("full list restored", 1, editor.getFilerFiltered().size());
+            assertEquals("full list restored (incl. ..)", 2, editor.getFilerFiltered().size());
         } finally {
             deleteDir(tmp);
         }
@@ -316,9 +321,10 @@ public class FilerTest {
             Files.writeString(file, "Hello, world!\n");
             ModalEditor editor = makeEditorWithFilerSupport(tmp);
             typeCommand(editor, "cd " + tmp.toString());
-            // hello.txt should be the only entry
-            assertEquals("one entry", 1, editor.getFilerFiltered().size());
-            assertEquals("entry is hello.txt", "hello.txt", editor.getFilerFiltered().get(0).name());
+            // ".." + hello.txt の2件のはず
+            assertEquals("two entries (incl. ..)", 2, editor.getFilerFiltered().size());
+            assertEquals("second entry is hello.txt", "hello.txt", editor.getFilerFiltered().get(1).name());
+            editor.processKey(KeyEvent.VK_N, 'n', InputEvent.CTRL_DOWN_MASK);
             editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
             assertTrue("Enter on file exits filer to normal", editor.isNormalMode());
             assertTrue("file content loaded", editor.getText().contains("Hello, world!"));
@@ -346,8 +352,28 @@ public class FilerTest {
             for (int i = 0; i < idx; i++) editor.processKey(KeyEvent.VK_N, 'n', InputEvent.CTRL_DOWN_MASK);
             editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
             assertTrue("still in filer mode after dir enter", editor.isFilerMode());
-            assertEquals("child dir has 1 entry", 1, editor.getFilerFiltered().size());
-            assertEquals("entry is inner.txt", "inner.txt", editor.getFilerFiltered().get(0).name());
+            assertEquals("child dir has 2 entries (incl. ..)", 2, editor.getFilerFiltered().size());
+            assertEquals("second entry is inner.txt", "inner.txt", editor.getFilerFiltered().get(1).name());
+        } finally {
+            deleteDir(parent);
+        }
+    }
+
+    static void testParentDirEntryNavigatesUp() throws Exception {
+        Path parent = Files.createTempDirectory("filer_updir_");
+        try {
+            Path child = Files.createDirectory(parent.resolve("child"));
+            Files.writeString(child.resolve("inner.txt"), "inner");
+            ModalEditor editor = makeEditorWithFilerSupport(child);
+            typeCommand(editor, "cd " + child.toString());
+            assertTrue("in filer mode", editor.isFilerMode());
+            assertEquals("first entry is ..", "..", editor.getFilerFiltered().get(0).name());
+            // ".." が選択された状態で Enter -> 親ディレクトリへ移動する
+            editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("still in filer mode after going up", editor.isFilerMode());
+            List<DirEntry> entries = editor.getFilerFiltered();
+            boolean hasChild = entries.stream().anyMatch(e -> e.name().equals("child"));
+            assertTrue("parent listing contains child dir", hasChild);
         } finally {
             deleteDir(parent);
         }
