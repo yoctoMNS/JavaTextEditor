@@ -157,10 +157,11 @@ public class JumpBackTest {
         ModalEditor ed = new ModalEditor(content, canvas);
         ed.setJdkClassIndex(JdkClassIndex.buildSync());
 
-        // "/" 検索でハイライトを作ってから Shift+K でジャンプする
-        ed.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
-        for (char c : "needle".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
-        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
+        // "*" 単語検索でハイライトを作ってから Shift+K でジャンプする
+        // （かつては "/" パターン検索を使っていたが、Emacs式インクリメンタルサーチへの統一に伴い
+        //  "/" は廃止されたため、同じく検索状態が持続する "*" に置き換えた。text-search skill参照）
+        ed.setCursor(0, content.indexOf("needle")); // 1つ目の "needle" の上へ
+        ed.processKey(KeyEvent.VK_UNDEFINED, '*', 0);
         assertTrue("ジャンプ前: ハイライトが存在する", !canvas.getSearchHighlights().isEmpty());
 
         ed.setCursor(0, 0); // "String" の上へ
@@ -195,12 +196,27 @@ public class JumpBackTest {
             return;
         }
 
-        // 疑似バッファ内で検索してハイライトを作る（"class" は Java ソースにほぼ必ず含まれる）
-        ed.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
-        for (char c : "class".toCharArray()) ed.processKey(KeyEvent.VK_UNDEFINED, c, 0);
-        ed.processKey(KeyEvent.VK_ENTER, '\n', 0);
-        if (canvas.getSearchHighlights().isEmpty()) {
+        // 疑似バッファ内で "*" 単語検索してハイライトを作る（"class" は Java ソースにほぼ必ず含まれる。
+        // かつては "/" パターン検索を使っていたが、"/" 廃止に伴い "*" に置き換えた。text-search skill参照）
+        String pseudoText = ed.getText();
+        int classOffset = pseudoText.indexOf("class");
+        if (classOffset < 0) {
             System.out.println("  SKIP testCloseJdkSourceBufferClearsSearchHighlight (\"class\"が疑似バッファ内で見つからない)");
+            pass++;
+            return;
+        }
+        int classRow = 0;
+        int lineStart = 0;
+        for (int i = 0; i < classOffset; i++) {
+            if (pseudoText.charAt(i) == '\n') {
+                classRow++;
+                lineStart = i + 1;
+            }
+        }
+        ed.setCursor(classRow, classOffset - lineStart);
+        ed.processKey(KeyEvent.VK_UNDEFINED, '*', 0);
+        if (canvas.getSearchHighlights().isEmpty()) {
+            System.out.println("  SKIP testCloseJdkSourceBufferClearsSearchHighlight (\"class\"の単語検索でハイライトが作れない)");
             pass++;
             return;
         }

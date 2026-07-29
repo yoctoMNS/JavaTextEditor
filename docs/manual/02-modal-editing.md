@@ -14,12 +14,13 @@
 | VISUAL | 文字単位の範囲選択 | NORMALで `v` |
 | VISUAL LINE | 行単位の範囲選択 | NORMALで `V` |
 | VISUAL BLOCK | 矩形（列範囲）選択 | NORMALで `Ctrl+V` |
-| SEARCH | `/` によるバッファ内検索パターン入力 | NORMALで `/` |
 | FILESEARCH | `\f`/`\g` によるファイル名/grep検索パターン入力 | NORMALで `\f` または `\g` |
 | TELESCOPE | telescope.vim風ファジーファインダー | NORMALで `SPC+f`/`SPC+/`/`SPC+b` |
 | FILER | ディレクトリブラウザ | `:cd` 成功後に自動遷移 |
 
-SEARCH/FILESEARCH/TELESCOPE/FILERは [検索・ナビゲーション](03-search-and-navigation.md) で詳しく扱います。
+Emacs式インクリメンタルサーチ（`Ctrl+S`/`Ctrl+R`）は専用のModeを持たず、NORMAL/INSERTモードのまま完結する疑似サブ状態として動作します（かつて存在した `/` によるSEARCHモードは、検索アルゴリズムをEmacs式に一本化するため廃止されました）。
+
+FILESEARCH/TELESCOPE/FILER・Emacs式インクリメンタルサーチは [検索・ナビゲーション](03-search-and-navigation.md) で詳しく扱います。
 
 ## NORMALモード
 
@@ -55,7 +56,7 @@ SEARCH/FILESEARCH/TELESCOPE/FILERは [検索・ナビゲーション](03-search-
 | `a` | INSERTモードへ（カーソル後に挿入） |
 | `o` | 現在行の下に新しい行を開いてINSERTモードへ |
 | `u` | 直前の編集を取り消す（アンドゥ） |
-| `Ctrl+R` | 取り消した編集をやり直す（リドゥ） |
+| `Ctrl+Shift+R` | 取り消した編集をやり直す（リドゥ）。`Ctrl+R` はEmacs式インクリメンタルサーチ（後方検索）の起動キーへ変更されたため、リドゥは `Ctrl+Shift+R` に移動した |
 | `yy` | 現在行をヤンク |
 | `dd` | 現在行を削除してヤンク |
 | `x` | カーソル位置の1文字を削除 |
@@ -150,7 +151,7 @@ Vim式の `:s`（substitute）コマンドで、正規表現による文字列�
 - 区切り文字は `/` 以外の任意の1文字も使えます（例: `:s#foo#bar#`）
 - フラグ（末尾に付与）: `g` で行内の全マッチを置換（省略時は各行の最初のマッチのみ）、`i` で大文字小文字を無視
 - 置換文字列側で `&` はマッチ全体、`\1`〜`\9` は後方参照として使えます（`\&` でリテラルの `&`）
-- パターンを空にすると、直前の `/` 検索（[検索・ナビゲーション](03-search-and-navigation.md)）で使ったパターンを再利用します
+- パターンを空にすると、直前の `*`/`#` 単語検索（[検索・ナビゲーション](03-search-and-navigation.md)）で使ったパターンを再利用します
 - 置換後はマッチ件数と対象行数がステータスバーに `N substitutions on M lines` の形式で表示され、カーソルは最後に変更された行へ移動します。マッチが1件もなければ `E: pattern not found: <pattern>` を表示します
 - VISUAL/VISUAL LINE/VISUAL BLOCKモード中に `:` を押すと、選択範囲を表す `'<,'>` が自動入力された状態でCOMMANDモードに入ります（後述）
 

@@ -264,13 +264,15 @@ public class RobotKeyInputTest {
 
     static void testNormalUndoRedo() throws Exception {
         resetEditorTo("hello");
-        System.out.println("\n--- NORMALモード: u / Ctrl+R ---");
+        System.out.println("\n--- NORMALモード: u / Ctrl+Shift+R ---");
         pressChar('i'); pressChar('X'); pressEscape(); // "Xhello"
         check("挿入後: Xhello", "Xhello", editor.getText());
         pressChar('u');
         check("u: hello", "hello", editor.getText());
-        pressCtrl(KeyEvent.VK_R);
-        check("Ctrl+R: Xhello", "Xhello", editor.getText());
+        // Ctrl+R は Emacs式インクリメンタルサーチ(後方検索)の起動キーへ変更されたため、
+        // redo は Ctrl+Shift+R（text-search skill参照）
+        pressCtrlShift(KeyEvent.VK_R);
+        check("Ctrl+Shift+R: Xhello", "Xhello", editor.getText());
     }
 
     static void testInsertModeTyping() throws Exception {

@@ -131,9 +131,10 @@ public class SubstituteCommandTest {
     static void testEmptyPatternReusesLastSearch() {
         System.out.println("[空パターンは直前の検索パターンを再利用する]");
         ModalEditor ed = new ModalEditor("foo bar");
-        pressKey(ed, '/');
-        typeString(ed, "foo");
-        ed.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+        // かつては "/" パターン検索で lastSearchPattern をセットしていたが、
+        // "/" 廃止（Emacs式インクリメンタルサーチへの統一）に伴い "*" 単語検索に置き換えた。
+        // カーソルは先頭 (col0) で "foo" の上にあるため、そのまま * を押せる。text-search skill参照
+        pressKey(ed, '*');
         sendCommand(ed, "s//baz/");
         check("直前検索パターンfooが使われる", ed.getText().equals("baz bar"));
     }

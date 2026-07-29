@@ -301,9 +301,10 @@ public class ProjectSearchTest {
         try {
             EditorCanvas canvas = new EditorCanvas();
             ModalEditor editor = new ModalEditor("needle needle text", canvas);
-            editor.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
-            for (char c : "needle".toCharArray()) editor.processKey(KeyEvent.VK_UNDEFINED, c, 0);
-            editor.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            // かつては "/" パターン検索でハイライトを作っていたが、"/" 廃止
+            // （Emacs式インクリメンタルサーチへの統一）に伴い "*" 単語検索に置き換えた。
+            // カーソルは先頭(col0)で1つ目の "needle" の上にあるため、そのまま * を押せる。
+            editor.processKey(KeyEvent.VK_UNDEFINED, '*', 0);
             assertFalse("grep前: ハイライトが存在する", canvas.getSearchHighlights().isEmpty());
 
             sendCommand(editor, "grep foo");
@@ -330,10 +331,21 @@ public class ProjectSearchTest {
             ModalEditor editor = new ModalEditor("", canvas);
             sendCommand(editor, "grep find");
 
-            // grep結果バッファ内で検索してハイライトを作る（ヘッダ行の "match" は必ず含まれる）
-            editor.processKey(KeyEvent.VK_UNDEFINED, '/', 0);
-            for (char c : "match".toCharArray()) editor.processKey(KeyEvent.VK_UNDEFINED, c, 0);
-            editor.processKey(KeyEvent.VK_ENTER, '\n', 0);
+            // grep結果バッファ内で "*" 単語検索してハイライトを作る（ヘッダ行の "match" は必ず含まれる。
+            // かつては "/" パターン検索を使っていたが、"/" 廃止に伴い "*" に置き換えた）
+            String headerText = editor.getText();
+            int matchOffset = headerText.indexOf("match");
+            assertTrue("ヘッダ行に match が含まれる", matchOffset >= 0);
+            int matchRow = 0;
+            int lineStart = 0;
+            for (int i = 0; i < matchOffset; i++) {
+                if (headerText.charAt(i) == '\n') {
+                    matchRow++;
+                    lineStart = i + 1;
+                }
+            }
+            editor.setCursor(matchRow, matchOffset - lineStart);
+            editor.processKey(KeyEvent.VK_UNDEFINED, '*', 0);
             assertFalse("ジャンプ前: ハイライトが存在する", canvas.getSearchHighlights().isEmpty());
 
             editor.setCursor(1, 0);

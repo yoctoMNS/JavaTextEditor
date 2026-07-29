@@ -105,12 +105,12 @@ private void openTutorial() {
 | 1 | モードという考え方 | NORMAL/INSERT/VISUAL/COMMAND の概念、Escape の役割 |
 | 2 | カーソル移動の基本 | `h j k l` |
 | 3 | 単語移動・行頭/行末・ファイル先頭/末尾 | `w b e 0 ^ $ gg G` |
-| 4 | 削除とアンドゥ | `x dd u Ctrl+R` |
+| 4 | 削除とアンドゥ | `x dd u Ctrl+Shift+R` |
 | 5 | 挿入モード | `i a o Escape` |
 | 6 | ヤンクとペースト | `yy dd p P` |
 | 7 | VISUAL モード | `v V y d`・単語/行頭行末での範囲拡張・`>`/`<` インデント |
 | 8 | VISUAL BLOCK モード | `Ctrl+V`・`I`/`A`/`c`/`r`・矩形ヤンク/貼り付け |
-| 9 | 文字列検索 | `/ n N * #` |
+| 9 | 文字列検索 | `Ctrl+S Ctrl+R`（Emacs式インクリメンタルサーチ）・`n N * #` |
 | 10 | コマンドモード | `:w :e :q :wq`・`:sp`/`:vs` 画面分割 |
 | 11 | 置換コマンド | `:s`/`:%s`/`:'<,'>s`/`:N,Ms`・`g`/`i`フラグ・`\1`/`&`置換 |
 | 12 | マクロ | `q{a-z}`記録・`q`終了・`@{a-z}`再生・`@@` |

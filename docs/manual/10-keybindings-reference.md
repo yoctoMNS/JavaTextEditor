@@ -40,7 +40,7 @@
 | キー | 動作 |
 |---|---|
 | `i` `a` `o` | INSERTへ（カーソル前/後/新規行） |
-| `u` `Ctrl+R` | アンドゥ/リドゥ |
+| `u` `Ctrl+Shift+R` | アンドゥ/リドゥ（`Ctrl+R` はEmacs式インクリメンタルサーチの起動キーへ変更されたため、リドゥは `Ctrl+Shift+R` に移動） |
 | `yy` `dd` `x` | 行ヤンク/行削除/1文字削除 |
 | `p` `P` | 貼り付け（後/前） |
 | `q{a-z}` ... `q` | マクロ記録開始/終了（大文字レジスタは既存内容へ追記。[編集支援機能](06-editing-features.md)） |
@@ -60,7 +60,7 @@
 | `v` `V` `Ctrl+V` | VISUAL / VISUAL LINE / VISUAL BLOCK へ |
 | `gv` | 直前のVISUAL選択を復元 |
 | `:` `;` | COMMANDへ |
-| `/` | SEARCHへ（[検索・ナビゲーション](03-search-and-navigation.md)） |
+| `Ctrl+S` `Ctrl+R`（NORMAL/INSERT共通） | Emacs式インクリメンタルサーチ（前方/後方）（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `n` `N` `*` `#` | 検索ジャンプ・単語検索（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `Esc` `Esc`（2回連続） | 検索ハイライトを強制クリア（[検索・ナビゲーション](03-search-and-navigation.md)） |
 | `\f` `\g` | ファイル名検索/grep検索（[検索・ナビゲーション](03-search-and-navigation.md)） |
@@ -146,14 +146,15 @@
 
 矩形ヤンク後のNORMALモード `p`/`P` は矩形貼り付けになります。詳細は [モーダル編集](02-modal-editing.md#visual-blockモード矩形選択ctrlv) を参照してください。
 
-## SEARCH / FILESEARCH / TELESCOPE / FILER モード
+## FILESEARCH / TELESCOPE / FILER モード
 
 | モード | 主なキー |
 |---|---|
-| SEARCH（`/`） | 文字入力・`Backspace`・`Enter`（検索実行）・`Escape` |
 | FILESEARCH（`\f`/`\g`） | 文字入力・`Backspace`・`Enter`（検索実行、先頭`!`で全ファイル）・`Escape` |
 | TELESCOPE（`SPC+f`/`SPC+/`/`SPC+b`） | 文字入力・`Backspace`・`Ctrl+N`/`Ctrl+P`・`Enter`・`Escape` |
 | FILER（`:cd` 成功後） | `Ctrl+N`/`Ctrl+P`・`Enter`（開く/ドリルダウン）・`/`（内検索）・`Esc` |
+
+Emacs式インクリメンタルサーチ（`Ctrl+S`/`Ctrl+R`）は専用モードを持たず、NORMAL/INSERTモードのまま完結する疑似サブ状態です。キー一覧は [検索・ナビゲーション](03-search-and-navigation.md) を参照してください。
 
 詳細は [検索・ナビゲーション](03-search-and-navigation.md) を参照してください。
 
