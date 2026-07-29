@@ -629,18 +629,25 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     // フォントセルサイズ調整（Ctrl+Shift+矢印）
     // -------------------------------------------------------------------------
 
-    /** 文字セル幅を delta px 変更する（範囲: 5〜40）。両ペインから呼ばれる。 */
+    /**
+     * 文字セル幅を delta px 変更する（範囲: 5〜90）。両ペインから呼ばれる。
+     * 上限は setInitialCellSize() と同じ90に揃えてある（:fs 9 の90x150到達後に
+     * 矢印操作すると即座に40へ引き戻される非対称を防ぐため。2026-07-29決定）。
+     */
     public void adjustCellWidth(int delta) {
-        cellW = Math.max(5, Math.min(40, cellW + delta));
+        cellW = Math.max(5, Math.min(90, cellW + delta));
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         showSizeOverlay();
         requestRepaint();
     }
 
-    /** 文字セル高さを delta px 変更する（範囲: 8〜80）。両ペインから呼ばれる。 */
+    /**
+     * 文字セル高さを delta px 変更する（範囲: 8〜150）。両ペインから呼ばれる。
+     * 上限は setInitialCellSize() と同じ150に揃えてある（理由は adjustCellWidth() 参照）。
+     */
     public void adjustCellHeight(int delta) {
-        cellH = Math.max(8, Math.min(80, cellH + delta));
+        cellH = Math.max(8, Math.min(150, cellH + delta));
         invalidateGlyphCache();
         cachedLineHeight = cellH;
         showSizeOverlay();
