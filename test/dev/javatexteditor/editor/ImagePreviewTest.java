@@ -33,6 +33,7 @@ public class ImagePreviewTest {
         testCorruptImageFallsBackWithErrorMessage();
         testPanKeysMoveScrollAndSurviveSyncCanvas();
         testSpaceBOpensBufferPickerFromImageModeAndReturnsOnEscape();
+        testSemicolonEntersCommandModeFromImage();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -115,6 +116,18 @@ public class ImagePreviewTest {
         assertEquals("読み取り専用プレビューのためcurrentFilePathはnull", null, ed.getCurrentFilePath());
         assertTrue("開いた直後は自動フィット", ed.isImageAutoFit());
         waitForImageLoad(ed);
+    }
+
+    /** `;` はMode.IMAGEでも `:` と同じくCOMMANDモードへ入るエイリアスとして扱われる（2026-07-29追加）。 */
+    static void testSemicolonEntersCommandModeFromImage() throws Exception {
+        Path png = writeTempPng("image-preview-semicolon", 10, 10);
+        ModalEditor ed = new ModalEditor("");
+        openViaCommand(ed, png.toString());
+        waitForImageLoad(ed);
+        assertTrue("画像読み込み後はMode.IMAGE", ed.isImageMode());
+
+        ed.processKey(KeyEvent.VK_UNDEFINED, ';', 0);
+        assertTrue("; でCOMMANDモードへ入る", ed.isCommandMode());
     }
 
     static void testOpenImageLoadsAsynchronouslyAndShowsDimensions() throws Exception {

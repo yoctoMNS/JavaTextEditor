@@ -26,6 +26,7 @@ public class BinaryEditModeTest {
         testToggleReflectsEditsMadeInBinaryMode();
         testToggleNonUtf8BytesStaysInBinaryMode();
         testColonCommandFromBinaryReturnsToBinary();
+        testSemicolonEntersCommandModeFromBinary();
 
         System.out.println();
         System.out.println("Results: " + pass + " passed, " + fail + " failed");
@@ -179,5 +180,15 @@ public class BinaryEditModeTest {
         // :b以外のコマンド（:w）を実行してもMode.BINARYへ戻る（NORMALへ落ちない）
         runColonCommand(ed, "w");
         assertTrue(":w実行後もMode.BINARYを維持する", ed.isBinaryMode());
+    }
+
+    /** `;` はMode.BINARYでも `:` と同じくCOMMANDモードへ入るエイリアスとして扱われる（2026-07-29追加）。 */
+    static void testSemicolonEntersCommandModeFromBinary() {
+        ModalEditor ed = new ModalEditor("Hello\nWorld\n");
+        runColonCommand(ed, "b");
+        assertTrue(":bでMode.BINARYへ入る", ed.isBinaryMode());
+
+        ed.processKey(KeyEvent.VK_UNDEFINED, ';', 0);
+        assertTrue("; でCOMMANDモードへ入る", ed.isCommandMode());
     }
 }
