@@ -33,6 +33,12 @@ description: "Vim/Emacsの良い所を統合したJava SE製テキストエデ�
 | `:mkdir <path>` | COMMAND | 現在の作業ディレクトリ基準でディレクトリを新規作成する。`:cd` と異なり作成先へは移動せず親に留まる。FILER表示中に実行した場合は一覧を再読み込みしてFILERへ戻る（2026-07-29追加） |
 | `y`/`Y` | `Mode.CD_CONFIRM_CREATE` | 存在しないディレクトリを新規作成して `:cd` を続行 |
 | `n`/`N`/Esc | `Mode.CD_CONFIRM_CREATE` | 何もせず NORMAL へ戻る |
+| `I`（一覧表示中のみ、`..` は対象外） | FILER | 選択中エントリの名前編集のため `Mode.INSERT` へ入る（2026-08-01追加。`:w` を打つまではディスクへ反映しない） |
+| Esc（`I` で編集中の `Mode.INSERT` から） | INSERT | 保存はせず `Mode.FILER` へ戻る（編集中のテキストは保持。破棄したい場合はさらに Esc で `exitFiler()`） |
+| `:w` | COMMAND（`I` 編集起点） | `applyFilerRename()` で名前が変わった行だけ `Files.move()` し、FILERへ戻り一覧を再読み込みする |
+| Ctrl+D（一覧表示中のみ、`..` は対象外） | FILER | 選択中エントリの削除確認（`Mode.FILER_DELETE_CONFIRM`）へ入る |
+| `y`/`Y` | `Mode.FILER_DELETE_CONFIRM` | 選択中エントリを削除する（ディレクトリは中身ごと再帰削除）しFILERへ戻る |
+| それ以外（`n`/`N`/Esc等） | `Mode.FILER_DELETE_CONFIRM` | 何もせずFILERへ戻る |
 
 ---
 
@@ -249,6 +255,51 @@ boolean フラグ方式にした。バッファを操作する新しいコマン
 テストは `testColonPrFromFilerStaysInFilerMode` / `testColonMkdirFromFilerStaysAndReloadsListing` /
 `testColonMkdirOutsideFilerDoesNotEnterFiler`（FILERを経由しない通常の `:mkdir` は FILER へ
 遷移しないことの確認）を参照。
+
+## 名前変更（`I`）と削除（Ctrl+D）（2026-08-01追加）
+
+### `I` — 選択中エントリの名前編集
+
+「本物の INSERT モードに入って編集し、`:w` を押すまでディスクへ反映しない」という要望を、
+新しい疑似モードを作らず**既存の `Mode.INSERT` をそのまま再利用**する方式で実現した。
+
+- `I`（一覧表示中のみ、`..` は対象外）で `filerRenameActive = true` にしてから `mode = Mode.INSERT`
+  にするだけ。疑似バッファのテキスト（`*filer* ...` ヘッダ＋各エントリ1行）自体を素の編集対象
+  として使うため、行削除・複数行同時編集も特別な実装なしにそのまま使える。
+- カーソル位置を選択行の**末尾**に置く（`cursorCol = 現在行の長さ`）。`moveSelection()`/
+  `renderFilerBuffer()` は選択行を `cursorCol = 0` にするため、そのまま Backspace を押すと
+  ヘッダ行と結合してしまう（実際にこの不具合を手動テストで踏んだ）。
+- Esc（`processInsertKey` の `"enter.normal"` アクション）で `filerRenameActive` が true の場合は
+  `mode = Mode.NORMAL` ではなく `mode = Mode.FILER` に戻す。`clearLineIfIndentOnly()`・
+  `clampCursorForNormal()`・`onReturnToNormal`（`LiveDiagnostics` の再コンパイル起動）は
+  「本物のファイル編集から抜ける」ときのための処理であり、疑似バッファには不要かつ危険
+  （`currentFilePath == null` の状態でコンパイルを起動する等）なので、この分岐では呼ばない。
+- `:w` は "既存の `:w` コマンドの中" で分岐する（新しいコマンドは追加しない）。
+  `buildCommandRegistry()` の `"w"` 登録を
+  `() -> { if (filerRenameActive) applyFilerRename(); else requestSaveToFile(currentFilePath); }`
+  にし、`applyFilerRename()` が `getLines()`（現在の疑似バッファのテキスト）を編集開始時点の
+  `filerFiltered`（インデックス`i`→エントリ）と突き合わせて、名前が変わった行だけ
+  `Files.move(entry.path(), entry.path().resolveSibling(newName))` する。ディレクトリ行は
+  末尾の `/` を剥がしてから比較する。適用後は `enterFiler()` で一覧を再読み込みする。
+- FILER で `:` を押すと通常は `exitFiler()`（stash復元）してから `enterCommandMode()` するが
+  （「FILER表示中の `:cd`/`:e` 直接実行」節参照）、`filerRenameActive` が true のときは
+  **`exitFiler()` を呼ばない**。呼ぶと `filerStash` に退避済みの元バッファで疑似バッファ
+  （＝編集中の名前変更）が上書きされてしまい、`:w` を押しても消えたバッファに対して動作する
+  ことになる。同じ理由で、`:` の後 Esc でコマンドをキャンセルした場合も
+  `mode = Mode.NORMAL` ではなく `Mode.FILER` に戻す（`processCommandKey` の Esc ハンドラで
+  `filerCommandOrigin && filerRenameActive` を判定）。
+- 確定前に別の理由でFILERを抜ける（Esc の Esc → `exitFiler()`）と、`filerStash` から元バッファが
+  復元され編集中の名前変更は自然に破棄される。「`:w` を打つまでは一切反映しない」という要件は
+  この「`exitFiler()` は常に stash 復元＝破棄」という既存の性質にそのまま乗っている。
+
+### Ctrl+D — 選択中エントリの削除
+
+`Mode.CD_CONFIRM_CREATE`（既存の y/n 確認モード）と同型の新規疑似モード
+`Mode.FILER_DELETE_CONFIRM` を追加した。Ctrl+D で確認対象を `filerDeleteTarget` に保持しつつ
+モード遷移し、`y`/`Y` のみ実際に削除（ディレクトリは `Files.walk().sorted(reverseOrder())` で
+中身ごと再帰削除）してから `enterFiler()` で一覧を再読み込みする。`y`/`Y` 以外（`n`/`N`/Esc含む）は
+すべて「キャンセルして FILER に留まる」扱いにしている（既存の `CD_CONFIRM_CREATE` は Esc/`n`/`N`
+を個別に判定しているが、削除確認は誤操作の被害が大きいため「y以外はすべて安全側」に倒した）。
 
 ## 設計判断ログ（詳細は `docs/decision-log.md` を参照）
 

@@ -81,7 +81,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE, IMAGE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE, IMAGE, FILER_DELETE_CONFIRM }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -345,6 +345,10 @@ public class ModalEditor {
     private final StringBuilder filerQuery = new StringBuilder();
     /** FILER 表示中に隠れている元の編集状態。 */
     private final PseudoBufferStash filerStash = new PseudoBufferStash();
+    /** I キーで FILER 一覧の名前を編集中（INSERT モード）かどうか。:w が押されるまでディスクへは反映しない。 */
+    private boolean filerRenameActive = false;
+    /** Ctrl+D 削除確認中の対象エントリ。 */
+    private DirEntry filerDeleteTarget = null;
     // Mode.BINARY 状態（:b コマンドで任意のバッファと相互トグルする hexdump 編集モード）。
     // buffer 自体が「唯一の真実」（hexdumpテキストを直接1文字ずつ上書き編集する）ため、
     // 別途バイト配列をキャッシュしない。binaryByteCount のみバイト総数として保持し、
@@ -650,6 +654,7 @@ public class ModalEditor {
                 case IMAGE         -> processImageKey(keyCode, keyChar, modifiers);
                 case CONFIRM_NEW_FILE -> processConfirmNewFileKey(keyCode, keyChar);
                 case CD_CONFIRM_CREATE -> processCdConfirmCreateKey(keyCode, keyChar);
+                case FILER_DELETE_CONFIRM -> processFilerDeleteConfirmKey(keyCode, keyChar);
             }
         }
         syncCanvas();
@@ -1199,10 +1204,16 @@ public class ModalEditor {
                     case "enter.normal" -> {
                         dismissCompletion();
                         finalizeBlockInsertIfActive();
-                        clearLineIfIndentOnly();
-                        mode = Mode.NORMAL;
-                        clampCursorForNormal();
-                        if (onReturnToNormal != null) onReturnToNormal.run();
+                        if (filerRenameActive) {
+                            // I で FILER の名前編集中だった場合は、:w が押されるまで確定しない
+                            // ため NORMAL には落とさず FILER 一覧表示へ戻す（バッファはそのまま）。
+                            mode = Mode.FILER;
+                        } else {
+                            clearLineIfIndentOnly();
+                            mode = Mode.NORMAL;
+                            clampCursorForNormal();
+                            if (onReturnToNormal != null) onReturnToNormal.run();
+                        }
                     }
                     case "delete.before" -> {
                         handleBackspace();
@@ -1878,7 +1889,10 @@ public class ModalEditor {
     private void processCommandKey(int keyCode, char keyChar) {
         if (keyCode == KeyEvent.VK_ESCAPE) {
             commandBuffer.setLength(0);
-            mode = Mode.NORMAL;
+            // filerRenameActive のまま `:` に入っていた場合は exitFiler() を経由していないため、
+            // キャンセル時も FILER 疑似バッファへ戻す（NORMAL に落とすと編集中の名前一覧を
+            // 見失う）。
+            mode = (filerCommandOrigin && filerRenameActive) ? Mode.FILER : Mode.NORMAL;
             filerCommandOrigin = false;
 
         } else if (keyCode == KeyEvent.VK_BACK_SPACE) {
@@ -3010,7 +3024,7 @@ public class ModalEditor {
 
         // --- 保存・終了 ---
         r.on(this::saveAll,                          "wa", "wall");
-        r.on(() -> requestSaveToFile(currentFilePath), "w");
+        r.on(() -> { if (filerRenameActive) applyFilerRename(); else requestSaveToFile(currentFilePath); }, "w");
         r.on(() -> quitAll(false),                   "qa", "qall");
         r.on(() -> quitAll(true),                    "qa!", "qall!");
         r.on(this::closeCurrentPane,                 "q");
@@ -5712,9 +5726,75 @@ public class ModalEditor {
         }
     }
 
+    /** Ctrl+D の削除確認プロンプト（Mode.FILER_DELETE_CONFIRM）を処理する。y/Y のみ削除を実行する。 */
+    private void processFilerDeleteConfirmKey(int keyCode, char keyChar) {
+        if (keyChar == 'y' || keyChar == 'Y') {
+            DirEntry target = filerDeleteTarget;
+            filerDeleteTarget = null;
+            try {
+                deleteRecursively(target.path());
+                statusMessage = "削除しました: " + target.name();
+            } catch (IOException e) {
+                statusMessage = "E: " + e.getMessage();
+            }
+            enterFiler();
+            return;
+        }
+        // y/Y 以外（n/N/Esc含む）はすべてキャンセル扱いにする。
+        filerDeleteTarget = null;
+        statusMessage = "キャンセルしました";
+        mode = Mode.FILER;
+    }
+
+    /** ファイルはそのまま、ディレクトリは中身ごと削除する。 */
+    private void deleteRecursively(Path target) throws IOException {
+        if (Files.isDirectory(target)) {
+            try (var stream = Files.walk(target)) {
+                for (Path p : stream.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                    Files.delete(p);
+                }
+            }
+        } else {
+            Files.delete(target);
+        }
+    }
+
+    /**
+     * FILER の I キーで INSERT モードへ入り、疑似バッファの各行を編集した結果を確定する。
+     * ヘッダ行を除く各行を、編集開始時点の filerFiltered と同じ並び順で突き合わせ、名前が
+     * 変化した行だけ Files.move() でリネームする。:w が実行されるまでは何もディスクへ反映しない。
+     */
+    private void applyFilerRename() {
+        String[] lines = getLines();
+        int renamed = 0;
+        for (int i = 0; i < filerFiltered.size() && i + 1 < lines.length; i++) {
+            DirEntry entry = filerFiltered.get(i);
+            if ("..".equals(entry.name())) continue;
+            String line = lines[i + 1];
+            String newName = (entry.kind() == DirEntry.Kind.DIRECTORY && line.endsWith("/"))
+                ? line.substring(0, line.length() - 1)
+                : line;
+            if (newName.isEmpty() || newName.equals(entry.name())) continue;
+            try {
+                Path target = entry.path().resolveSibling(newName);
+                Files.move(entry.path(), target);
+                renamed++;
+            } catch (IOException e) {
+                statusMessage = "E: " + e.getMessage();
+                filerRenameActive = false;
+                enterFiler();
+                return;
+            }
+        }
+        filerRenameActive = false;
+        statusMessage = renamed > 0 ? renamed + "件の名前を変更しました" : "変更はありません";
+        enterFiler();
+    }
+
     /** FILER セッションを終了し、changeDirectory() で退避した元バッファに戻す。 */
     private void exitFiler() {
         mode = Mode.NORMAL;
+        filerRenameActive = false;
         restoreFromStash(filerStash);
     }
 
@@ -5768,6 +5848,30 @@ public class ModalEditor {
                 filerSearchMode = true;
                 filerQuery.setLength(0);
                 renderFilerBuffer();
+                return;
+            }
+            // I: 選択中のエントリ名を編集するため INSERT モードへ入る（".." は対象外）。
+            // :w が実行されるまではディスクへ反映しない（applyFilerRename() 参照）。
+            if (keyChar == 'I') {
+                if (!filerFiltered.isEmpty() && !"..".equals(filerFiltered.get(filerSelectedIdx).name())) {
+                    filerRenameActive = true;
+                    mode = Mode.INSERT;
+                    statusMessage = "";
+                    // cursorCol==0 のまま Backspace を押すと前の行（ヘッダ行）と結合してしまうため、
+                    // 編集開始位置は名前の末尾に置く。
+                    String[] lines = getLines();
+                    cursorCol = cursorRow < lines.length ? lines[cursorRow].length() : 0;
+                }
+                return;
+            }
+            // Ctrl+D: 選択中のエントリを削除する（y/n 確認を挟む。".." は対象外）。
+            if (ctrlDown && keyCode == KeyEvent.VK_D) {
+                if (!filerFiltered.isEmpty() && !"..".equals(filerFiltered.get(filerSelectedIdx).name())) {
+                    filerDeleteTarget = filerFiltered.get(filerSelectedIdx);
+                    mode = Mode.FILER_DELETE_CONFIRM;
+                    statusMessage = "削除しますか?: " + filerDeleteTarget.name() + " (y/n)";
+                }
+                return;
             }
             // `:`（または `;`、NORMAL/VISUAL系と同じVim式エイリアス）でCOMMANDモードへ
             // （:cd/:e等の既存コマンドをそのまま使う）。
@@ -5777,9 +5881,17 @@ public class ModalEditor {
             // changeDirectory() が改めて enterFiler() を呼ぶため、ディレクトリ一覧は自動的に
             // 再読み込みされる。
             if (keyChar == ':' || keyChar == ';') {
-                filerCommandOrigin = true;
-                exitFiler();
-                enterCommandMode();
+                if (filerRenameActive) {
+                    // I で編集中の名前変更はまだ確定していないため、exitFiler()（stash復元）で
+                    // 疑似バッファを捨ててはならない。:w だけを打たせたいのでバッファはそのまま
+                    // COMMAND モードへ入る（applyFilerRename() が :w 実行時に反映する）。
+                    filerCommandOrigin = true;
+                    enterCommandMode();
+                } else {
+                    filerCommandOrigin = true;
+                    exitFiler();
+                    enterCommandMode();
+                }
             }
         }
     }
