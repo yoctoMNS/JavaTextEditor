@@ -1701,3 +1701,28 @@ y/n で尋ね、y なら新規作成・n なら何もしない」という要望
   （＝全テストPASSでも実機では再現する不具合だった）。修正後、`ReplaceCharTest`
   全9ケースPASS、既存ベースラインFAIL（`ScrollTest` halfPageUp系2件、他無関係な2件）以外は
   全PASSであることを確認済み。
+
+## jdk-source疑似バッファ（HotSpotソース含む）で構文ハイライトが効かない不具合の修正（2026-08-01）
+
+- **症状**: Shift+K/`K`/`gr`でJDKクラスやJNIグルーコード、HotSpotソース（`.cpp`/`.hpp`、
+  ⑫`openjdk-source-tracing`参照）を`*jdk-source:...*`疑似バッファとして開いても、通常の
+  `.java`/`.c`ファイルとは異なり構文ハイライトが一切適用されず無色のままだった。
+- **原因**: `ModalEditor.syncCanvas()`は`SourceLanguage.detect(currentFilePath)`の結果を
+  `EditorCanvas.setLanguage()`に渡すだけだったが、`SourceLanguage.detect()`は拡張子の単純な
+  末尾一致判定のみを行っていた。jdk-source疑似バッファの`currentFilePath`は
+  `"*jdk-source:" + <内側パス> + "*"`という命名規則（`openCSymbolBuffer()`等）でラップされて
+  おり、末尾が拡張子ではなく`*`になるため、C/C++ファイル（`.cpp`/`.hpp`等の拡張子付き）も
+  Javaクラス（fqcn表示で拡張子なし）もすべて`SourceLanguage.NONE`と誤判定されていた。
+- **修正**: `SourceLanguage.detect()`に、`"*jdk-source:"`プレフィックスと末尾の`"*"`を
+  剥がしてから拡張子判定するロジックを追加。剥がした内側パスに`.cpp`/`.hpp`等の拡張子があれば
+  それに従い`C`と判定し（HotSpot/JNIグルーコード）、拡張子が無い場合（Kキーで開いたJDK/HotSpot
+  クラスのfqcn表示、例`"*jdk-source:java.lang.String*"`）はJavaクラスソースとして`JAVA`と判定する
+  デフォルトにフォールバックする。呼び出し側（`ModalEditor.syncCanvas()`、`EditorCanvas`）は
+  無変更。ラッパー剥がしのロジックを`SourceLanguage`側に閉じ込めることで、`ModalEditor`内の
+  他の`"*jdk-source:"`剥がし処理（`lookupJdkDocAndJump()`等、既存の複数箇所に分散している）とは
+  独立させた。
+- **テスト**: `test/dev/javatexteditor/ui/SyntaxHighlighterTest.java`に
+  `SourceLanguage.detect()`のjdk-sourceラッパー剥がしケースを4件追加
+  （fqcn→JAVA、HotSpotの`.cpp`/`.hpp`→C、JNIグルーコードの`.c`→C）。全43/43 PASS。
+  既存ベースラインFAIL（`ScrollTest`のhalfPageUp系2件、他無関係な既知1件）以外は
+  全PASSであることを確認済み。
