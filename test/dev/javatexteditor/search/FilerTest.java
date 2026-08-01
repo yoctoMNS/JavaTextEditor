@@ -51,6 +51,10 @@ public class FilerTest {
         testColonMkdirFromFilerStaysAndReloadsListing();
         testColonMkdirOutsideFilerDoesNotEnterFiler();
         testSemicolonInFilerEntersCommandModeAndCdWorks();
+        testIEntersInsertAndWApplyRename();
+        testEscFromRenameInsertDoesNotApplyUntilW();
+        testCtrlDDeleteRequiresYConfirmation();
+        testCtrlDDeleteNCancelsWithoutDeleting();
 
         System.out.println("\nResults: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
@@ -671,6 +675,95 @@ public class FilerTest {
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
             assertTrue("cd selection active (files excluded from candidates)", editor.isCdSelectionActive());
             assertEquals("only the 2 directories are candidates", 2, editor.getCdCandidates().size());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    // ── I（名前変更）/ Ctrl+D（削除）テスト ─────────────────────────────────
+
+    static void testIEntersInsertAndWApplyRename() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_rename_");
+        try {
+            Files.writeString(tmp.resolve("old.txt"), "hi");
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommand(editor, "cd " + tmp);
+            editor.processKey(KeyEvent.VK_DOWN, KeyEvent.CHAR_UNDEFINED, 0); // ".." をスキップ
+
+            editor.processKey(0, 'I', 0);
+            assertTrue("I で INSERT モードへ入る", editor.isInsertMode());
+
+            for (int i = 0; i < "old.txt".length(); i++) {
+                editor.processKey(KeyEvent.VK_BACK_SPACE, KeyEvent.CHAR_UNDEFINED, 0);
+            }
+            for (char c : "new.txt".toCharArray()) editor.processKey(0, c, 0);
+            editor.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Esc直後はまだリネームされない", Files.exists(tmp.resolve("old.txt")));
+            assertTrue("Escの後もFILERに留まる", editor.isFilerMode());
+
+            typeCommand(editor, "w");
+            assertTrue(":wでリネームが反映される", Files.exists(tmp.resolve("new.txt")));
+            assertTrue("旧ファイル名は消える", Files.notExists(tmp.resolve("old.txt")));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testEscFromRenameInsertDoesNotApplyUntilW() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_rename_esc_");
+        try {
+            Files.writeString(tmp.resolve("keep.txt"), "hi");
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommand(editor, "cd " + tmp);
+            editor.processKey(KeyEvent.VK_DOWN, KeyEvent.CHAR_UNDEFINED, 0);
+
+            editor.processKey(0, 'I', 0);
+            for (int i = 0; i < "keep.txt".length(); i++) {
+                editor.processKey(KeyEvent.VK_BACK_SPACE, KeyEvent.CHAR_UNDEFINED, 0);
+            }
+            for (char c : "renamed.txt".toCharArray()) editor.processKey(0, c, 0);
+            editor.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+
+            // :w せずにFILERを抜けると、編集中の名前変更は破棄される。
+            editor.processKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue(":wしなければ元のファイル名のまま", Files.exists(tmp.resolve("keep.txt")));
+            assertTrue("renamed.txtは作られない", Files.notExists(tmp.resolve("renamed.txt")));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCtrlDDeleteRequiresYConfirmation() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_del_");
+        try {
+            Files.writeString(tmp.resolve("victim.txt"), "x");
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommand(editor, "cd " + tmp);
+            editor.processKey(KeyEvent.VK_DOWN, KeyEvent.CHAR_UNDEFINED, 0);
+
+            editor.processKey(KeyEvent.VK_D, 'd', InputEvent.CTRL_DOWN_MASK);
+            assertTrue("削除確認メッセージに対象名を含む", editor.getStatusMessage().contains("victim.txt"));
+
+            editor.processKey(0, 'y', 0);
+            assertTrue("yでファイルが削除される", Files.notExists(tmp.resolve("victim.txt")));
+            assertTrue("削除後はFILERへ戻る", editor.isFilerMode());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testCtrlDDeleteNCancelsWithoutDeleting() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_del_cancel_");
+        try {
+            Files.writeString(tmp.resolve("keep.txt"), "x");
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommand(editor, "cd " + tmp);
+            editor.processKey(KeyEvent.VK_DOWN, KeyEvent.CHAR_UNDEFINED, 0);
+
+            editor.processKey(KeyEvent.VK_D, 'd', InputEvent.CTRL_DOWN_MASK);
+            editor.processKey(0, 'n', 0);
+            assertTrue("nでは削除されない", Files.exists(tmp.resolve("keep.txt")));
+            assertTrue("nの後もFILERへ戻る", editor.isFilerMode());
         } finally {
             deleteDir(tmp);
         }
