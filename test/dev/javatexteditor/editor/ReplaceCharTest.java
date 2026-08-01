@@ -20,6 +20,7 @@ public class ReplaceCharTest {
         testReplaceUndo();
         testReplaceUppercaseChar();
         testReplaceUppercaseWithRealKeyEvent();
+        testReplaceUppercaseWithShiftKeyPressedFirst();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -129,6 +130,21 @@ public class ReplaceCharTest {
         ed.processKey(KeyEvent.VK_R, 'r', 0);
         ed.processKey(KeyEvent.VK_Z, 'Z', KeyEvent.SHIFT_DOWN_MASK);
         check("keyCode+SHIFT_DOWN_MASKで渡された大文字でも置換される", ed.getText().equals("Zello world"));
+    }
+
+    // GlobalKeyDispatcherが実際にOSから受け取る順序（Shift単体のkeyPressedが先に届き、
+    // その後Shift適用済みのkeyPressed(VK_A, 'A')が届く）を再現した回帰テスト。
+    // 修正前はShift単体のkeyPressedがpendingSequenceを空文字にリセットしてしまい、
+    // 後続の'A'が「r未入力時の通常入力」として扱われ、置換が発生しなかった。
+    static void testReplaceUppercaseWithShiftKeyPressedFirst() {
+        System.out.println("[r: Shift単体のkeyPressedが先に届いても大文字置換が成立する]");
+        ModalEditor ed = new ModalEditor("hello world");
+        ed.processKey(KeyEvent.VK_R, 'r', 0);
+        // Shiftキー単体の押下（keyChar=CHAR_UNDEFINED）。これが pendingSequence="r" を破棄してはならない。
+        ed.processKey(KeyEvent.VK_SHIFT, KeyEvent.CHAR_UNDEFINED, KeyEvent.SHIFT_DOWN_MASK);
+        ed.processKey(KeyEvent.VK_A, 'A', KeyEvent.SHIFT_DOWN_MASK);
+        check("Shift単体のkeyPressedを挟んでも大文字で置換される", ed.getText().equals("Aello world"));
+        check("置換後もNORMALモードのまま", ed.isNormalMode());
     }
 
     // ユーティリティ

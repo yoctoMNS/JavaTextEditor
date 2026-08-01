@@ -1660,3 +1660,44 @@ y/n で尋ね、y なら新規作成・n なら何もしない」という要望
   入らずエラーメッセージは保持される。`enterFiler()`/`applyChangeDirectory()` 自体は変更していない
   （既存の `:cd` 直接成功パス・FILER内でのサブディレクトリ移動には元々ステータスメッセージを
   汚さない前提があるため、影響範囲を y/n 確認フローの後始末だけに限定した）。
+
+## Rキー（1文字置換）でShift併用の大文字置換ができない不具合の修正（2026-08-01）
+
+- **症状**: NORMALモードで `r` を押した後、Shiftキーを押しながら文字キー（例: `A`）を押しても
+  意図した大文字への置換が行われず、代わりにShiftキー自体が「次のキー」として誤って
+  消費されてしまい、pending状態がキャンセルされたのと同じ挙動になっていた。
+- **原因調査**:
+  1. リスナーの種類: `GlobalKeyDispatcher`（`KeyEventDispatcher`）が `KEY_PRESSED`/`KEY_TYPED`
+     の両方を扱うが、NORMALモードは常に `KEY_PRESSED` 側で `ModalEditor.processKey(keyCode,
+     keyChar, modifiersEx)` を呼ぶ設計（INSERT/COMMANDモードの印字可能文字のみIMEに委譲するため
+     `KEY_TYPED` を使う。NORMALモードは対象外）。
+  2. 置換待機モードは `ModalEditor.handlePendingSequence()` が担う。`pendingSequence == "r"` の間に
+     届いた次のキーイベントを「次のキー」として確定させる仕組みで、`KEY_PRESSED` イベント単位で
+     判定していた。
+  3. Shiftキー単体を除外する処理が**なかった**: `handlePendingSequence()` は呼ばれた時点で
+     無条件に `pendingSequence = ""` にリセットしてから prev=='r' 分岐へ進む実装だったため、
+     Shift単体の `keyPressed(VK_SHIFT)`（`keyChar == CHAR_UNDEFINED`）が先に届くと、その時点で
+     pending状態が破棄され、後から届く本命の `keyPressed(VK_A, 'A')` は「r未入力時の通常の
+     ナビゲーションキー」として扱われてしまっていた。
+- **修正方針**: 方針B相当（`keyPressed` のまま、修飾キー単体の押下を判定して除外）を採用。
+  本プロジェクトは既存アーキテクチャ上NORMALモードが `KEY_PRESSED` 一本で統一されており、
+  `r` の2打鍵目だけ `keyTyped` に切り替える（方針A）と、他の多打鍵シーケンス（`gg`/`dd`/`\f`等）
+  との一貫性が崩れ、`GlobalKeyDispatcher` 側の `pressedHandled` フラグ設計（IMEとの二重処理防止）
+  にも影響が及ぶため見送った。`r` 固有ではなく `handlePendingSequence()` 冒頭で汎用的に対処した
+  ことで、将来 `gg`/`\f` 等の多打鍵シーケンスでShift併用キーを使う場合にも同じ保護が効く。
+- **修正内容**: `ModalEditor.handlePendingSequence()` の先頭、`pendingSequence` を空文字列に
+  リセットする直前に、`keyChar == KeyEvent.CHAR_UNDEFINED && isModifierKeyCode(keyCode)` の場合は
+  何もせず `true` を返す（pendingSequenceを保持したまま次のキーを待つ）分岐を追加。
+  新設した `isModifierKeyCode(int)` は `VK_SHIFT`/`VK_CONTROL`/`VK_ALT`/`VK_META` を判定する。
+  `getKeyChar()` から文字を取得する既存経路（`replaceCharAtCursor(keyChar, ...)`）はそのまま
+  利用しており、OSが解釈したShift適用後の文字をそのまま使うため、記号キー（`Shift+1`→`!`）等も
+  従来通り正しく動作する。
+- **テスト**: `test/dev/javatexteditor/editor/ReplaceCharTest.java` に
+  `testReplaceUppercaseWithShiftKeyPressedFirst()` を追加。`processKey(VK_R, 'r', 0)` →
+  `processKey(VK_SHIFT, CHAR_UNDEFINED, SHIFT_DOWN_MASK)`（Shift単体のkeyPressedを模擬）→
+  `processKey(VK_A, 'A', SHIFT_DOWN_MASK)` の順で呼び、`"hello world"` が `"Aello world"` に
+  正しく置換されることを確認する回帰テスト。既存の `testReplaceUppercaseWithRealKeyEvent()`
+  はShift単体イベントを挟まない構成だったため、この修正前のバグを検出できていなかった
+  （＝全テストPASSでも実機では再現する不具合だった）。修正後、`ReplaceCharTest`
+  全9ケースPASS、既存ベースラインFAIL（`ScrollTest` halfPageUp系2件、他無関係な2件）以外は
+  全PASSであることを確認済み。
