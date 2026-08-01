@@ -173,6 +173,16 @@ for (int[] h : searchHighlights) {
 - **isearch起動時に`pendingSequence`を破棄するようにした**: NORMALモードでは`gg`/`dd`/`yy`等の多打鍵シーケンスの1打鍵目が`pendingSequence`に保留される。`interceptEmacsIsearch()`はこのシーケンス消費ブロック（`handlePendingSequence()`）より前で割り込むため、例えば`g`を押して`gg`の完成を待っている最中に`Ctrl+S`を押すと、対処しない限り`pendingSequence="g"`が残ったままisearchへ入ってしまい、isearch終了後に無関係な`g`単押しが古い`gg`待ち状態と結合して暴走する恐れがあった。そこで`enterEmacsIsearch()`の先頭で`pendingSequence = ""`を明示的にクリアするようにした（既存のEsc Esc処理が保留シーケンスを破棄するのと同じ考え方）。回帰テストは`EmacsIsearchTest.testPendingSequenceDiscardedWhenIsearchStarts()`。
 - **`/`廃止に伴い、`/`を使って検索ハイライトを作っていた既存の回帰テストを`*`に置き換えた**: `JumpBackTest`（Shift+K関連のハイライト残留バグ回帰テスト）・`ProjectSearchTest`（grep関連の同種テスト）・`SubstituteCommandTest`（`:s//repl/`の空パターン再利用テスト）が`/`でハイライトを作ってから検証する構造だったため、いずれもカーソルを対象単語の位置へ移動してから`*`を押す形に書き換えた（`*`も同じ`lastSearchPattern`/`searchMatches`/highlight系インフラを使うため、テストの意図は変えずに移行できた）。`TextSearchTest`は`/`固有のテスト（SEARCHモード遷移・searchBuffer・正規表現/不正規表現・任意位置からの自由文字列検索等、`*`/`#`では再現できないもの）を削除し、`*`/`#`/`n`/`N`で再現可能なテストのみ`*`ベースへ書き換えて残した。`EmacsIsearchTest`にはNORMALモード版のテスト一式（起動・前方/後方ジャンプ・連打・Backspace・Enter確定・Escキャンセル・ハイライトクリア・未対応キーのフォールバック・pendingSequence破棄）を追加した。
 
+## Ctrl+S連打で検索語がリセットされる不具合の修正（実機AWTキーイベント固有・2026-08-01）
+
+- **症状**: `ModalEditor.processKey()` を1回だけ直接呼ぶ単体テスト（`EmacsIsearchTest`）は全PASSしていたにもかかわらず、実際のGUI（`Main`起動・`GlobalKeyDispatcher`経由の実キー入力）では「`C-s`→キーワード入力→`Enter`を押さず続けて`C-s`」を行うと検索語が消え、新規セッション扱いになってしまう不具合が実機でのみ報告された。
+- **調査方法**: ユーザー指示に従い、まず`interceptEmacsIsearch()`/`processEmacsIsearchKey()`/`appendEmacsIsearchChar()`/`advanceEmacsIsearch()`に一時的な`System.out.println`デバッグログを仕込み、Xvfb仮想ディスプレイ上で実際に`dev.javatexteditor.Main`を起動し、別プロセスの`java.awt.Robot`から同一Xディスプレイ経由で実キーイベントを送って再現した（`ModalEditor.processKey()`を直接呼ぶ単体テストでは発生しない、実機のAWTキーイベント列に依存する不具合だったため）。
+- **ログで確認できた事実**: `Ctrl+S`は実際には「Ctrlキー単体のKEY_PRESSED（`keyCode=VK_CONTROL`, `keyChar=CHAR_UNDEFINED`, `modifiers=CTRL_DOWN_MASK`）」→「SキーのKEY_PRESSED（同じくCTRL修飾子つき）」という**2つの独立したKEY_PRESSEDイベント**としてOSから届く。isearchセッション中（`emacsIsearchActive=true`）にこの前者（Ctrl単体）が`processEmacsIsearchKey()`へ渡ると、`Ctrl+S`/`Ctrl+R`/Backspace/Enter/Escape/印字可能文字のいずれの分岐にも一致しないため「isearch未対応キー（矢印キー等を想定した分岐）」として扱われ、`commitEmacsIsearch()`が即座に呼ばれて`isearchQuery`がクリアされ`emacsIsearchActive=false`になっていた。直後に届く本来の`S`キーイベントは、既にセッションが終了しているため`enterEmacsIsearch()`（新規セッション開始）として処理され、結果的に検索語が消えていた。
+- **原因**: `processEmacsIsearchKey()`が「Ctrl/Shift/Alt等の修飾キー単体のKEY_PRESSED」を考慮しておらず、「isearch専用キーのどれにも一致しない＝未対応の操作」という前提の判定に、修飾キー単体イベントまで巻き込んでしまっていたこと。
+- **修正**: `processEmacsIsearchKey()`の冒頭で`keyCode`が`VK_CONTROL`/`VK_SHIFT`/`VK_ALT`/`VK_META`のいずれかなら即`return`し、何もせずセッションを維持するようにした（`ModalEditor.java`）。この4つの定数は「単体では意味を持たない修飾キー」を網羅する（`VK_ALT_GRAPH`は日本語配列等一部環境限定のため、実機再現で確認できた範囲に留め、必要になれば追加検討する）。
+- **再発防止テスト**: `EmacsIsearchTest.testBareCtrlKeyDuringIsearchDoesNotResetQuery()`を追加。`ctrlS()`ヘルパー（`VK_S`単発）の前に明示的に`sendCode(ed, KeyEvent.VK_CONTROL, CTRL_DOWN_MASK)`を送ることで、実機のイベント順序を単体テストレベルでも再現できるようにした。既存の`ctrlS()`/`ctrlR()`ヘルパーは変更していない（`VK_S`/`VK_R`単発イベントのみを送る既存の全テストは、本修正が「未対応キー」分岐の範囲を狭めただけなので影響を受けない）。
+- **教訓**: `ModalEditor.processKey()`を直接呼ぶ単体テストは「1つの論理キー入力＝1回の`processKey()`呼び出し」という前提を置いているため、実際のAWT/OSが1つの論理キー入力に対して複数のKEY_PRESSEDイベント（修飾キー単体分を含む）を発生させるケースを原理的に検証できない。今後isearchのような「セッション中は特定キー以外を『未対応』として即終了する」設計を新規に追加する場合は、単体テストだけで十分と判断せず、Robot+Xvfb（`RobotKeyInputTest`と同じ手法）での実機検証も行うこと。
+
 ---
 
 ## 注意点
@@ -184,4 +194,4 @@ for (int[] h : searchHighlights) {
 - `*`/`#` の単語境界は `\\b` を使う。Java の `\b` は `[a-zA-Z0-9_]` 境界に相当するため、Vim の `iskeyword` デフォルト設定とほぼ一致する
 - `*`/`#` で `lastSearchPattern` と `lastSearchForward` を更新することで、後続の `n`/`N` が正しく動く
 - `EditorCanvas.getSearchHighlights()` はテスト専用に追加したゲッター。本番コードから読み取り目的で使う想定はない（描画専用の内部状態を外部公開しているのはテストで実際に画面上の残留ハイライトを検証するため）
-- Emacs式インクリメンタルサーチ（C-s/C-r、NORMAL/INSERT両モード）のテストは `test/dev/javatexteditor/search/EmacsIsearchTest.java`（52テスト）に分離している。`*`/`#`/`n`/`N` とは別のテストクラス（`TextSearchTest.java`）のまま残しており、統合していない（起動条件・状態遷移が大きく異なるため、1ファイルにまとめるとテストの意図が読み取りにくくなると判断した）。`ModalEditor.isEmacsIsearchActive()`/`getIsearchQuery()`/`isIsearchForward()` はこのテスト専用に追加した公開アクセサ。
+- Emacs式インクリメンタルサーチ（C-s/C-r、NORMAL/INSERT両モード）のテストは `test/dev/javatexteditor/search/EmacsIsearchTest.java`（57テスト）に分離している。`*`/`#`/`n`/`N` とは別のテストクラス（`TextSearchTest.java`）のまま残しており、統合していない（起動条件・状態遷移が大きく異なるため、1ファイルにまとめるとテストの意図が読み取りにくくなると判断した）。`ModalEditor.isEmacsIsearchActive()`/`getIsearchQuery()`/`isIsearchForward()` はこのテスト専用に追加した公開アクセサ。
