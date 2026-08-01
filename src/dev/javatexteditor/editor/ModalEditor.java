@@ -705,7 +705,7 @@ public class ModalEditor {
             } else if (history.hasPrevious()) {
                 restoreBuffer(history.previousIndex());
             } else {
-                statusMessage = "これ以上前のバッファはありません";
+                statusMessage = "No earlier buffer";
             }
             return true;
         }
@@ -715,7 +715,7 @@ public class ModalEditor {
             } else if (history.hasNext()) {
                 restoreBuffer(history.nextIndex());
             } else {
-                statusMessage = "これ以上次のバッファはありません";
+                statusMessage = "No next buffer";
             }
             return true;
         }
@@ -805,7 +805,7 @@ public class ModalEditor {
                 if (Character.isLetter(keyChar)) {
                     startMacroRecording(keyChar);
                 } else {
-                    statusMessage = "無効なレジスタです";
+                    statusMessage = "Invalid register";
                 }
                 return true;
             }
@@ -816,7 +816,7 @@ public class ModalEditor {
                 } else if (Character.isLetter(keyChar)) {
                     playMacro(Character.toLowerCase(keyChar));
                 } else {
-                    statusMessage = "無効なレジスタです";
+                    statusMessage = "Invalid register";
                 }
                 return true;
             }
@@ -1297,7 +1297,7 @@ public class ModalEditor {
         boolean classReady = completionIndex != null && completionIndex.isReady();
         boolean wordReady = wordIndex != null && wordIndex.isReady();
         if (!classReady && !wordReady) {
-            setStatusMessage("補完インデックス構築中...");
+            setStatusMessage("Building completion index...");
             return;
         }
         String prefix = extractCompletionPrefix();
@@ -1308,7 +1308,7 @@ public class ModalEditor {
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryMergedCompletion(prefix);
         if (items.isEmpty()) {
             dismissCompletion();
-            setStatusMessage("補完候補なし: " + prefix);
+            setStatusMessage("No completion candidates: " + prefix);
             return;
         }
         activateCompletion(prefix, items, false);
@@ -1340,7 +1340,7 @@ public class ModalEditor {
             completionEngine.complete(ctx, text, getLines(), cursorRow, currentFilePath,
                 COMPLETION_MAX_RESULTS);
         if (ranked.isEmpty()) {
-            if (explicit) setStatusMessage("補完候補なし: " + ctx.prefix());
+            if (explicit) setStatusMessage("No completion candidates: " + ctx.prefix());
             return false;
         }
         completion.openWith(ctx.prefix(), ranked, false);
@@ -1446,7 +1446,7 @@ public class ModalEditor {
     /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
     private void triggerWordCompletion() {
         if (wordIndex == null || !wordIndex.isReady()) {
-            setStatusMessage("単語インデックス構築中...");
+            setStatusMessage("Building word index...");
             return;
         }
         String prefix = extractCompletionPrefix();
@@ -1457,7 +1457,7 @@ public class ModalEditor {
         java.util.List<dev.javatexteditor.analysis.CompletionItem> items = queryWordCompletion(prefix);
         if (items.isEmpty()) {
             dismissCompletion();
-            setStatusMessage("補完候補なし: " + prefix);
+            setStatusMessage("No completion candidates: " + prefix);
             return;
         }
         activateCompletion(prefix, items, true);
@@ -2014,8 +2014,8 @@ public class ModalEditor {
         cdSelectionActive = true;
 
         StringBuilder sb = new StringBuilder();
-        sb.append("*cd候補* ").append(parentPart.isEmpty() ? "." : parentPart)
-          .append(" — ").append(candidates.size()).append("件\n");
+        sb.append("*cd-candidates* ").append(parentPart.isEmpty() ? "." : parentPart)
+          .append(" — ").append(candidates.size()).append(" item(s)\n");
         for (String name : candidates) {
             sb.append(name).append("/\n");
         }
@@ -2026,7 +2026,7 @@ public class ModalEditor {
         resetSearchAndResultState();
         commandBuffer.setLength(0);
         mode = Mode.NORMAL;
-        statusMessage = "cd候補: " + candidates.size() + "件 — Enter で選択、q でキャンセル";
+        statusMessage = "cd candidates: " + candidates.size() + " item(s) — Enter to select, q to cancel";
     }
 
     /** cd候補疑似バッファ内でカーソルがある行の候補を選択し、元のバッファへ戻って :cd 入力を継続する。 */
@@ -2137,8 +2137,8 @@ public class ModalEditor {
         edSelectionActive = true;
 
         StringBuilder sb = new StringBuilder();
-        sb.append("*e候補* ").append(parentPart.isEmpty() ? "." : parentPart)
-          .append(" — ").append(candidates.size()).append("件\n");
+        sb.append("*e-candidates* ").append(parentPart.isEmpty() ? "." : parentPart)
+          .append(" — ").append(candidates.size()).append(" item(s)\n");
         for (String name : candidates) {
             sb.append(name).append("\n");
         }
@@ -2149,7 +2149,7 @@ public class ModalEditor {
         resetSearchAndResultState();
         commandBuffer.setLength(0);
         mode = Mode.NORMAL;
-        statusMessage = "e候補: " + candidates.size() + "件 — Enter で選択、q でキャンセル";
+        statusMessage = "e candidates: " + candidates.size() + " item(s) — Enter to select, q to cancel";
     }
 
     private void applySelectedEditCandidate() {
@@ -2349,7 +2349,7 @@ public class ModalEditor {
         telescopePicker = new MainClassPicker(fqcns);
         telescopePurpose = TelescopePurpose.RUN_MAIN_CLASS;
         beginTelescopeSession();
-        statusMessage = "実行するmainクラスを選択してください（Enterで実行、Escでキャンセル）";
+        statusMessage = "Select the main class to run (Enter to run, Esc to cancel)";
         // Main.javaのバックグラウンドスレッド完了コールバックから呼ばれ、processKey()経由の
         // syncCanvas()呼び出しを通らないため、ここで呼ばないと次のキー入力まで描画が更新されない。
         syncCanvas();
@@ -2573,7 +2573,7 @@ public class ModalEditor {
     private void switchToRelativeBuffer(int delta) {
         List<BufferPicker.BufferEntry> entries = allKnownBufferEntries();
         if (entries.size() <= 1) {
-            statusMessage = "他に開いているファイルバッファがありません";
+            statusMessage = "No other open file buffers";
             return;
         }
         String identity = currentBufferEntryIdentity();
@@ -2589,7 +2589,7 @@ public class ModalEditor {
             ? (delta > 0 ? 0 : entries.size() - 1)
             : Math.max(0, Math.min(entries.size() - 1, currentIdx + delta));
         if (nextIdx == currentIdx) {
-            statusMessage = delta > 0 ? "これ以上次のバッファはありません" : "これ以上前のバッファはありません";
+            statusMessage = delta > 0 ? "No next buffer" : "No previous buffer";
             return;
         }
         openBufferEntry(entries.get(nextIdx), 0, "switched");
@@ -2953,7 +2953,7 @@ public class ModalEditor {
             searchMatches = List.of();
             currentMatchIdx = -1;
             updateSearchHighlights();
-            statusMessage = emacsIsearchStatusPrefix() + "  (見つかりません)";
+            statusMessage = emacsIsearchStatusPrefix() + "  (not found)";
             return;
         }
         // BufferTextSearch.selectNearest は forward で "> refOffset"、backward で "< refOffset" と
@@ -3119,7 +3119,7 @@ public class ModalEditor {
     private void reportProjectRoot() {
         statusMessage = (projectRootOverride != null)
             ? "project root: " + projectRootOverride
-            : "project root: 未設定（:cd 追従: " + getProjectRoot() + "）";
+            : "project root: not set (following :cd: " + getProjectRoot() + ")";
         returnToFilerIfCommandFromFiler();
     }
 
@@ -3134,11 +3134,11 @@ public class ModalEditor {
             pathStr = UserPathResolver.expandHome(pathStr);
             Path target = getProjectRoot().resolve(pathStr).toAbsolutePath().normalize();
             if (Files.exists(target)) {
-                statusMessage = "E: すでに存在します: " + target;
+                statusMessage = "E: already exists: " + target;
                 return;
             }
             Files.createDirectories(target);
-            statusMessage = "ディレクトリを作成しました: " + target;
+            statusMessage = "Directory created: " + target;
         } catch (Exception ex) {
             statusMessage = "E: " + ex.getMessage();
             return;
@@ -3853,7 +3853,7 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         resetSearchAndResultState();
-        statusMessage = "[新規バッファ]";
+        statusMessage = "[new buffer]";
     }
 
     /**
@@ -3868,7 +3868,7 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         resetSearchAndResultState();
-        statusMessage = "チュートリアルを開きました — :q で終了、Ctrl+U で元のバッファに戻れます";
+        statusMessage = "Tutorial opened — :q to exit, Ctrl+U to return to the previous buffer";
     }
 
     /**
@@ -4073,10 +4073,10 @@ public class ModalEditor {
             if (mode == Mode.IMAGE) mode = Mode.NORMAL;
             cursorRow = 0;
             cursorCol = 0;
-            statusMessage = "この画像を表示できません（:b でバイナリ表示）";
+            statusMessage = "This image cannot be displayed (:b for binary view)";
         } catch (IOException e) {
             if (mode == Mode.IMAGE) mode = Mode.NORMAL;
-            statusMessage = "この画像を表示できません（:b でバイナリ表示）";
+            statusMessage = "This image cannot be displayed (:b for binary view)";
         }
         syncCanvas();
     }
@@ -4320,7 +4320,7 @@ public class ModalEditor {
         pendingNewFilePath = displayPath;
         pendingNewFileAction = onConfirmed;
         mode = Mode.CONFIRM_NEW_FILE;
-        statusMessage = "\"" + PathDisplay.baseName(displayPath) + "\" は存在しません。新規作成しますか？ (y/n)";
+        statusMessage = "\"" + PathDisplay.baseName(displayPath) + "\" does not exist. Create it? (y/n)";
     }
 
     private void processConfirmNewFileKey(int keyCode, char keyChar) {
@@ -4354,7 +4354,7 @@ public class ModalEditor {
             cursorRow = 0;
             cursorCol = 0;
             resetSearchAndResultState();
-            statusMessage = "\"" + PathDisplay.baseName(path) + "\" [新規ファイル]";
+            statusMessage = "\"" + PathDisplay.baseName(path) + "\" [new file]";
             // 既存ファイルを開く場合と同様に登録する。登録しないと switchToRelativeBuffer()
             // が BUFFER_REGISTRY 上でこのバッファを見つけられず、Ctrl+U/Ctrl+P で
             // 元々開いていた他のバッファへ戻れなくなる（新規ファイル作成直後の既知の不具合）。
@@ -4421,7 +4421,7 @@ public class ModalEditor {
         cursorRow = snap.row();
         cursorCol = snap.col();
         resetSearchAndResultState();
-        String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[新規バッファ]";
+        String label = (snap.filePath() != null) ? "\"" + snap.filePath() + "\"" : "[new buffer]";
         statusMessage = label + " (" + (idx + 1) + "/" + history.size() + ")";
     }
 
@@ -4460,7 +4460,7 @@ public class ModalEditor {
         }
         List<SearchResult> results = withTimeout(() -> projectSearcher.search(baseDir, pattern, fullScan));
         if (results == null) {
-            statusMessage = "grep: search timed out（作業ディレクトリが大きすぎる可能性があります）";
+            statusMessage = "grep: search timed out (the working directory may be too large)";
             return;
         }
         if (results.isEmpty()) {
@@ -5311,9 +5311,9 @@ public class ModalEditor {
     private void reportMacroOutcome(MacroRecorder.PlayOutcome outcome, char register) {
         switch (outcome) {
             case PLAYED -> { /* 再生されたキー自身がステータス行を更新するため、ここでは何もしない */ }
-            case EMPTY_REGISTER -> statusMessage = "レジスタ " + register + " は空です";
-            case NO_PREVIOUS_MACRO -> statusMessage = "直前に実行したマクロがありません";
-            case RECURSION_LIMIT_REACHED -> statusMessage = "マクロの再帰が深すぎます（中断しました）";
+            case EMPTY_REGISTER -> statusMessage = "Register " + register + " is empty";
+            case NO_PREVIOUS_MACRO -> statusMessage = "No previously executed macro";
+            case RECURSION_LIMIT_REACHED -> statusMessage = "Macro recursion too deep (aborted)";
         }
     }
 
@@ -5873,7 +5873,7 @@ public class ModalEditor {
         StringBuilder sb = new StringBuilder();
         sb.append("*filer* ").append(root.toString().replace('\\', '/'));
         if (filerSearchMode) sb.append(" /").append(filerQuery);
-        sb.append(" — ").append(filerFiltered.size()).append("件\n");
+        sb.append(" — ").append(filerFiltered.size()).append(" item(s)\n");
         for (DirEntry e : filerFiltered) {
             sb.append(e.kind() == DirEntry.Kind.DIRECTORY ? e.name() + "/" : e.name()).append('\n');
         }
@@ -5897,7 +5897,7 @@ public class ModalEditor {
             if (!Files.exists(target)) {
                 cdConfirmTarget = target;
                 mode = Mode.CD_CONFIRM_CREATE;
-                statusMessage = "ディレクトリが存在しません: " + PathDisplay.baseName(target.toString()) + " 新規作成しますか? (y/n)";
+                statusMessage = "Directory does not exist: " + PathDisplay.baseName(target.toString()) + " Create it? (y/n)";
                 return;
             }
             applyChangeDirectory(target);
@@ -5920,7 +5920,7 @@ public class ModalEditor {
     private void processCdConfirmCreateKey(int keyCode, char keyChar) {
         if (keyCode == KeyEvent.VK_ESCAPE || keyChar == 'n' || keyChar == 'N') {
             mode = Mode.NORMAL;
-            statusMessage = "キャンセルしました";
+            statusMessage = "Cancelled";
             cdConfirmTarget = null;
             return;
         }
@@ -5947,7 +5947,7 @@ public class ModalEditor {
             filerDeleteTarget = null;
             try {
                 deleteRecursively(target.path());
-                statusMessage = "削除しました: " + target.name();
+                statusMessage = "Deleted: " + target.name();
             } catch (IOException e) {
                 statusMessage = "E: " + e.getMessage();
             }
@@ -5956,7 +5956,7 @@ public class ModalEditor {
         }
         // y/Y 以外（n/N/Esc含む）はすべてキャンセル扱いにする。
         filerDeleteTarget = null;
-        statusMessage = "キャンセルしました";
+        statusMessage = "Cancelled";
         mode = Mode.FILER;
     }
 
@@ -6001,7 +6001,7 @@ public class ModalEditor {
             }
         }
         filerRenameActive = false;
-        statusMessage = renamed > 0 ? renamed + "件の名前を変更しました" : "変更はありません";
+        statusMessage = renamed > 0 ? renamed + " item(s) renamed" : "No changes";
         enterFiler();
     }
 
@@ -6083,7 +6083,7 @@ public class ModalEditor {
                 if (!filerFiltered.isEmpty() && !"..".equals(filerFiltered.get(filerSelectedIdx).name())) {
                     filerDeleteTarget = filerFiltered.get(filerSelectedIdx);
                     mode = Mode.FILER_DELETE_CONFIRM;
-                    statusMessage = "削除しますか?: " + filerDeleteTarget.name() + " (y/n)";
+                    statusMessage = "Delete?: " + filerDeleteTarget.name() + " (y/n)";
                 }
                 return;
             }
@@ -6239,7 +6239,7 @@ public class ModalEditor {
                     canvas.setCommandLineText(telescopePicker.title() + "  > " + telescopeQuery.toString());
                 } else if (mode == Mode.CLASSPATH_INPUT) {
                     canvas.setCommandLineText(classpathInputLabel
-                        + " classpath (カンマ区切り, Enter=確定, Esc=スキップ): "
+                        + " classpath (comma-separated, Enter=confirm, Esc=skip): "
                         + classpathInputBuffer.toString());
                 } else if (!statusMessage.isEmpty()) {
                     canvas.setCommandLineText(statusMessage);
@@ -6477,7 +6477,7 @@ public class ModalEditor {
      */
     private void enterMarkdownView() {
         if (markdownViewOwner == buffer) {
-            statusMessage = "already in markdown view (:mark でソースに戻る)";
+            statusMessage = "already in markdown view (:mark to return to source)";
             return;
         }
         if (!isMarkdownBuffer()) {
@@ -6498,7 +6498,7 @@ public class ModalEditor {
         cursorRow = 0;
         cursorCol = 0;
         markdownViewOwner = buffer;
-        statusMessage = "markdown preview (:mark でソースに戻る)";
+        statusMessage = "markdown preview (:mark to return to source)";
     }
 
     /** :mark — :viewで開いた閲覧ビューから元のMarkdownソースへ戻る。 */
@@ -6587,7 +6587,7 @@ public class ModalEditor {
      */
     public void beginCompileOutput() {
         saveBufferBeforeOutput();
-        buffer = new UndoablePieceTable("*compile* 実行中...\n");
+        buffer = new UndoablePieceTable("*compile* running...\n");
         currentFilePath = null;
         grepResults = null;
         fileNameResults = null;
@@ -6598,7 +6598,7 @@ public class ModalEditor {
         compileBufferOwner = buffer;
         runBufferOwner = null;
         outputNextRow = 1;
-        statusMessage = "コンパイル中...";
+        statusMessage = "Compiling...";
     }
 
     /** F10: javacが診断を1件報告するたび *compile* 疑似バッファの末尾へリアルタイム追記する。 */
@@ -6627,7 +6627,7 @@ public class ModalEditor {
         String header0 = (command != null) ? command : "";
         if (!header0.isEmpty()) sb.append(header0).append('\n');
         runHeaderOffset = sb.length();
-        runHeaderPlaceholder = "*run* " + fqcn + " — 実行中...";
+        runHeaderPlaceholder = "*run* " + fqcn + " — running...";
         sb.append(runHeaderPlaceholder).append('\n');
         buffer = new UndoablePieceTable(sb.toString());
         currentFilePath = null;
@@ -6640,7 +6640,7 @@ public class ModalEditor {
         runBufferOwner = buffer;
         compileBufferOwner = null;
         outputNextRow = header0.isEmpty() ? 1 : 2;
-        statusMessage = "run: " + fqcn + " を実行中...";
+        statusMessage = "run: running " + fqcn + "...";
     }
 
     /**
@@ -6823,7 +6823,7 @@ public class ModalEditor {
         Map<String, List<String>> candidates =
             autoImportHandler.resolveCandidates(diags, buffer.getText(), getProjectRoot());
         if (candidates.isEmpty()) {
-            statusMessage = "auto-import: 挿入対象なし";
+            statusMessage = "auto-import: nothing to insert";
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
             syncCanvas();
             return;
@@ -6853,7 +6853,7 @@ public class ModalEditor {
             pendingImportIdx = 0;
             enterImportSelect();
         } else {
-            statusMessage = "auto-import: " + importAppliedCount + "件 挿入済み";
+            statusMessage = "auto-import: " + importAppliedCount + " item(s) inserted";
             if (onImportComplete != null) { onImportComplete.run(); onImportComplete = null; }
         }
         syncCanvas();
@@ -6964,9 +6964,9 @@ public class ModalEditor {
             pendingImportIdx = 0;
             pendingImportApply = null;
             if (importAppliedCount > 0) {
-                statusMessage = "auto-import: " + importAppliedCount + "件 挿入済み";
+                statusMessage = "auto-import: " + importAppliedCount + " item(s) inserted";
             } else {
-                statusMessage = "auto-import: 挿入対象なし";
+                statusMessage = "auto-import: nothing to insert";
             }
             if (onImportComplete != null) {
                 onImportComplete.run();
@@ -7209,7 +7209,7 @@ public class ModalEditor {
         inJdkSourceBuffer = origin.filePath() != null && origin.filePath().startsWith("*jdk-source:");
         jdkSourceIsNative = inJdkSourceBuffer && looksLikeNativeJdkSource(origin.filePath(), origin.text());
         resetSearchAndResultState();
-        String label = (origin.filePath() != null) ? "\"" + origin.filePath() + "\"" : "[新規バッファ]";
+        String label = (origin.filePath() != null) ? "\"" + origin.filePath() + "\"" : "[new buffer]";
         setStatusMessage("← back to " + label + " line " + (origin.row() + 1));
     }
 
@@ -7752,41 +7752,41 @@ public class ModalEditor {
     /** カーソル行フィールドの getter を生成してクラス末尾 '}' 直前に挿入する。 */
     private void generateGetter() {
         String[] field = parseFieldAtCursor();
-        if (field == null) { statusMessage = "Getter: フィールド宣言が見つかりません"; syncCanvas(); return; }
+        if (field == null) { statusMessage = "Getter: no field declaration found"; syncCanvas(); return; }
         String type = field[0];
         String name = field[1];
         String prefix = type.equals("boolean") ? "is" : "get";
         String method = GetterSetterGenerator.buildGetter(type, name,
                 GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(method);
-        statusMessage = prefix + capitalize(name) + "() を生成しました";
+        statusMessage = prefix + capitalize(name) + "() generated";
         syncCanvas();
     }
 
     /** カーソル行フィールドの setter を生成してクラス末尾 '}' 直前に挿入する。 */
     private void generateSetter() {
         String[] field = parseFieldAtCursor();
-        if (field == null) { statusMessage = "Setter: フィールド宣言が見つかりません"; syncCanvas(); return; }
+        if (field == null) { statusMessage = "Setter: no field declaration found"; syncCanvas(); return; }
         String type = field[0];
         String name = field[1];
         String method = GetterSetterGenerator.buildSetter(type, name,
                 GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(method);
-        statusMessage = "set" + capitalize(name) + "() を生成しました";
+        statusMessage = "set" + capitalize(name) + "() generated";
         syncCanvas();
     }
 
     /** getter と setter の両方を生成する。 */
     private void generateGetterAndSetter() {
         String[] field = parseFieldAtCursor();
-        if (field == null) { statusMessage = "Getter/Setter: フィールド宣言が見つかりません"; syncCanvas(); return; }
+        if (field == null) { statusMessage = "Getter/Setter: no field declaration found"; syncCanvas(); return; }
         String type = field[0];
         String name = field[1];
         String prefix = type.equals("boolean") ? "is" : "get";
         String methods = GetterSetterGenerator.buildGetterAndSetter(type, name,
                 GetterSetterGenerator.detectIndent(getLines()));
         insertBeforeLastBrace(methods);
-        statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() を生成しました";
+        statusMessage = prefix + capitalize(name) + "()/set" + capitalize(name) + "() generated";
         syncCanvas();
     }
 
@@ -7805,7 +7805,7 @@ public class ModalEditor {
 
     private void jumpToNextDiagnostic() {
         List<CompileDiagnostic> diags = currentDiagnostics();
-        if (diags.isEmpty()) { statusMessage = "診断なし"; syncCanvas(); return; }
+        if (diags.isEmpty()) { statusMessage = "No diagnostics"; syncCanvas(); return; }
         int next = -1;
         for (CompileDiagnostic d : diags) {
             if (d.lineNumber() > cursorRow) {
@@ -7821,7 +7821,7 @@ public class ModalEditor {
             cursorCol = 0;
             statusMessage = "";
         } else {
-            statusMessage = "診断なし";
+            statusMessage = "No diagnostics";
         }
         syncCanvas();
     }
@@ -7832,7 +7832,7 @@ public class ModalEditor {
      */
     private void jumpToPrevDiagnostic() {
         List<CompileDiagnostic> diags = currentDiagnostics();
-        if (diags.isEmpty()) { statusMessage = "診断なし"; syncCanvas(); return; }
+        if (diags.isEmpty()) { statusMessage = "No diagnostics"; syncCanvas(); return; }
         int prev = -1;
         for (CompileDiagnostic d : diags) {
             if (d.lineNumber() < cursorRow) {
@@ -7848,7 +7848,7 @@ public class ModalEditor {
             cursorCol = 0;
             statusMessage = "";
         } else {
-            statusMessage = "診断なし";
+            statusMessage = "No diagnostics";
         }
         syncCanvas();
     }
@@ -7880,9 +7880,9 @@ public class ModalEditor {
         if (autoImportHandler == null) return;
         List<String> removed = autoImportHandler.removeUnusedImports(buffer);
         if (removed.isEmpty()) {
-            statusMessage = "import 整理完了（削除なし）";
+            statusMessage = "Import cleanup complete (nothing removed)";
         } else {
-            statusMessage = removed.size() + " 件の import を削除しました";
+            statusMessage = removed.size() + " import(s) removed";
         }
         syncCanvas();
     }
@@ -7895,15 +7895,15 @@ public class ModalEditor {
         }
         // コールバック未設定の場合は未使用 import 削除のみ（テスト環境等）
         if (autoImportHandler == null) {
-            statusMessage = "E: AutoImportHandler が設定されていません";
+            statusMessage = "E: AutoImportHandler is not configured";
             syncCanvas();
             return;
         }
         List<String> removed = autoImportHandler.removeUnusedImports(buffer);
         if (removed.isEmpty()) {
-            statusMessage = "未使用 import なし";
+            statusMessage = "No unused imports";
         } else {
-            statusMessage = removed.size() + " 件の import を削除しました";
+            statusMessage = removed.size() + " import(s) removed";
         }
         syncCanvas();
     }
@@ -7911,18 +7911,18 @@ public class ModalEditor {
     /** 特定 FQN の import を削除する（:remove-import <fqn>）。 */
     private void executeRemoveImport(String fqn) {
         if (fqn.isEmpty()) {
-            statusMessage = "E: FQN を指定してください";
+            statusMessage = "E: please specify an FQN";
             syncCanvas();
             return;
         }
         if (autoImportHandler == null) {
-            statusMessage = "E: AutoImportHandler が設定されていません";
+            statusMessage = "E: AutoImportHandler is not configured";
             syncCanvas();
             return;
         }
         boolean removed = autoImportHandler.removeImport(fqn, buffer);
-        statusMessage = removed ? "import " + fqn + " を削除しました"
-                                : "E: import " + fqn + " が見つかりません";
+        statusMessage = removed ? "import " + fqn + " removed"
+                                : "E: import " + fqn + " not found";
         syncCanvas();
     }
 

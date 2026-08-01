@@ -47,11 +47,11 @@ public final class DiagnosticPopup {
             .toList();
         Font f2Font = computePopupFont(owner);
         if (rowDiags.isEmpty()) {
-            JLabel f2Label = new JLabel("この行にエラー・警告はありません。");
+            JLabel f2Label = new JLabel("No errors or warnings on this line.");
             f2Label.setFont(f2Font);
             JOptionPane.showMessageDialog(owner,
                 f2Label,
-                "診断情報（行 " + (row + 1) + "）",
+                "Diagnostics (line " + (row + 1) + ")",
                 JOptionPane.INFORMATION_MESSAGE);
         } else {
             StringBuilder sb = new StringBuilder();
@@ -59,12 +59,12 @@ public final class DiagnosticPopup {
                 CompileDiagnostic d = rowDiags.get(i);
                 if (i > 0) sb.append("\n\n");
                 String kindLabel = switch (d.kind()) {
-                    case ERROR   -> "エラー";
-                    case WARNING -> "警告";
+                    case ERROR   -> "Error";
+                    case WARNING -> "Warning";
                 };
                 sb.append("[").append(kindLabel).append("]");
                 if (d.column() >= 0) {
-                    sb.append("  列: ").append(d.column() + 1);
+                    sb.append("  Column: ").append(d.column() + 1);
                 }
                 sb.append("\n").append(d.message());
             }
@@ -87,7 +87,7 @@ public final class DiagnosticPopup {
                 Math.min(screenH * 2 / 5, 500)));
             JOptionPane.showMessageDialog(owner,
                 f2Scroll,
-                "診断情報（行 " + (row + 1) + "）",
+                "Diagnostics (line " + (row + 1) + ")",
                 iconType);
         }
     }

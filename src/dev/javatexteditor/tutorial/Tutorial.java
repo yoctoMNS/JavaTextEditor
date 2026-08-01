@@ -12,668 +12,741 @@ public final class Tutorial {
 
     public static final String CONTENT = """
 ==============================================================================
-=          JavaTextEditor チュートリアルへようこそ                          =
+=              Welcome to the JavaTextEditor Tutorial                       =
 ==============================================================================
 
-このエディタは Vim 風の「モーダル編集」と、Java 開発支援機能を統合した
-テキストエディタです。このチュートリアルは vimtutor（Vim 本家のチュート
-リアル）にならい、実際にこのテキストを編集しながら体で覚える形式です。
+This editor combines Vim-style "modal editing" with Java development
+support. Like vimtutor (Vim's own tutorial), this tutorial teaches you
+by having you actually edit this very text.
 
-進め方:
-  1. 各レッスンの説明を読みます。
-  2. 「練習」に書かれた指示を、実際にこのバッファの上でやってみます。
-     - これは "読み物" ではなく "練習問題" です。本当にキーを押してください。
-  3. うまくいったら j で下に進み、次のレッスンに進みます。
-  4. 操作を間違えても大丈夫です。NORMAL モードで u を押せばアンドゥできます。
+How to proceed:
+  1. Read each lesson's explanation.
+  2. Try the instructions written under "Practice" right here in this
+     buffer.
+     - This is not "reading material" but "practice exercises". Please
+       actually press the keys.
+  3. When it works, press j to move down and go to the next lesson.
+  4. It's fine if you make a mistake. Press u in NORMAL mode to undo.
 
-チュートリアルを終了するには :q と入力して Enter を押してください。
-（保存はされません。元のファイルに戻りたいときは Ctrl+U を押すと、
-このチュートリアルを開く前のバッファに戻れます。Ctrl+P で逆方向に進めます。）
+To exit the tutorial, type :q and press Enter.
+(Nothing is saved. If you want to return to your original file, press
+Ctrl+U to go back to the buffer you had open before opening this
+tutorial. Ctrl+P moves forward again.)
 
-このチュートリアルは全19レッスンです。前半（1〜13）は Vim 標準の操作
-（置換コマンド・マクロ・大文字小文字変換を含む）、中盤（14〜18）は
-このエディタ独自の機能（Java／C 開発支援を含む）、最後（19）は困った
-ときの対処法をまとめています。すべての機能の詳細な
-説明は docs/manual/ にもあります。
+This tutorial has 19 lessons in total. The first half (1-13) covers
+standard Vim operations (including the substitute command, macros, and
+case conversion), the middle part (14-18) covers this editor's own
+features (including Java/C development support), and the last one (19)
+summarizes what to do when you get stuck. Detailed explanations of every
+feature are also available under docs/manual/.
 
-それでは下にスクロールしましょう。j キーを何度か押してみてください。
-
-
-
-==============================================================================
-レッスン 1: モードという考え方
-==============================================================================
-
-このエディタには複数の「モード」があります。今あなたがいるのは NORMAL
-モード（移動・削除・コピーなど "操作" をするモード）です。画面下の
-ステータス行に "-- NORMAL --" と表示されているのを確認してください。
-
-主なモードは次の4つです。
-
-  NORMAL  : 移動・削除・コピーなど、文書を "操作" するモード（標準状態）
-  INSERT  : 文字を "入力" するモード（i や a で入る）
-  VISUAL  : 範囲を "選択" するモード（v や V で入る）
-  COMMAND : :w や :q など "コマンド" を実行するモード（: で入る）
-
-どのモードからも Escape キーを押せば NORMAL モードに戻ります。迷ったら
-とりあえず Escape を押す、というのが Vim 系エディタの基本作法です。
-
-練習: 今すぐ Escape キーを1回押してみましょう（NORMAL のままで構いません。
-      「迷ったら Escape」を体に覚えさせるための練習です）。
+Now let's scroll down. Try pressing the j key a few times.
 
 
 
 ==============================================================================
-レッスン 2: カーソル移動の基本 (h j k l)
+Lesson 1: The concept of modes
 ==============================================================================
 
-矢印キーの代わりに、ホームポジションを崩さずに移動できる4つのキーを
-使います。
+This editor has several "modes". Right now you are in NORMAL mode (the
+mode for "operating" on text: moving, deleting, copying, etc). Check
+that the status line at the bottom of the screen shows "-- NORMAL --".
 
-    k  ↑（上）
-  h ← →  l  （h=左、l=右）
-    j  ↓（下）
+There are four main modes.
 
-練習1: 下の行にカーソルを置き、l を4回押して "ここ" の文字まで進んでください。
-       カーソルが今ある位置          ここに到達したらOK
+  NORMAL  : the mode for "operating" on the document - move, delete,
+            copy, etc (the default state)
+  INSERT  : the mode for "typing" text (enter with i or a)
+  VISUAL  : the mode for "selecting" a range (enter with v or V)
+  COMMAND : the mode for running "commands" like :w or :q (enter with :)
 
-練習2: h を数回押して、行の先頭付近まで戻ってください。
+From any mode, pressing the Escape key returns you to NORMAL mode. When
+in doubt, just press Escape - that's the basic habit of Vim-style
+editors.
 
-練習3: j を2回押して2行下へ、その後 k を2回押して元の行に戻ってください。
-
-矢印キー（↑↓←→）も今まで通り使えますが、hjkl に慣れると指を
-ホームポジションから動かさずに編集できるようになります。
+Practice: Right now, press the Escape key once (staying in NORMAL mode
+      is fine). This is practice to build the habit of "when in doubt,
+      Escape".
 
 
 
 ==============================================================================
-レッスン 3: 単語移動・行頭/行末・ファイル先頭/末尾
+Lesson 2: Basic cursor movement (h j k l)
 ==============================================================================
 
-1文字ずつの移動だけでなく、まとまった単位で移動するキーもあります。
+Instead of the arrow keys, you can use four keys that let you move
+without leaving the home row.
 
-  w  次の単語の先頭へ
-  b  前の単語の先頭へ
-  e  今の（または次の）単語の末尾へ
-  0  行の "絶対" 先頭へ（インデントも含めた一番左）
-  ^  行の最初の "非空白" 文字へ（インデントの次の文字）
-  $  行末へ
-  gg ファイルの先頭へ
-  G  ファイルの末尾へ
+    k  up
+  h left  right  l
+    j  down
 
-練習1: 次の行で w を3回押し、Java から PieceTable まで単語単位で進んでください。
+Practice 1: Place the cursor on the line below and press l four times to
+       reach the word "here".
+       The cursor is currently here          reach here when done
+
+Practice 2: Press h a few times to move back near the start of the line.
+
+Practice 3: Press j twice to move down two lines, then press k twice to
+       return to the original line.
+
+The arrow keys still work as before, but once you're used to hjkl you
+can edit without moving your fingers off the home row.
+
+
+
+==============================================================================
+Lesson 3: Word movement, line start/end, file start/end
+==============================================================================
+
+Besides moving one character at a time, there are keys for moving by
+larger units.
+
+  w  to the start of the next word
+  b  to the start of the previous word
+  e  to the end of the current (or next) word
+  0  to the "absolute" start of the line (leftmost, including indent)
+  ^  to the first "non-blank" character of the line (past the indent)
+  $  to the end of the line
+  gg to the start of the file
+  G  to the end of the file
+
+Practice 1: On the line below, press w three times to move word by word
+       from Java to PieceTable.
        This editor uses a Java PieceTable for the buffer.
 
-練習2: 上の行で $ を押して行末へ、0 を押して行頭へ戻ってください。
+Practice 2: On the line above, press $ to reach the end, then 0 to
+       return to the start.
 
-練習3（少し危険なので慣れてから）: gg でファイル先頭へジャンプし、その後
-       G でファイル末尾へジャンプしてみてください。最後にもう一度 gg で
-       ファイル先頭へ戻り、この続きの行を探してください
-       （行数が多いので j を押し続けるより gg/G の方が速いことを体感する
-       練習です）。
+Practice 3 (a bit risky, so try it once you're comfortable): Jump to the
+       start of the file with gg, then to the end of the file with G.
+       Finally, use gg again to return to the start of the file and find
+       your way back to this line (with many lines, gg/G is faster than
+       holding j - this practice lets you feel that).
 
 
 
 ==============================================================================
-レッスン 4: 文字の削除とアンドゥ
+Lesson 4: Deleting characters and undo
 ==============================================================================
 
-  x           カーソル位置の1文字を削除
-  dd          カーソル行を1行まるごと削除
-  u           直前の操作を取り消す（アンドゥ）
-  Ctrl+Shift+R  取り消した操作をやり直す（リドゥ）
+  x           delete the character under the cursor
+  dd          delete the whole current line
+  u           undo the last operation
+  Ctrl+Shift+R  redo an undone operation
 
-練習1: 次の行には余計な文字が混ざっています。x キーで X を1つずつ消して
-       "Hello World" という行に直してください。
+Practice 1: The line below has extra characters mixed in. Use x to
+       remove each X one at a time until it reads "Hello World".
        HXeXllXo WXorXld
 
-練習2: 消しすぎてしまったら u を押してください。1回押すごとに1つ前の
-       状態に戻ります。
+Practice 2: If you delete too much, press u. Each press goes back one
+       step.
 
-練習3: 次の不要な行を dd で削除してください。
-       この行は dd で削除する練習用のダミー行です。
+Practice 3: Delete the unneeded line below with dd.
+       This line is a dummy line for practicing dd deletion.
 
-練習4: 練習3で削除した行を、u で復元してみてください。その後さらに
-       Ctrl+Shift+R を押すと、もう一度削除された状態に戻ります（リドゥ）。
-
-
-
-==============================================================================
-レッスン 5: 挿入モード (i / a / o)
-==============================================================================
-
-NORMAL モードのままでは文字は入力できません。文字を入力するには
-INSERT モードに入る必要があります。
-
-  i  カーソルの "前" に挿入を開始
-  a  カーソルの "後ろ" に挿入を開始
-  o  カーソル行の "下" に新しい行を開いて挿入を開始
-  Escape  INSERT モードを抜けて NORMAL モードへ戻る
-
-練習1: 次の行の行頭にカーソルを移動し、i を押してから「こんにちは、」と
-       入力し、Escape で NORMAL モードへ戻ってください。
-       世界。
-
-練習2: 次の行の末尾にカーソルを移動し（$ が使えます）、a を押してから
-       「これでOK」と入力し、Escape で戻ってください。
-       この行の末尾に文字を追加する練習
-
-練習3: 次の行で o を押すと、下に新しい行が開いて INSERT モードになります。
-       何か好きな1行を入力して Escape で戻ってください。
-       この行の下に新しい行を作る練習
+Practice 4: Restore the line you deleted in Practice 3 with u. Then
+       press Ctrl+Shift+R to go back to the deleted state again (redo).
 
 
 
 ==============================================================================
-レッスン 6: ヤンク（コピー）とペースト（貼り付け）
+Lesson 5: Insert mode (i / a / o)
 ==============================================================================
 
-Vim では「コピー」のことを「ヤンク (yank)」と呼びます。
+You cannot type characters while in NORMAL mode. To type text you need
+to enter INSERT mode.
 
-  yy  カーソル行をヤンク（コピー）
-  dd  カーソル行を削除（実はこれもヤンクを兼ねています＝切り取り）
-  p   ヤンクした内容をカーソルの "後ろ／下" に貼り付け
-  P   ヤンクした内容をカーソルの "前／上" に貼り付け
+  i  start inserting "before" the cursor
+  a  start inserting "after" the cursor
+  o  open a new line "below" the current line and start inserting
+  Escape  leave INSERT mode and return to NORMAL mode
 
-練習1: 次の行で yy を押し、その後 p を押してください。同じ行が複製されます。
-       この行をヤンクして複製する練習
+Practice 1: Move the cursor to the start of the line below, press i,
+       type "Hello, ", then press Escape to return to NORMAL mode.
+       world.
 
-練習2: 次の行で dd を押して切り取り、1〜2行下に移動してから p を押すと、
-       行を別の場所に "移動" できます。
-       この行を別の場所へ移動する練習
+Practice 2: Move the cursor to the end of the line below (you can use
+       $), press a, type " - looks good", then press Escape to return.
+       Practice adding text to the end of this line
 
-
-
-==============================================================================
-レッスン 7: VISUAL モード（範囲選択）
-==============================================================================
-
-  v  文字単位の VISUAL モードへ（hjkl で選択範囲を広げる）
-  V  行単位の VISUAL LINE モードへ
-  y  選択範囲をヤンクして NORMAL モードへ戻る
-  d  選択範囲を削除（ヤンクも兼ねる）して NORMAL モードへ戻る
-  Escape  選択を解除して NORMAL モードへ戻る
-  v  （VISUAL モード中に押すと）選択を解除して NORMAL モードへ戻る
-     ※ v はトグル式: VISUAL モードへ入るキーでもあり、VISUAL モード中に
-        もう一度押すと NORMAL モードへ戻ります（Escape と同じ働き）。
-  V  （VISUAL LINE モード中に押すと）選択を解除して NORMAL モードへ戻る
-
-VISUAL/VISUAL LINE モード中は、単語移動（w b e）や行頭/行末（0 ^ $）、
-ファイル先頭/末尾（gg G）で選択範囲を拡張することもできます。また、
-> キーで選択行をインデント、< キーでデデントできます（数字を前置すると
-段数を指定できます。例: 3> で3段インデント）。
-
-練習1: 次の行の先頭で v を押し、l を数回押して "選択練習" まで範囲を広げ、
-       y でヤンクしてみてください。
-       選択練習のためのテキストです。
-
-練習2: 次の行で V を押すと行全体が選択されます。そのまま d を押すと
-       行ごと削除されます。
-       VISUAL LINE モードで削除する練習用の行
-
-練習3: 次の行で V を押して行を選択し、> を押してインデントしてみて
-       ください。続けて < を押すと元に戻ります。
-       インデントを試す行です。
+Practice 3: On the line below, press o to open a new line and enter
+       INSERT mode. Type any line you like, then press Escape to return.
+       Practice creating a new line below this one
 
 
 
 ==============================================================================
-レッスン 8: VISUAL BLOCK モード（矩形選択）
+Lesson 6: Yank (copy) and paste
 ==============================================================================
 
-Vim の Ctrl+V に相当する、矩形（長方形の列範囲）選択モードです。
-複数行の "同じ列だけ" をまとめて編集したいときに使います。
+In Vim, "copying" is called "yanking".
 
-  Ctrl+V  VISUAL BLOCK モードへ（NORMAL モードから）
-  h j k l 矩形の範囲を拡張
-  y / d   矩形範囲をヤンク／削除
-  I       矩形の左端の列で、選択していた全行に同時に文字を挿入
-  A       矩形の右端の1つ右の列で、同時に文字を挿入
-  c       矩形範囲を削除してから I と同じ位置で入力を始める（置き換え）
-  r       次に押した1文字で、矩形が覆うすべての位置の文字を一括置換
-  Ctrl+V / Escape   VISUAL BLOCK モードを終了して NORMAL モードへ
+  yy  yank (copy) the current line
+  dd  delete the current line (this also yanks it - i.e. cut)
+  p   paste the yanked content "after/below" the cursor
+  P   paste the yanked content "before/above" the cursor
 
-ヤンクした内容がブロック型の場合、p / P で貼り付けると行ごとに列を
-揃えて貼り付けられます（貼り付け先の行数が足りない場合は自動的に
-新しい行が追加されます）。
+Practice 1: On the line below, press yy then p. The same line is
+       duplicated.
+       Practice yanking and duplicating this line
 
-練習1: 次の3行の先頭列にカーソルを合わせ、Ctrl+V を押してから j を2回
-       押して3行分の矩形を選択し、r を押してから X を押してみてください。
-       各行の先頭の1文字が X に置き換わります。
-       AAA りんご
-       BBB みかん
-       CCC ぶどう
-
-練習2: 同じ3行で、先頭列から Ctrl+V → j j で矩形選択し、I を押して
-       "> " と入力してから Escape を押してみてください。3行すべての
-       先頭に "> " が同時に挿入されます。
-       1行目のダミーテキスト
-       2行目のダミーテキスト
-       3行目のダミーテキスト
+Practice 2: On the line below, press dd to cut it, move down 1-2 lines,
+       then press p to "move" the line to another place.
+       Practice moving this line to a different place
 
 
 
 ==============================================================================
-レッスン 9: 文字列検索 (Ctrl+S Ctrl+R * # n N)
+Lesson 7: VISUAL mode (range selection)
 ==============================================================================
 
-  Ctrl+S               インクリメンタルサーチ（前方）を開始/次の候補へ進む
-  Ctrl+R               インクリメンタルサーチ（後方）を開始/前の候補へ進む
-  *                    カーソル位置の単語を下方向に完全一致検索
-  #                    カーソル位置の単語を上方向に完全一致検索
-  n                    直前の */# と同方向へ次のマッチへジャンプ
-  N                    直前の */# と逆方向へジャンプ
+  v  enter character-wise VISUAL mode (extend the selection with hjkl)
+  V  enter line-wise VISUAL LINE mode
+  y  yank the selection and return to NORMAL mode
+  d  delete the selection (also yanks it) and return to NORMAL mode
+  Escape  clear the selection and return to NORMAL mode
+  v  (when pressed while in VISUAL mode) clear the selection and return
+     to NORMAL mode
+     Note: v is a toggle - it both enters VISUAL mode and, when pressed
+        again while in VISUAL mode, returns to NORMAL mode (same as
+        Escape).
+  V  (when pressed while in VISUAL LINE mode) clear the selection and
+     return to NORMAL mode
 
-Ctrl+S/Ctrl+R はEmacs式のインクリメンタルサーチです。1文字入力するたびに
-最も近い候補へリアルタイムでカーソルが移動し、そのまま Ctrl+S を連打する
-ことで次々と候補を送っていけます。Ctrl+R を押すと検索方向が反転します。
-Enter で確定、Escape で検索開始位置へキャンセルします。
-NORMAL モード・INSERT モードのどちらでも使えます。
+While in VISUAL/VISUAL LINE mode, you can also extend the selection with
+word movement (w b e), line start/end (0 ^ $), and file start/end
+(gg G). You can also indent the selected lines with > and dedent with <
+(prefix a number to specify how many levels, e.g. 3> indents 3 levels).
 
-検索でマッチした箇所は黄色くハイライトされます。
+Practice 1: At the start of the line below, press v, then press l
+       several times to extend the selection to "select practice", then
+       press y to yank it.
+       This text is for select practice.
 
-練習1: NORMAL モードで Ctrl+S を押してから チュートリアル と入力すると、
-       この単語が出てくる場所へリアルタイムでジャンプします。そのまま
-       Ctrl+S を押すたびに次の出現箇所へ移動し、Enter で確定します。
+Practice 2: On the line below, press V to select the whole line. Press d
+       to delete the whole line.
+       A line for practicing deletion in VISUAL LINE mode
 
-練習2: 次の行の "サンプル" という単語の上にカーソルを置き、* キーを押すと
-       同じ単語の次の出現箇所へジャンプします。
-       これはサンプルです。サンプルという単語を複数回登場させたサンプル文。
-
-
-
-==============================================================================
-レッスン 10: コマンドモード（保存・終了・ファイルを開く・画面分割）
-==============================================================================
-
-  :        COMMAND モードへ入る（画面下にコマンド入力欄が出ます）
-  :w       現在のファイルへ上書き保存
-  :w path  指定したパスへ保存（以後そのパスが「現在のファイル」になる）
-  :e path  指定したファイルを開く
-  :e       新規の空バッファを開く（:enew も同じ）
-  :sp / :split          画面を左右に分割する
-  :vs / :vsplit / :vsp  画面を上下に分割する
-  :q       現在の画面（ペイン）を閉じる。最後の1枚なら終了する
-  :wq      保存してから :q する
-
-このチュートリアル自体には保存先のファイルがありません。
-（:w を試すと "no file name" というエラーが表示されるはずです。試してみても
-構いません。何も壊れません。）
-
-練習: NORMAL モードで : を押してコマンド入力欄を開き、何も入力せずに
-      Escape を押してコマンドをキャンセルする練習をしてください。
-      （: で COMMAND モードに入って Escape で抜ける、という往復に
-       慣れておくと、後のレッスンで :grep や :rename を試すときに
-       スムーズです。）
+Practice 3: On the line below, press V to select the line, then press >
+       to indent it. Press < afterward to undo it.
+       A line for trying indentation.
 
 
 
 ==============================================================================
-レッスン 11: 置換コマンド (:s)
+Lesson 8: VISUAL BLOCK mode (rectangular selection)
 ==============================================================================
 
-Vim 式の置換コマンドです。正規表現で文字列を検索し、別の文字列に
-置き換えます。
+This is the rectangular (column-range) selection mode, equivalent to
+Vim's Ctrl+V. Use it when you want to edit "just one column" across
+multiple lines at once.
 
-  :s/pattern/replacement/       カーソル行だけを置換
-  :%s/pattern/replacement/      バッファ全体を置換
-  :10,20s/pattern/replacement/  10〜20行目だけを置換
-  :'<,'>s/pattern/replacement/  直前の VISUAL 選択範囲だけを置換
+  Ctrl+V  enter VISUAL BLOCK mode (from NORMAL mode)
+  h j k l extend the rectangle
+  y / d   yank / delete the rectangular range
+  I       insert text simultaneously on every selected line, at the
+          left edge column of the rectangle
+  A       insert text simultaneously, one column to the right of the
+          rectangle's right edge
+  c       delete the rectangular range then start typing at the same
+          position as I (replace)
+  r       replace every character covered by the rectangle with the next
+          key you press
+  Ctrl+V / Escape   exit VISUAL BLOCK mode and return to NORMAL mode
 
-区切り文字は / 以外（例: :s#foo#bar#）も使えます。末尾に g を付けると
-1行内の全マッチを置換（付けない場合は各行の最初のマッチのみ）、i を
-付けると大文字小文字を無視します。置換文字列側では & でマッチ全体、
-\\1〜\\9 で正規表現のグループを後方参照できます。
+If the yanked content is block-shaped, pasting with p / P aligns the
+columns line by line (if there aren't enough lines at the paste target,
+new lines are added automatically).
 
-練習1: 次の行で :s/リンゴ/ミカン/ と入力して Enter を押し、"リンゴ" が
-       "ミカン" に置き換わることを確認してください。
-       リンゴを2つ買いました。もう1つリンゴを追加します。
+Practice 1: Place the cursor on the first column of the 3 lines below,
+       press Ctrl+V, then press j twice to select a rectangle spanning
+       3 lines, then press r followed by X.
+       The first character of each line is replaced with X.
+       AAA apple
+       BBB orange
+       CCC grape
 
-練習2: 上の行はまだ2つ目の "リンゴ" が残っているはずです。今度は
-       :s/リンゴ/ミカン/g と入力し、g フラグで行内の全部を一度に
-       置換してみてください。
-
-練習3: 次の3行を V を押して行選択し、j を2回押して3行とも選択した
-       状態で : を押してください。コマンド欄に '<,'> が自動入力
-       されるので、続けて s/ダミー/サンプル/ と入力して Enter を
-       押すと、選択した3行だけがまとめて置換されます。
-       1行目のダミーです
-       2行目のダミーです
-       3行目のダミーです
-
-
-
-==============================================================================
-レッスン 12: マクロ（q 記録 / @ 再生）
-==============================================================================
-
-複数のキー操作をまとめて記録し、あとで何度でも再生できる機能です。
-
-  q{a-z}   指定したレジスタへ記録を開始する（例: qa なら a レジスタ）
-  q        （記録中に押すと）記録を終了する
-  @{a-z}   指定したレジスタのマクロを1回再生する
-  @@       直前に @ で再生したレジスタをもう一度再生する
-
-記録中に打ったキーは、実際にその場で実行されながら同時に記録されます。
-NORMAL モードの移動・削除だけでなく、INSERT モードでの文字入力やモード
-切り替えもまとめて記録できます。
-
-練習: 次の3行の先頭に "- " を付ける操作をマクロにしてみましょう。
-      1行目にカーソルを置き、qa でレコーディングを開始し、続けて
-      I（行頭挿入）→ "- " と入力 → Escape → j（次行へ）の順に操作し、
-      最後に q を押してマクロ記録を終了してください。その後 @a を
-      2回押すと、残りの2行にも同じ操作が適用されます。
-      りんご
-      みかん
-      ぶどう
+Practice 2: On the same 3 lines, from the first column, select the
+       rectangle with Ctrl+V then j j, press I, type "> ", then press
+       Escape. "> " is inserted at the start of all 3 lines at once.
+       Line 1 dummy text
+       Line 2 dummy text
+       Line 3 dummy text
 
 
 
 ==============================================================================
-レッスン 13: 大文字小文字変換 (~ / guu / gUU / g~~)
+Lesson 9: Text search (Ctrl+S Ctrl+R * # n N)
 ==============================================================================
 
-カーソル位置の文字や行全体の大文字・小文字を切り替える機能です。
+  Ctrl+S               start/advance incremental search (forward)
+  Ctrl+R               start/advance incremental search (backward)
+  *                    search downward for an exact match of the word
+                       under the cursor
+  #                    search upward for an exact match of the word
+                       under the cursor
+  n                    jump to the next match in the same direction as
+                       the last */#
+  N                    jump in the opposite direction of the last */#
 
-  ~       カーソル位置の1文字の大文字/小文字を反転し、カーソルが右へ進む
-  guu     現在行全体を小文字化
-  gUU     現在行全体を大文字化
-  g~~     現在行全体の大文字/小文字を反転
+Ctrl+S/Ctrl+R are Emacs-style incremental search. With every character
+you type, the cursor jumps to the nearest match in real time, and you
+can keep pressing Ctrl+S to move through the matches one after another.
+Pressing Ctrl+R reverses the search direction. Enter confirms, Escape
+cancels back to the position where the search started. Both NORMAL and
+INSERT mode support this.
 
-VISUAL / VISUAL LINE / VISUAL BLOCK モードでは、選択した範囲に対して
-u（小文字化）/ U（大文字化）/ ~（反転）が使えます。
+Matched locations are highlighted in yellow.
 
-練習1: 次の行の先頭文字の上で ~ を数回押し、大文字/小文字が切り替わる
-       たびにカーソルが右へ進むことを確認してください。
+Practice 1: In NORMAL mode, press Ctrl+S then type tutorial. The cursor
+       jumps in real time to where this word appears. Keep pressing
+       Ctrl+S to move to the next occurrence, and press Enter to
+       confirm.
+
+Practice 2: Place the cursor over the word "sample" on the line below
+       and press the * key - it jumps to the next occurrence of the same
+       word.
+       This is a sample. The word sample appears several times in this
+       sample sentence.
+
+
+
+==============================================================================
+Lesson 10: Command mode (save, quit, open a file, split the screen)
+==============================================================================
+
+  :        enter COMMAND mode (a command input field appears at the
+           bottom of the screen)
+  :w       save (overwrite) the current file
+  :w path  save to the given path (this path becomes the "current file"
+           afterward)
+  :e path  open the given file
+  :e       open a new empty buffer (:enew does the same)
+  :sp / :split          split the screen left and right
+  :vs / :vsplit / :vsp  split the screen top and bottom
+  :q       close the current screen (pane). If it's the last one, quit
+  :wq      save, then :q
+
+This tutorial itself has no file to save to.
+(Trying :w should show a "no file name" error. Feel free to try it -
+nothing will break.)
+
+Practice: In NORMAL mode, press : to open the command input field, then
+      practice cancelling the command by pressing Escape without typing
+      anything.
+      (Getting used to this round trip - entering COMMAND mode with :
+       and leaving with Escape - will help you smoothly try :grep and
+       :rename in later lessons.)
+
+
+
+==============================================================================
+Lesson 11: The substitute command (:s)
+==============================================================================
+
+This is Vim's substitute command. It searches for text using a regular
+expression and replaces it with another string.
+
+  :s/pattern/replacement/       substitute only on the current line
+  :%s/pattern/replacement/      substitute across the whole buffer
+  :10,20s/pattern/replacement/  substitute only on lines 10-20
+  :'<,'>s/pattern/replacement/  substitute only in the last VISUAL
+                                 selection
+
+You can use a delimiter other than / (e.g. :s#foo#bar#). Appending g at
+the end substitutes every match on a line (without it, only the first
+match per line is replaced); appending i ignores case. On the
+replacement side, & refers to the whole match and \\1-\\9 back-reference
+regex groups.
+
+Practice 1: On the line below, type :s/apple/orange/ and press Enter to
+       confirm that "apple" is replaced with "orange".
+       I bought 2 apples. I'll add one more apple.
+
+Practice 2: The line above should still have a second "apple" left. This
+       time type :s/apple/orange/g and use the g flag to replace all of
+       them on the line at once.
+
+Practice 3: Press V to select the 3 lines below, press j twice to select
+       all 3, then press :. '<,'> is automatically filled into the
+       command field; go on and type s/dummy/sample/ and press Enter to
+       replace all 3 selected lines at once.
+       Line 1 is a dummy
+       Line 2 is a dummy
+       Line 3 is a dummy
+
+
+
+==============================================================================
+Lesson 12: Macros (q to record / @ to play)
+==============================================================================
+
+This feature lets you record a sequence of key operations and replay it
+as many times as you like.
+
+  q{a-z}   start recording into the given register (e.g. qa uses
+           register a)
+  q        (while recording) stop recording
+  @{a-z}   play the macro in the given register once
+  @@       replay the register that was last played with @
+
+Keys pressed while recording are actually executed on the spot while
+also being recorded. Not just NORMAL mode movement/deletion, but
+INSERT-mode typing and mode switches are recorded too.
+
+Practice: Let's turn the operation of adding "- " to the start of the
+      3 lines below into a macro. Place the cursor on line 1, start
+      recording with qa, then perform I (insert at line start) -> type
+      "- " -> Escape -> j (move to next line), and finally press q to
+      stop recording the macro. Then press @a twice to apply the same
+      operation to the remaining 2 lines.
+      apple
+      orange
+      grape
+
+
+
+==============================================================================
+Lesson 13: Case conversion (~ / guu / gUU / g~~)
+==============================================================================
+
+This feature toggles the case of the character under the cursor or of a
+whole line.
+
+  ~       toggle the case of the character under the cursor and move
+          right
+  guu     lowercase the entire current line
+  gUU     uppercase the entire current line
+  g~~     toggle the case of the entire current line
+
+In VISUAL / VISUAL LINE / VISUAL BLOCK mode, you can use u (lowercase) /
+U (uppercase) / ~ (toggle) on the selected range.
+
+Practice 1: Press ~ a few times over the first character of the line
+       below and confirm the cursor moves right each time the case
+       toggles.
        hello world
 
-練習2: 次の行で guu と入力すると行全体が小文字に、gUU と入力すると
-       行全体が大文字になります。両方試してみてください。
+Practice 2: On the line below, typing guu lowercases the whole line, and
+       gUU uppercases the whole line. Try both.
        MixedCASE Line
 
-練習3: 次の行で V を押して行選択し、U を押すと選択行全体が大文字に
-       なります。
+Practice 3: On the line below, press V to select the line, then press U
+       to uppercase the whole selected line.
        lowercase line to convert
 
 
 
 ==============================================================================
-レッスン 14: このエディタ独自の機能（1） — 移動・効率化キー
+Lesson 14: This editor's own features (1) - movement & efficiency keys
 ==============================================================================
 
-ここからは Vim 標準にはない、このエディタ独自のキーバインドです。
+From here on are keybindings unique to this editor, not found in
+standard Vim.
 
-INSERT モード中でも、Escape を押さずに Emacs 風のキーでカーソルを
-動かせます（モードを行き来する手間が減ります）。
+Even in INSERT mode, you can move the cursor with Emacs-style keys
+without pressing Escape (saving you the trouble of switching modes back
+and forth).
 
-  Ctrl+F / Ctrl+B   1文字 右／左 へ移動（INSERT モード中）
-  Ctrl+N / Ctrl+P   1行 下／上 へ移動（INSERT モード中）
-  Ctrl+A / Ctrl+E   行頭（非空白）／行末 へ移動（INSERT モード中）
-  Alt+F / Alt+B     次／前の単語へ移動（INSERT モード中）
+  Ctrl+F / Ctrl+B   move right/left by 1 character (in INSERT mode)
+  Ctrl+N / Ctrl+P   move down/up by 1 line (in INSERT mode)
+  Ctrl+A / Ctrl+E   move to line start (non-blank)/end (in INSERT mode)
+  Alt+F / Alt+B     move to the next/previous word (in INSERT mode)
 
-NORMAL モードでは Space をリーダーキーとして使います。
+In NORMAL mode, Space is used as a leader key.
 
-  Space h   行の最初の非空白文字へ（^ と同じ）
-  Space l   行末へ（$ と同じ）
-  Space k   ファイル先頭へ（gg と同じ）
-  Space j   ファイル末尾へ（G と同じ）
+  Space h   to the first non-blank character of the line (same as ^)
+  Space l   to the end of the line (same as $)
+  Space k   to the start of the file (same as gg)
+  Space j   to the end of the file (same as G)
 
-NORMAL モードには、画面単位・行単位のスクロール専用キーもあります。
+NORMAL mode also has dedicated keys for screen- and line-wise scrolling.
 
-  Ctrl+F / Ctrl+B   1画面 下／上 にスクロール
-  Ctrl+D            半画面 下にスクロール
-  Ctrl+E / Ctrl+Y   1行 下／上 にスクロール
-  H / M / L         画面内の最上行／中央行／最下行へジャンプ
+  Ctrl+F / Ctrl+B   scroll down/up by 1 screen
+  Ctrl+D            scroll down by half a screen
+  Ctrl+E / Ctrl+Y   scroll down/up by 1 line
+  H / M / L         jump to the top/middle/bottom line on screen
 
-対応する括弧へのジャンプ、行の入れ替え、画面分割の移動キーも便利です。
+Jumping to matching brackets, swapping lines, and moving between split
+panes are also handy.
 
-  %       カーソル位置の括弧 ( [ { に対応する閉じ括弧（またはその逆）へ
-          ジャンプする（ネストにも対応。ただしカーソルが括弧の "上" に
-          ないと動作しません）
-  Alt+J   現在行と次の行を入れ替える
-  Alt+K   現在行と前の行を入れ替える
-  sv / ss           垂直／水平にペインを分割する（:sp / :vs と同じ）
-  sh sk / sl sj     前／次のペインへフォーカスを移動する
+  %       jump to the closing bracket matching the ( [ { under the
+          cursor (or vice versa; supports nesting, but only works when
+          the cursor is "on" a bracket)
+  Alt+J   swap the current line with the next line
+  Alt+K   swap the current line with the previous line
+  sv / ss           split the pane vertically/horizontally (same as
+                     :sp / :vs)
+  sh sk / sl sj     move focus to the previous/next pane
 
-練習1: 次の行で i を押して INSERT モードに入り、Ctrl+E で行末へ移動して
-       から Ctrl+A で行頭へ戻ってみてください。最後に Escape で抜けます。
-       Emacs風のカーソル移動を試す行です。
+Practice 1: On the line below, press i to enter INSERT mode, move to the
+       end of the line with Ctrl+E, then back to the start with Ctrl+A.
+       Finally press Escape to leave.
+       A line for trying Emacs-style cursor movement.
 
-練習2: 次の2行のどちらかにカーソルを置き、Alt+J または Alt+K を押して
-       順序が入れ替わることを確認してください。
-       1行目（最初はこちらが上）
-       2行目（最初はこちらが下）
+Practice 2: Place the cursor on either of the 2 lines below and press
+       Alt+J or Alt+K to confirm their order swaps.
+       Line 1 (starts on top)
+       Line 2 (starts on bottom)
 
-練習3: 次の行の "(" の上にカーソルを置き、% を押してみてください。
-       対応する ")" へジャンプします。もう一度 % を押すと "(" に戻ります。
-       サンプル関数(引数1, 引数2, 引数3)の呼び出し例
-
-
-
-==============================================================================
-レッスン 15: このエディタ独自の機能（2） — Java編集支援
-==============================================================================
-
-このエディタは「Java を書くためのエディタ」でもあります。拡張子が
-.java のファイルを開いているときに特に役立つ機能です。
-
-  K           カーソル位置の識別子を調べる「万能ジャンプ／参照キー」。
-              プロジェクト内の宣言（クラス・メソッド・フィールド）が
-              見つかればそこへジャンプし、見つからなければ JDK クラスと
-              して調べてステータスバーに概要を表示します（Javadoc が
-              インストールされていれば説明文も出ます）。ClassName.method
-              の形の native メソッドの上では JNI 実装の場所も調べます
-  Shift+J     直前の K によるジャンプ元へ1つ戻る
-  gr          カーソル位置の識別子をプロジェクト全体から参照検索する
-              （g の後に r。結果は専用バッファに一覧表示され、Enter で
-              該当箇所へジャンプできます）
-  Ctrl+Space  コード補完ポップアップを開く（INSERTモード中。作業ディレ
-              クトリ内の識別子と JDK クラス名が候補になり、1文字入力
-              するたびに自動でも候補が更新されます）
-  Alt+/       単語だけの補完ポップアップを開く（JDKクラス名は含めない）
-  [g / [d     コンパイルエラー・警告がある行へジャンプ（次／前）
-  F2          カーソル行のエラー・警告の一覧をダイアログで表示する
-              （どのモードからでも使えるグローバルキーです）
-  Space g g   カーソル行のフィールド宣言から getter を自動生成
-  Space g s   同様に setter を自動生成
-  Space g d   getter と setter を両方生成
-  Space i o     未使用の import 文を一括削除する（:oi コマンドも同じ）
-  Ctrl+C, Ctrl+O  カーソル位置に @Override + 改行を挿入する（Ctrl+Cの後にCtrl+O）
-  :main java / :main javac   java / javac コマンドの実際の起動点
-              （launcher のソースコード）へジャンプする
-  F10         作業ディレクトリ配下のJavaプロジェクト全体をコンパイルする
-              （結果は *compile* バッファに表示されます）
-  F11         プロジェクト内の public static void main を探して実行する
-              （複数見つかった場合は一覧から選べます。標準出力は *run*
-              バッファにまとめて表示されます）
-  F12         F10 を実行し、成功した場合だけ続けて F11 相当を実行する
-
-F10・F11・F12 は「今開いているファイルの種類」で動作が切り替わります。
-.java を開いていれば Java（javac 相当）、.c を開いていれば C（gcc 相当）
-としてコンパイル・実行します。詳しくは次のレッスン16を参照してください。
-
-auto-import（import文の自動補完）も備えています。.java ファイルを編集中、
-INSERT モードから NORMAL モードへ戻るとき（Escape を押したとき）に
-コンパイルエラーを解析し、未解決のクラス名があれば import 文を自動挿入
-します。候補が複数ある場合はステータスバーに番号付きで選択肢が表示され、
-数字キーで選べます。
-
-練習: このチュートリアルはテキストファイルなので K・gr・auto-import は
-      本来の効果を発揮しませんが、慣れている方は .java ファイルを開いて
-      （:e で別のファイルを開けます）このセクションの機能を試してみて
-      ください。
+Practice 3: Place the cursor over the "(" on the line below and press %.
+       It jumps to the matching ")". Press % again to return to "(".
+       Example call to sampleFunction(arg1, arg2, arg3)
 
 
 
 ==============================================================================
-レッスン 16: このエディタ独自の機能（3） — C言語の開発支援
+Lesson 15: This editor's own features (2) - Java editing support
 ==============================================================================
 
-このエディタは Java だけでなく C 言語の開発も支援します。拡張子が
-.c / .h のファイルを開いているときに有効になります。Java 側が JDK 標準
-API（javac）で実現しているのに対し、C 側は外部の C コンパイラ
-（gcc → clang → cc の順に自動検出）を呼び出して同じことを実現します。
-C コンパイラが見つからない環境では、これらの機能は静かに無効化されます
-（エディタ自体は問題なく動きます）。
+This editor also serves as an "editor for writing Java". These features
+are especially useful while a .java file is open.
 
-  F10         作業ディレクトリ配下の全 .c を1つの実行ファイルに
-              コンパイルする（gcc -Wall -o bin/a.out ...）。結果は
-              Java と同じ *compile* バッファに表示されます
-  F11         コンパイル済みの実行ファイル（bin/a.out）を実行する。
-              標準出力・標準エラーは *run* バッファにリアルタイム表示
-              され、標準エラー由来の行は赤字になります
-  F12         F10 を実行し、成功した場合だけ続けて F11 を実行する
-  [g / [d     コンパイルエラー・警告のある行へジャンプ（次／前）。
-              保存時・INSERT→NORMAL 復帰時に gcc -fsyntax-only で
-              解析され、E/W ガターと波下線が表示されます（Java と共通）
-  F2          カーソル行のエラー・警告の一覧をダイアログ表示（共通）
-  K           定義ジャンプ（Shift+K）。カーソル位置により動作が変わります:
-              ・関数名の上 → プロジェクト内の実装（.c の関数本体）へジャンプ。
-                ヘッダに宣言しか無くても実装をたどれます
-              ・マクロ／型（struct/enum/typedef）の上 → 定義行（多くはヘッダ）へ
-              ・#include "foo.h" / <foo.h> の行 → そのヘッダファイルを開く
-              ・printf / NULL / size_t のような標準ライブラリの識別子の上 →
-                プロジェクト内に無ければ、実際にインストールされているCコンパイラ
-                に問い合わせて標準ヘッダへジャンプします（Windows / Linux 両対応）
-  Shift+J     直前の K ジャンプ元へ戻る（Java と共通）
+  K           the "universal jump/reference key" that looks up the
+              identifier under the cursor. If a declaration (class,
+              method, field) is found in the project it jumps there;
+              otherwise it looks the symbol up as a JDK class and shows
+              a summary in the status bar (with a description too, if
+              Javadoc is installed). Over a native method in the form
+              ClassName.method it also looks up the JNI implementation
+  Shift+J     go back one step to where the last K jump started from
+  gr          search project-wide for references to the identifier under
+              the cursor (g followed by r; results are listed in a
+              dedicated buffer, and Enter jumps to the chosen location)
+  Ctrl+Space  open the code completion popup (in INSERT mode; identifiers
+              in the working directory and JDK class names become
+              candidates, and the candidates auto-update as you type)
+  Alt+/       open a word-only completion popup (does not include JDK
+              class names)
+  [g / [d     jump to the next/previous line with a compile error or
+              warning
+  F2          show a dialog listing the errors/warnings on the current
+              line (a global key usable from any mode)
+  Space g g   auto-generate a getter from the field declaration on the
+              current line
+  Space g s   likewise, auto-generate a setter
+  Space g d   generate both getter and setter
+  Space i o     remove all unused import statements at once (same as the
+              :oi command)
+  Ctrl+C, Ctrl+O  insert @Override plus a newline at the cursor (Ctrl+C
+              followed by Ctrl+O)
+  :main java / :main javac   jump to the actual entry point of the java /
+              javac command (the launcher's source code)
+  F10         compile the entire Java project under the working directory
+              (the result is shown in the *compile* buffer)
+  F11         find and run public static void main in the project (if
+              more than one is found, you can choose from a list;
+              standard output is shown together in the *run* buffer)
+  F12         run F10, and if it succeeds, continue on to run the
+              equivalent of F11
 
-#include の自動挿入（Java の auto-import の C 版）も備えています。
-printf / malloc / strlen / sqrt / size_t のような標準ライブラリの
-シンボルを使っているのに対応するヘッダを #include していないと、
-INSERT→NORMAL 復帰時に必要なヘッダ（<stdio.h> など）を自動で挿入
-します。Space i o（または :oi）を押すと、ソース全体を走査して
-不足しているヘッダをまとめて追加します。
+F10/F11/F12 switch behavior based on the type of the currently open
+file. If a .java file is open they act as Java (roughly javac); if a .c
+file is open they act as C (roughly gcc). See Lesson 16 for details.
 
-補完（Ctrl+Space / Alt+/）・検索（:grep / \\g）・リネーム（:rename）・
-モーダル編集はもともと言語に依存せず、.c / .h ファイルでもそのまま
-使えます。
+auto-import (automatic import completion) is also included. While
+editing a .java file, when you leave INSERT mode and return to NORMAL
+mode (by pressing Escape), compile errors are analyzed and import
+statements for any unresolved class names are inserted automatically.
+When there are multiple candidates, they are shown numbered in the
+status bar and you can choose one with a number key.
 
-  複数プログラムの注意: F10 は全 .c を1つの実行ファイルにリンクします。
-  それぞれ main() を持つ独立した複数プログラムが同じディレクトリにある
-  と「multiple definition of main」リンクエラーになります（1つの
-  プログラム＝複数ファイルという構成を主対象としています）。
-
-練習: このチュートリアルはテキストなので実際にはコンパイルできませんが、
-      慣れている方は :e hello.c のように .c ファイルを開き、printf を
-      使う短いプログラムを書いて F12 を押してみてください。
-
-  bin/ の場所: コンパイル出力は Java と同じく「src フォルダの兄弟」に
-  作られます（binDirFor の規則）。src を持たない構成では作業ディレクトリ
-  直下の bin/ になります。
-
-
-
-==============================================================================
-レッスン 17: このエディタ独自の機能（4） — プロジェクト全体を扱う機能
-==============================================================================
-
-1ファイルだけでなく、作業ディレクトリ（プロジェクト）全体を対象に
-した機能もあります。
-
-  :grep <pattern>          作業ディレクトリ配下を正規表現で全文検索する。
-                            結果は専用バッファに一覧表示され、Enter で
-                            該当ファイル・該当行へジャンプできる
-  :rename <old> <new>      プロジェクト全体でシンボル名を一括リネームする
-  \\f                       ファイル名検索（FILESEARCH モード）
-  \\g                       ファイル内容のgrep検索（FILESEARCH モード）
-  Space f                  telescope 風ファジーファイル検索（\\f/\\gと同じ一覧表示）
-  Space /                  telescope 風ライブgrep
-  Space b                  telescope 風バッファ一覧
-  :cd <path>                作業ディレクトリを変更する（grep/rename/検索/
-                            telescope すべての基準ディレクトリが切り替わる）
-  :pwd                      現在の作業ディレクトリを確認する
-
-:grep・\\f・\\g・gr（レッスン15）には「bang（!）付き」の全ファイル検索版
-もあります。通常は .git や build、node_modules のようなディレクトリを
-スキップしますが、! を付けるとそれらも含めた完全なスキャンになります。
-
-  :grep! <pattern>   :grep のbang版
-  \\f!pattern          \\f のbang版（先頭に ! を付けて Enter）
-  \\g!pattern          \\g のbang版
-  gR                  gr のbang版（g の後に Shift+R）
-
-:cd でディレクトリを移動すると、自動的に FILER モード（ファイルブラウザ）
-が開きます。
-
-  Ctrl+N / Ctrl+P   一覧の項目を下／上へ移動
-  Enter             ディレクトリなら中へ移動、ファイルなら開く
-  /                 一覧内をさらに絞り込み検索する
-  Esc               FILER モードを終了する
-
-COMMAND モードで :cd や :e の入力中に Tab キーを押すと、パス名が
-補完されます（候補が複数あるときは一覧から選べます）。
-
-練習: NORMAL モードで :pwd と入力して Enter を押し、現在の作業ディレクトリが
-      ステータスバーに表示されることを確認してください。
+Practice: Since this tutorial is a plain text file, K, gr, and
+      auto-import won't have their real effect here, but if you're
+      comfortable, open a .java file (you can open another file with :e)
+      and try out this section's features.
 
 
 
 ==============================================================================
-レッスン 18: このエディタ独自の機能（5） — 見た目・その他
+Lesson 16: This editor's own features (3) - C language development support
 ==============================================================================
 
-画面の見た目に関する細かい調整キーもあります。
+This editor supports C language development in addition to Java. These
+features are active while a .c / .h file is open. Where the Java side is
+implemented with the standard JDK API (javac), the C side calls out to
+an external C compiler (auto-detected in the order gcc -> clang -> cc)
+to achieve the same thing. In environments where no C compiler is found,
+these features are silently disabled (the editor itself still works
+fine).
 
-  Ctrl+Shift+← / →   フォントのセル幅を縮小／拡大する
-  Ctrl+Shift+↑ / ↓   フォントのセル高さを縮小／拡大する
+  F10         compile all .c files under the working directory into a
+              single executable (gcc -Wall -o bin/a.out ...). The result
+              is shown in the same *compile* buffer as Java
+  F11         run the compiled executable (bin/a.out). Standard
+              output/error are shown in the *run* buffer in real time,
+              and lines from standard error are shown in red
+  F12         run F10, and if it succeeds, continue on to run F11
+  [g / [d     jump to the next/previous line with a compile error or
+              warning. Analyzed with gcc -fsyntax-only on save and on
+              returning from INSERT to NORMAL, showing E/W gutter marks
+              and squiggly underlines (shared with Java)
+  F2          show a dialog listing the errors/warnings on the current
+              line (shared)
+  K           jump to definition (Shift+K). Behavior depends on cursor
+              position:
+              - over a function name -> jumps to the implementation in
+                the project (the .c function body). Even if only a
+                declaration exists in a header, it can trace the
+                implementation
+              - over a macro/type (struct/enum/typedef) -> to the
+                definition line (usually in a header)
+              - on a #include "foo.h" / <foo.h> line -> opens that
+                header file
+              - over a standard-library identifier like printf / NULL /
+                size_t -> if not found in the project, queries the
+                actually installed C compiler and jumps to the standard
+                header (supports both Windows and Linux)
+  Shift+J     go back to where the last K jump started from (shared with
+              Java)
 
-半角フォントとカラーテーマはコマンドで切り替えられます。
+Automatic #include insertion (the C version of Java's auto-import) is
+also included. If you use a standard-library symbol like printf /
+malloc / strlen / sqrt / size_t without #including the corresponding
+header, the needed header (e.g. <stdio.h>) is inserted automatically
+when you return from INSERT to NORMAL mode. Pressing Space i o (or :oi)
+scans the whole source and adds any missing headers all at once.
 
-  :font 0    半角フォントを Misc Fixed にする（既定）
-  :font 1    半角フォントを IBM Plex Mono にする
-  :color 0   カラーテーマをダークモードにする（既定）
-  :color 1   カラーテーマをライトモードにする
+Completion (Ctrl+Space / Alt+/), search (:grep / \\g), rename
+(:rename), and modal editing were already language-agnostic, and work
+the same way in .c / .h files.
 
-ステータス行（画面最下部）には、現在のモードに加えて、右側に時計・
-CPU/GPU使用率・メモリ使用率（例: "CPU 12% | MEM 62%"）・
-歩くキャラクターのアニメーションが表示されています（アクティブな
-画面だけに表示されます）。取得できない項目（GPU非搭載等）は表示自体が
-省略されます。コンパイルエラーがある場合はエラー・警告の件数もここに
-表示されます。
+  Note on multiple programs: F10 links all .c files into a single
+  executable. If several independent programs, each with their own
+  main(), live in the same directory, you'll get a "multiple definition
+  of main" link error (this feature is mainly designed for a single
+  program made of multiple files).
 
-Markdownファイル（.md / .markdown）を開いているときは、:view コマンドで
-見出し・リスト・引用などの記法記号を取り除いて読みやすく整形した閲覧
-ビューに切り替えられます。:mark で元のソース・カーソル位置に戻ります。
-閲覧ビュー中は読み取り専用扱いのため、:w は保存先が無くエラーになります
-（保存する場合は :mark でソース表示に戻ってから行ってください）。
+Practice: Since this tutorial is plain text it can't actually be
+      compiled, but if you're comfortable, open a .c file with :e
+      hello.c, write a short program that uses printf, and press F12.
 
-練習: Ctrl+Shift+→ を1回押してフォントを少し大きくし、Ctrl+Shift+←
-      を1回押して元に戻してみてください。Markdownファイルを開く機会が
-      あれば :view と :mark も試してみてください。
+  Where bin/ ends up: compiled output is placed as a "sibling of the src
+  folder", the same as Java (the binDirFor convention). In a layout
+  without a src folder, it goes to bin/ right under the working
+  directory.
 
 
 
 ==============================================================================
-レッスン 19: 困ったときは
+Lesson 17: This editor's own features (4) - project-wide features
 ==============================================================================
 
-  u            操作を取り消す（基本的にいつでも使えます）
-  Escape       どのモードからも NORMAL モードへ戻る
-  Ctrl+U       NORMAL モードでバッファ履歴を1つ前に戻る
-                （このチュートリアルを開く前のファイルに戻れます）
-  Ctrl+P       Ctrl+U の逆方向（履歴を先に進める）
-  :q           終了する（このチュートリアルでは保存せず閉じるだけ）
+Beyond single-file operations, there are also features that work across
+the entire working directory (project).
 
-何が起きたか分からなくなったら、まず Escape → u を試してください。
+  :grep <pattern>          full-text search across the working directory
+                            with a regular expression. Results are listed
+                            in a dedicated buffer, and Enter jumps to the
+                            matching file/line
+  :rename <old> <new>      rename a symbol project-wide, everywhere at
+                            once
+  \\f                       file name search (FILESEARCH mode)
+  \\g                       grep search of file contents (FILESEARCH
+                            mode)
+  Space f                  telescope-style fuzzy file search (same
+                            listing as \\f/\\g)
+  Space /                  telescope-style live grep
+  Space b                  telescope-style buffer list
+  :cd <path>                change the working directory (the base
+                            directory for grep/rename/search/telescope
+                            all switch together)
+  :pwd                      check the current working directory
+
+:grep / \\f / \\g / gr (Lesson 15) also have a "bang (!)" full-file-search
+variant. Normally directories like .git, build, and node_modules are
+skipped, but adding ! makes it a full scan including those.
+
+  :grep! <pattern>   the bang version of :grep
+  \\f!pattern          the bang version of \\f (prefix with ! and press
+                       Enter)
+  \\g!pattern          the bang version of \\g
+  gR                  the bang version of gr (g followed by Shift+R)
+
+Moving to a directory with :cd automatically opens FILER mode (the file
+browser).
+
+  Ctrl+N / Ctrl+P   move down/up through the list
+  Enter             enter a directory, or open a file
+  /                 further narrow down the list with a search
+  Esc               exit FILER mode
+
+Pressing Tab while typing :cd or :e in COMMAND mode completes the path
+name (if there are multiple candidates, you can choose from a list).
+
+Practice: In NORMAL mode, type :pwd and press Enter, and confirm the
+      current working directory is shown in the status bar.
 
 
 
 ==============================================================================
-おつかれさまでした！
+Lesson 18: This editor's own features (5) - appearance and other settings
 ==============================================================================
 
-これで一通りの機能を体験しました。このチュートリアルはいつでも :tutor
-コマンドでもう一度開けます。
+There are also fine-grained keys for adjusting the screen's appearance.
 
-次のステップ:
-  - docs/manual/ の各ページ（特に 10-keybindings-reference.md）で、
-    ここに出てこなかった細かいキー（Ctrl+W での単語削除、Tabペア
-    スキップなど）も確認してみてください。
-  - 実際の .java ファイルを :e で開き、K キーや auto-import を試して
-    みてください。
-  - 自分の手に馴染むまで、何度かこのチュートリアルを繰り返すのも
-    おすすめです。
+  Ctrl+Shift+Left / Right   shrink/enlarge the font cell width
+  Ctrl+Shift+Up / Down      shrink/enlarge the font cell height
 
-このバッファを閉じるには :q と入力して Enter を押してください。
+The half-width font and color theme can be switched with commands.
+
+  :font 0    use Misc Fixed as the half-width font (default)
+  :font 1    use IBM Plex Mono as the half-width font
+  :color 0   use the dark color theme (default)
+  :color 1   use the light color theme
+
+In addition to the current mode, the status line (at the very bottom of
+the screen) shows, on the right, a clock, CPU/GPU usage, memory usage
+(e.g. "CPU 12% | MEM 62%"), and a walking-character animation (shown
+only for the active screen). Items that can't be read (e.g. no GPU
+present) are simply omitted. If there are compile errors, the number of
+errors/warnings is also shown here.
+
+While a Markdown file (.md / .markdown) is open, the :view command
+switches to a reading view that strips heading/list/quote markup
+symbols for easier reading. :mark returns to the original source and
+cursor position. The reading view is treated as read-only, so :w will
+error with no save destination (to save, return to source view with
+:mark first).
+
+Practice: Press Ctrl+Shift+Right once to enlarge the font a little, then
+      Ctrl+Shift+Left once to restore it. If you get the chance to open
+      a Markdown file, try :view and :mark too.
+
+
+
+==============================================================================
+Lesson 19: If you get stuck
+==============================================================================
+
+  u            undo an operation (works almost anywhere)
+  Escape       return to NORMAL mode from any mode
+  Ctrl+U       go back one step in the buffer history in NORMAL mode
+                (lets you return to the file you had open before this
+                tutorial)
+  Ctrl+P       the opposite direction of Ctrl+U (move forward in history)
+  :q           quit (in this tutorial, this just closes without saving)
+
+If you're not sure what happened, try Escape then u first.
+
+
+
+==============================================================================
+Great work!
+==============================================================================
+
+You've now experienced a full tour of the features. You can always
+reopen this tutorial with the :tutor command.
+
+Next steps:
+  - Check out docs/manual/ (especially
+    10-keybindings-reference.md) for finer-grained keys not covered
+    here (like word deletion with Ctrl+W, Tab pair skipping, and more).
+  - Open an actual .java file with :e and try the K key and auto-import.
+  - Repeating this tutorial a few times until it feels natural is also
+    a good idea.
+
+To close this buffer, type :q and press Enter.
 """;
 }

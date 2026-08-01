@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
  * Markdownソースを読みやすいプレーンテキストの「閲覧ビュー」に変換する（Swing非依存の純粋ロジック）。
  * このエディタの描画パイプラインは等幅ビットマップフォントのグリッド描画で、フォントスタイル
  * （太字/斜体）の切替や任意のUnicode記号の安全な幅計算はできない
- * （telescope選択行マーカーを"▸"からASCIIの">"へ変更した既知の教訓を踏襲し、出力する記号は
+ * (Following the lesson from telescope changing its selection marker from "▸" to ASCII ">", the emitted symbols are
  * すべてASCII印字可能文字(0x20-0x7E)の範囲に収める）。そのため色分けや文字装飾はせず、
  * 記法記号(#, **, - 等)を取り除き、見出しの下線・リストの正規化されたマーカー・
  * コードブロックのインデント・水平線などで構造だけを可読テキストとして再構成する。
@@ -43,7 +43,7 @@ public final class MarkdownRenderer {
 
     /** *view* 疑似バッファの先頭に置くヘッダ行（既存のgrep結果・hexdump等の疑似バッファと同じ構成）。 */
     public static String header(String fileName) {
-        return "*view* " + fileName + " — markdown preview（:mark でソース表示に戻る）";
+        return "*view* " + fileName + " — markdown preview (:mark to return to source view)";
     }
 
     /** ヘッダ行 + 空行 + 変換済み本文、を1つの文字列として返す。 */

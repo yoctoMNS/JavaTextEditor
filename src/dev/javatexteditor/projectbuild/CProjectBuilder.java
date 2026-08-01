@@ -72,24 +72,24 @@ public class CProjectBuilder {
         try {
             sources = collectCFiles(projectRoot);
         } catch (IOException e) {
-            return new BuildResult(false, 0, List.of(), "ソース走査に失敗しました: " + e.getMessage(), "");
+            return new BuildResult(false, 0, List.of(), "Failed to scan sources: " + e.getMessage(), "");
         }
         if (sources.isEmpty()) {
             return new BuildResult(false, 0, List.of(),
-                "コンパイル対象の.cファイルが見つかりません: " + projectRoot, "");
+                "No .c files found to compile: " + projectRoot, "");
         }
 
         String compiler = findCompiler();
         if (compiler == null) {
             return new BuildResult(false, 0, List.of(),
-                "Cコンパイラ（gcc/clang/cc）が見つかりません。PATHを確認してください。", "");
+                "C compiler (gcc/clang/cc) not found. Check your PATH.", "");
         }
 
         Path binDir = binDirFor(projectRoot);
         try {
             Files.createDirectories(binDir);
         } catch (IOException e) {
-            return new BuildResult(false, 0, List.of(), "出力先ディレクトリを作成できません: " + binDir, "");
+            return new BuildResult(false, 0, List.of(), "Cannot create output directory: " + binDir, "");
         }
         Path executable = binDir.resolve(EXECUTABLE_NAME);
 
@@ -121,11 +121,11 @@ public class CProjectBuilder {
             exitCode = process.waitFor();
         } catch (IOException e) {
             return new BuildResult(false, sources.size(), List.of(),
-                "コンパイル中にエラーが発生しました: " + e.getMessage(), String.join(" ", command));
+                "An error occurred during compilation: " + e.getMessage(), String.join(" ", command));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new BuildResult(false, sources.size(), List.of(),
-                "コンパイルが中断されました", String.join(" ", command));
+                "Compilation was interrupted", String.join(" ", command));
         }
 
         boolean success = exitCode == 0;

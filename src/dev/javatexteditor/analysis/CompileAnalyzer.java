@@ -42,7 +42,7 @@ public class CompileAnalyzer {
         try {
             source = Files.readString(path);
         } catch (IOException e) {
-            throw new AnalysisException("ファイルの読み込みに失敗しました: " + path, e);
+            throw new AnalysisException("Failed to read file: " + path, e);
         }
         return analyzeSource(path.toString(), source);
     }
@@ -61,7 +61,7 @@ public class CompileAnalyzer {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             throw new AnalysisException(
-                "JavaCompiler が見つかりません。JDK で実行してください。");
+                "JavaCompiler not found. Run with a JDK.");
         }
 
         DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
@@ -84,14 +84,14 @@ public class CompileAnalyzer {
                 javacTask.parse();
                 javacTask.analyze();
             } catch (IOException e) {
-                throw new AnalysisException("解析中にエラーが発生しました", e);
+                throw new AnalysisException("An error occurred during analysis", e);
             }
 
         } catch (AnalysisException e) {
             throw e;
         } catch (Exception e) {
             throw new AnalysisException(
-                "解析中に予期しないエラーが発生しました: " + e.getMessage(), e);
+                "An unexpected error occurred during analysis: " + e.getMessage(), e);
         }
 
         return toDiagnostics(collector.getDiagnostics());
@@ -106,7 +106,7 @@ public class CompileAnalyzer {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             throw new AnalysisException(
-                "JavaCompiler が見つかりません。JDK で実行してください。");
+                "JavaCompiler not found. Run with a JDK.");
         }
 
         DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
@@ -135,7 +135,7 @@ public class CompileAnalyzer {
                         }
                     });
             } catch (IOException e) {
-                throw new AnalysisException("プロジェクトディレクトリの走査に失敗しました: " + projectRoot, e);
+                throw new AnalysisException("Failed to scan project directory: " + projectRoot, e);
             }
 
             JavaCompiler.CompilationTask task = compiler.getTask(
@@ -151,14 +151,14 @@ public class CompileAnalyzer {
                 javacTask.parse();
                 javacTask.analyze();
             } catch (IOException e) {
-                throw new AnalysisException("解析中にエラーが発生しました", e);
+                throw new AnalysisException("An error occurred during analysis", e);
             }
 
         } catch (AnalysisException e) {
             throw e;
         } catch (Exception e) {
             throw new AnalysisException(
-                "解析中に予期しないエラーが発生しました: " + e.getMessage(), e);
+                "An unexpected error occurred during analysis: " + e.getMessage(), e);
         }
 
         // 診断をフィルタして、指定ファイルのエラーのみを返す

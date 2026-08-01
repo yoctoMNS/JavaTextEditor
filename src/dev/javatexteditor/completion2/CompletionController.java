@@ -131,7 +131,7 @@ public final class CompletionController {
         try {
             mutate(start, end, newText);
         } catch (BadLocationException ex) {
-            throw new IllegalStateException("補完テキストの書き換えに失敗しました", ex);
+            throw new IllegalStateException("Failed to rewrite completion text", ex);
         }
         insertedLength = newText.length();
     }

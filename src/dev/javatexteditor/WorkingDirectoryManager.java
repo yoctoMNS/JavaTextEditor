@@ -56,11 +56,11 @@ public final class WorkingDirectoryManager {
      * @return null = 成功、それ以外 = 日本語エラーメッセージ
      */
     public String setWorkingDirectory(Path path) {
-        if (path == null)                    return "パスが null です";
+        if (path == null)                    return "Path is null";
         Path normalized = path.toAbsolutePath().normalize();
-        if (!Files.exists(normalized))       return "ディレクトリが存在しません: " + normalized;
-        if (!Files.isDirectory(normalized))  return "ディレクトリではありません: " + normalized;
-        if (!Files.isReadable(normalized))   return "読み取り権限がありません: " + normalized;
+        if (!Files.exists(normalized))       return "Directory does not exist: " + normalized;
+        if (!Files.isDirectory(normalized))  return "Not a directory: " + normalized;
+        if (!Files.isReadable(normalized))   return "No read permission: " + normalized;
         workingDirectory = normalized;
         for (Consumer<Path> l : listeners) l.accept(normalized);
         return null;

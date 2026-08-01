@@ -1813,7 +1813,7 @@ public class ModalEditorTest {
         ed.processKey(KeyEvent.VK_SPACE, ' ', 0);
         ed.processKey(KeyEvent.VK_G, 'g', 0);
         ed.processKey(KeyEvent.VK_G, 'g', 0);
-        check("セミコロンなし行でgetter生成しない", ed.getText().equals(before) || ed.getStatusMessage().contains("見つかりません"));
+        check("セミコロンなし行でgetter生成しない", ed.getText().equals(before) || ed.getStatusMessage().contains("no field declaration found"));
     }
 
     // -------------------------------------------------------------------------
@@ -1885,7 +1885,7 @@ public class ModalEditorTest {
         ed.processKey(KeyEvent.VK_G, 'g', 0);
         check("[g no diag: row=0 のまま", ed.getCursorRow() == 0);
         check("[g no diag: statusMessage に '診断' が含まれる",
-              ed.getStatusMessage().contains("診断"));
+              ed.getStatusMessage().contains("diagnostic"));
     }
 
     // ユーティリティ
