@@ -794,6 +794,13 @@ public class ModalEditor {
      */
     private boolean handlePendingSequence(int keyCode, char keyChar) {
         if (!pendingSequence.isEmpty()) {
+            // Shift/Ctrl/Alt/Meta単体の押下（keyPressedイベント）は無視し、pending状態を維持する。
+            // これらは常にkeyChar==CHAR_UNDEFINEDで届くため、後続の実文字（例: Shift+A の 'A'）を
+            // 待たずにpendingSequenceを確定させてしまうと、大文字への置換（rキー等）が
+            // 「Shiftキー自体」を置換文字として誤確定してしまう不具合になる。
+            if (keyChar == KeyEvent.CHAR_UNDEFINED && isModifierKeyCode(keyCode)) {
+                return true;
+            }
             String seq = pendingSequence;
             pendingSequence = "";
             statusMessage = "";
@@ -5320,6 +5327,14 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
     // カーソル移動
     // -------------------------------------------------------------------------
+
+    /** Shift/Ctrl/Alt/Meta単体の押下（keyPressed由来）かどうか。 */
+    private static boolean isModifierKeyCode(int keyCode) {
+        return keyCode == KeyEvent.VK_SHIFT
+            || keyCode == KeyEvent.VK_CONTROL
+            || keyCode == KeyEvent.VK_ALT
+            || keyCode == KeyEvent.VK_META;
+    }
 
     /** keyCode または keyChar のどちらかが期待値と一致すれば true。 */
     private static boolean matches(int keyCode, char keyChar, int expectedCode, char expectedChar) {
