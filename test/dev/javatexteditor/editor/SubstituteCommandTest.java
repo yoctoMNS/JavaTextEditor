@@ -22,9 +22,15 @@ public class SubstituteCommandTest {
         testVisualLinewiseRange();
         testNoPreviousVisualSelectionError();
         testBackreferenceReplacement();
+        testUnescapedParenIsLiteral();
+        testMagicQuantifiers();
+        testCaseConversionInReplacement();
+        testConfirmFlagYesNoQuit();
+        testConfirmFlagAll();
         testAmpersandReplacement();
         testEmptyPatternReusesLastSearch();
         testNoMatchShowsError();
+        testLegacyReferenceStillMatchesForPlainJavaRegexPatterns();
         testAlternateDelimiter();
         testCursorMovesToLastChangedLine();
 
@@ -115,10 +121,51 @@ public class SubstituteCommandTest {
     }
 
     static void testBackreferenceReplacement() {
-        System.out.println("[置換文字列の \\1 は後方参照として展開される]");
+        System.out.println("[置換文字列の \\1 は後方参照として展開される（magicモードのグループ化は \\( \\) ）]");
         ModalEditor ed = new ModalEditor("hello world");
-        sendCommand(ed, "s/(hello) (world)/\\2 \\1/");
+        sendCommand(ed, "s/\\(hello\\) \\(world\\)/\\2 \\1/");
         check("グループが入れ替わる", ed.getText().equals("world hello"));
+    }
+
+    static void testUnescapedParenIsLiteral() {
+        System.out.println("[magicモードでは無エスケープの ( ) はリテラル文字]");
+        ModalEditor ed = new ModalEditor("f(x)");
+        sendCommand(ed, "s/f(x)/g(x)/");
+        check("無エスケープの括弧がリテラルとして一致する", ed.getText().equals("g(x)"));
+    }
+
+    static void testMagicQuantifiers() {
+        System.out.println("[\\+ \\? はJavaの + ? 相当の量指定子として働く]");
+        ModalEditor ed = new ModalEditor("aaa ab");
+        sendCommand(ed, "%s/a\\+b\\?/X/g");
+        check("\\+ \\? が量指定子として展開される", ed.getText().equals("X X"));
+    }
+
+    static void testCaseConversionInReplacement() {
+        System.out.println("[置換文字列の \\u \\U で大文字小文字を変換できる]");
+        ModalEditor ed = new ModalEditor("hello world");
+        sendCommand(ed, "s/\\(\\w\\+\\) \\(\\w\\+\\)/\\u\\1 \\U\\2/");
+        check("\\u は先頭1文字のみ・\\U は以降全体を大文字化", ed.getText().equals("Hello WORLD"));
+    }
+
+    static void testConfirmFlagYesNoQuit() {
+        System.out.println("[cフラグは1件ずつ確認しながら置換する]");
+        ModalEditor ed = new ModalEditor("foo\nfoo\nfoo");
+        sendCommand(ed, "%s/foo/bar/gc");
+        check("最初の確認待ちメッセージが表示される", ed.getStatusMessage().contains("replace with bar"));
+        pressKey(ed, 'y');
+        pressKey(ed, 'n');
+        pressKey(ed, 'y');
+        check("y/n/yの通りに置換される", ed.getText().equals("bar\nfoo\nbar"));
+        check("確認終了後はNORMALモード", ed.isNormalMode());
+    }
+
+    static void testConfirmFlagAll() {
+        System.out.println("[cフラグ中の a は残り全件を確認なしで置換する]");
+        ModalEditor ed = new ModalEditor("foo\nfoo\nfoo");
+        sendCommand(ed, "%s/foo/bar/gc");
+        pressKey(ed, 'a');
+        check("残り全件が置換される", ed.getText().equals("bar\nbar\nbar"));
     }
 
     static void testAmpersandReplacement() {
@@ -145,6 +192,19 @@ public class SubstituteCommandTest {
         sendCommand(ed, "s/xyz/abc/");
         check("pattern not foundエラー", ed.getStatusMessage().contains("pattern not found"));
         check("バッファは変更されない", ed.getText().equals("hello"));
+    }
+
+    static void testLegacyReferenceStillMatchesForPlainJavaRegexPatterns() {
+        System.out.println("[レガシー実装は新実装の単体テスト用参照実装としてのみ残る（本番からは呼ばれない）]");
+        // magic変換を伴わないプレーンなJava正規表現パターンでは、新実装（本番経路）と
+        // レガシー実装（executeSubstituteLegacy、テスト専用）は同じ結果になることを確認する。
+        ModalEditor viaNewEngine = new ModalEditor("foo foo\nfoo foo");
+        sendCommand(viaNewEngine, "s/foo/bar/g");
+
+        ModalEditor viaLegacy = new ModalEditor("foo foo\nfoo foo");
+        viaLegacy.executeSubstituteLegacy(0, 0, "s/foo/bar/g");
+
+        check("新実装とレガシー実装の結果が一致する", viaNewEngine.getText().equals(viaLegacy.getText()));
     }
 
     static void testAlternateDelimiter() {

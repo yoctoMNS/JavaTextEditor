@@ -31,6 +31,9 @@ import dev.javatexteditor.search.DirectoryLister;
 import dev.javatexteditor.search.FileNameSearcher;
 import dev.javatexteditor.search.ProjectSearcher;
 import dev.javatexteditor.search.SearchResult;
+import dev.javatexteditor.substitute.VimRegexTranslator;
+import dev.javatexteditor.substitute.VimSubstituteCommandParser;
+import dev.javatexteditor.substitute.VimSubstituteExecutor;
 import dev.javatexteditor.telescope.BufferPicker;
 import dev.javatexteditor.telescope.FilePicker;
 import dev.javatexteditor.telescope.GrepPicker;
@@ -81,7 +84,7 @@ import java.util.regex.PatternSyntaxException;
  */
 public class ModalEditor {
 
-    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE, IMAGE }
+    private enum Mode { NORMAL, INSERT, COMMAND, VISUAL, VISUAL_LINE, VISUAL_BLOCK, FILESEARCH, TELESCOPE, IMPORT_SELECT, FILER, CLASSPATH_INPUT, BINARY, CONFIRM_NEW_FILE, CD_CONFIRM_CREATE, IMAGE, SUBSTITUTE_CONFIRM }
     private enum FileSearchType { NAME, GREP }
 
     /** ソフトタブのインデント幅（スペース数）。 */
@@ -650,6 +653,7 @@ public class ModalEditor {
                 case IMAGE         -> processImageKey(keyCode, keyChar, modifiers);
                 case CONFIRM_NEW_FILE -> processConfirmNewFileKey(keyCode, keyChar);
                 case CD_CONFIRM_CREATE -> processCdConfirmCreateKey(keyCode, keyChar);
+                case SUBSTITUTE_CONFIRM -> processSubstituteConfirmKey(keyCode, keyChar);
             }
         }
         syncCanvas();
@@ -3239,17 +3243,227 @@ public class ModalEditor {
     }
 
     // -------------------------------------------------------------------------
-    // Vim式置換コマンド（:s / :%s / :'<,'>s / :N,Ms）
+    // Vim式置換コマンド（:s / :%s / :'<,'>s / :N,Ms / :.,+Ns）
+    // 本番の呼び出し口は VimSubstituteCommandParser / VimSubstituteExecutor
+    // （dev.javatexteditor.substitute パッケージ）に一本化されている。
+    // magic正規表現変換・バックスラッシュ+u/U/l/L・c(確認)フラグはこちらの新実装のみが対応する。
+    // 旧実装（handleSubstituteCommandLegacy 以下）は新実装の単体テストが期待値を
+    // 比較するための参照実装としてのみ残しており、本番の呼び出しパスからは外してある。
     // 詳細は .claude/skills/vim-substitution/SKILL.md 参照
     // -------------------------------------------------------------------------
-
-    private static final Pattern SUBSTITUTE_RANGE_PATTERN = Pattern.compile("^(\\d+),(\\d+)(s.*)$");
 
     /**
      * cmd が置換コマンド（範囲プレフィックス + s + 区切り文字...）の形なら実行して true を返す。
      * そうでなければ何もせず false を返し、呼び出し側の既存分岐にフォールスルーさせる。
      */
     private boolean handleSubstituteCommand(String cmd) {
+        var parsed = VimSubstituteCommandParser.parse(cmd);
+        if (parsed.isEmpty()) return false;
+        VimSubstituteCommandParser.ParseResult p = parsed.get();
+
+        int[] range = resolveSubstituteRange(p.range());
+        if (range == null) {
+            // resolveSubstituteRange が statusMessage をセット済み（例: Visual選択履歴なし）。
+            return true;
+        }
+
+        String rawPattern = p.pattern();
+        String patternStr = rawPattern.isEmpty() ? lastSearchPattern : rawPattern;
+        if (patternStr == null || patternStr.isEmpty()) {
+            statusMessage = "E: no previous substitute pattern";
+            return true;
+        }
+
+        String flags = p.flags();
+        boolean global = flags.contains("g");
+        boolean ignoreCase = flags.contains("i");
+        boolean confirm = flags.contains("c");
+        boolean noErrorIfNoMatch = flags.contains("e");
+
+        // 直前検索パターンの再利用時（空パターン）は既にJava正規表現構文で保存されているため
+        // magic変換を通さない。ユーザーがその場で書いたVim magicパターンのみ変換する。
+        String javaRegex = rawPattern.isEmpty() ? patternStr : VimRegexTranslator.translate(rawPattern);
+
+        if (confirm) {
+            beginSubstituteConfirm(range[0], range[1], javaRegex, p.replacement(), global, ignoreCase,
+                    rawPattern, patternStr, noErrorIfNoMatch);
+            return true;
+        }
+
+        applySubstituteBulk(range[0], range[1], javaRegex, p.replacement(), global, ignoreCase,
+                rawPattern, patternStr, noErrorIfNoMatch);
+        return true;
+    }
+
+    /**
+     * RangeSpec をエディタの現在状態（カーソル行・Visual選択履歴・総行数）を使って
+     * 実際の行番号 [r1, r2]（0始まり・両端含む）へ解決する。解決できない場合（Visual選択履歴が
+     * 無い等）は statusMessage をセットして null を返す。
+     */
+    private int[] resolveSubstituteRange(VimSubstituteCommandParser.RangeSpec range) {
+        String[] lines = getLines();
+        int maxRow = Math.max(0, lines.length - 1);
+
+        if (range instanceof VimSubstituteCommandParser.WholeFile) {
+            return new int[] { 0, maxRow };
+        }
+        if (range instanceof VimSubstituteCommandParser.CurrentLine) {
+            return new int[] { cursorRow, cursorRow };
+        }
+        if (range instanceof VimSubstituteCommandParser.VisualRange) {
+            if (!lastVisualValid) {
+                statusMessage = "E: no previous visual selection";
+                return null;
+            }
+            return new int[] {
+                Math.min(lastVisualAnchorRow, lastVisualCursorRow),
+                Math.max(lastVisualAnchorRow, lastVisualCursorRow)
+            };
+        }
+        if (range instanceof VimSubstituteCommandParser.LineRange lr) {
+            return new int[] { lr.startLine1() - 1, lr.endLine1() - 1 };
+        }
+        if (range instanceof VimSubstituteCommandParser.CursorPlus cp) {
+            return new int[] { cursorRow, cursorRow + cp.offset() };
+        }
+        throw new IllegalStateException("unknown RangeSpec: " + range);
+    }
+
+    /** g/i フラグのみ（c フラグ無し）の一括置換を実行する。javaRegex は変換済みのJava正規表現。 */
+    private void applySubstituteBulk(int r1, int r2, String javaRegex, String replacement,
+                                      boolean global, boolean ignoreCase, String rawPattern, String displayPattern,
+                                      boolean noErrorIfNoMatch) {
+        VimSubstituteExecutor.Result result;
+        try {
+            result = VimSubstituteExecutor.execute(getLines(), r1, r2, javaRegex, replacement, global, ignoreCase);
+        } catch (VimSubstituteExecutor.InvalidPatternException ex) {
+            statusMessage = "E: invalid regex: " + ex.getMessage();
+            return;
+        }
+
+        if (result.totalReplacements() == 0) {
+            if (!noErrorIfNoMatch) statusMessage = "E: pattern not found: " + displayPattern;
+            return;
+        }
+
+        for (VimSubstituteExecutor.LineChange change : result.changes()) {
+            String oldLine = getLines()[change.row()];
+            int lineStart = offsetAt(change.row(), 0);
+            buffer.delete(lineStart, oldLine.length());
+            buffer.insert(lineStart, change.newText());
+        }
+
+        if (!rawPattern.isEmpty()) lastSearchPattern = rawPattern;
+        cursorRow = result.lastChangedRow();
+        cursorCol = 0;
+        clampCursorForNormal();
+        statusMessage = result.totalReplacements() + " substitutions on " + result.linesChanged() + " lines";
+    }
+
+    // -------------------------------------------------------------------------
+    // :s ... /c （確認しながらの置換, Mode.SUBSTITUTE_CONFIRM）
+    // -------------------------------------------------------------------------
+
+    private VimSubstituteExecutor.ConfirmSession substituteConfirmSession;
+    private String substituteConfirmRawPattern;
+    private String substituteConfirmDisplayPattern;
+    private boolean substituteConfirmNoErrorIfNoMatch;
+
+    /** javaRegex は変換済みのJava正規表現。displayPattern はエラーメッセージ表示用の元パターン文字列。 */
+    private void beginSubstituteConfirm(int r1, int r2, String javaRegex, String replacement,
+                                         boolean global, boolean ignoreCase, String rawPattern, String displayPattern,
+                                         boolean noErrorIfNoMatch) {
+        VimSubstituteExecutor.ConfirmSession session;
+        try {
+            session = VimSubstituteExecutor.beginConfirm(getLines(), r1, r2, javaRegex, replacement, global, ignoreCase);
+        } catch (VimSubstituteExecutor.InvalidPatternException ex) {
+            statusMessage = "E: invalid regex: " + ex.getMessage();
+            return;
+        }
+        substituteConfirmSession = session;
+        substituteConfirmRawPattern = rawPattern;
+        substituteConfirmDisplayPattern = displayPattern;
+        substituteConfirmNoErrorIfNoMatch = noErrorIfNoMatch;
+
+        if (!session.advance()) {
+            finishSubstituteConfirm();
+            return;
+        }
+        mode = Mode.SUBSTITUTE_CONFIRM;
+        cursorRow = session.pendingRow();
+        statusMessage = "replace with " + session.pendingProposedText() + " (y/n/a/q)?";
+    }
+
+    private void processSubstituteConfirmKey(int keyCode, char keyChar) {
+        VimSubstituteExecutor.ConfirmSession session = substituteConfirmSession;
+        if (session == null) { mode = Mode.NORMAL; return; }
+
+        if (keyCode == KeyEvent.VK_ESCAPE) {
+            session.quit();
+            finishSubstituteConfirm();
+            return;
+        }
+
+        switch (keyChar) {
+            case 'y' -> session.applyYes();
+            case 'n' -> session.applyNo();
+            case 'a' -> session.applyAllRemaining();
+            case 'q' -> session.quit();
+            default -> { return; }
+        }
+
+        if (!session.isFinished() && !session.hasPending()) {
+            session.advance();
+        }
+
+        if (session.isFinished()) {
+            finishSubstituteConfirm();
+        } else {
+            cursorRow = session.pendingRow();
+            statusMessage = "replace with " + session.pendingProposedText() + " (y/n/a/q)?";
+        }
+    }
+
+    /** 確認セッションを終え、変更行をバッファへ書き戻してから NORMAL モードへ戻る。 */
+    private void finishSubstituteConfirm() {
+        VimSubstituteExecutor.ConfirmSession session = substituteConfirmSession;
+        substituteConfirmSession = null;
+        if (session == null) { mode = Mode.NORMAL; return; }
+
+        for (int row : session.changedRows()) {
+            String[] currentLines = getLines();
+            if (row >= currentLines.length) continue;
+            String oldLine = currentLines[row];
+            String newLine = session.lineAt(row);
+            int lineStart = offsetAt(row, 0);
+            buffer.delete(lineStart, oldLine.length());
+            buffer.insert(lineStart, newLine);
+        }
+
+        if (session.totalReplacements() == 0) {
+            if (!substituteConfirmNoErrorIfNoMatch) {
+                statusMessage = "E: pattern not found: " + substituteConfirmDisplayPattern;
+            }
+        } else {
+            if (!substituteConfirmRawPattern.isEmpty()) lastSearchPattern = substituteConfirmRawPattern;
+            cursorRow = session.lastChangedRow();
+            cursorCol = 0;
+            clampCursorForNormal();
+            statusMessage = session.totalReplacements() + " substitutions on " + session.linesChanged() + " lines";
+        }
+        mode = Mode.NORMAL;
+    }
+
+    // -------------------------------------------------------------------------
+    // レガシー実装（新実装 VimSubstituteExecutor の単体テストで期待値を比較するための
+    // 参照実装としてのみ残す。本番の呼び出しパス（handleSubstituteCommand）からは
+    // 呼ばれない。Vim magic正規表現変換・バックスラッシュ+u/U/l/L・c/e フラグには対応しない旧仕様のまま。
+    // -------------------------------------------------------------------------
+
+    private static final Pattern SUBSTITUTE_RANGE_PATTERN_LEGACY = Pattern.compile("^(\\d+),(\\d+)(s.*)$");
+
+    /** レガシー版 handleSubstituteCommand。テスト専用（本番コードからは呼び出さない）。 */
+    boolean handleSubstituteCommandLegacy(String cmd) {
         int r1, r2;
         String sPart;
 
@@ -3260,7 +3474,7 @@ public class ModalEditor {
             sPart = cmd.substring(1);
         } else if (cmd.startsWith("'<,'>")) {
             sPart = cmd.substring(5);
-            if (!sPart_isSubstitute(sPart)) return false;
+            if (!sPartIsSubstituteLegacy(sPart)) return false;
             if (!lastVisualValid) {
                 statusMessage = "E: no previous visual selection";
                 return true;
@@ -3268,7 +3482,7 @@ public class ModalEditor {
             r1 = Math.min(lastVisualAnchorRow, lastVisualCursorRow);
             r2 = Math.max(lastVisualAnchorRow, lastVisualCursorRow);
         } else {
-            Matcher rangeMatcher = SUBSTITUTE_RANGE_PATTERN.matcher(cmd);
+            Matcher rangeMatcher = SUBSTITUTE_RANGE_PATTERN_LEGACY.matcher(cmd);
             if (rangeMatcher.matches()) {
                 r1 = Integer.parseInt(rangeMatcher.group(1)) - 1;
                 r2 = Integer.parseInt(rangeMatcher.group(2)) - 1;
@@ -3279,21 +3493,21 @@ public class ModalEditor {
             }
         }
 
-        if (!sPart_isSubstitute(sPart)) return false;
+        if (!sPartIsSubstituteLegacy(sPart)) return false;
 
-        executeSubstitute(r1, r2, sPart);
+        executeSubstituteLegacy(r1, r2, sPart);
         return true;
     }
 
     /** sPart が "s" + 区切り文字（英数字・空白以外の1文字）から始まる置換コマンドの形か判定する。 */
-    private boolean sPart_isSubstitute(String sPart) {
+    private boolean sPartIsSubstituteLegacy(String sPart) {
         if (sPart.length() < 2 || sPart.charAt(0) != 's') return false;
         char delim = sPart.charAt(1);
         return !Character.isLetterOrDigit(delim) && !Character.isWhitespace(delim);
     }
 
-    /** [r1, r2]（0始まり・両端含む）の各行に対して s/pattern/replacement/flags を適用する。 */
-    private void executeSubstitute(int r1, int r2, String sPart) {
+    /** [r1, r2]（0始まり・両端含む）の各行に対して s/pattern/replacement/flags を適用する（レガシー）。 */
+    void executeSubstituteLegacy(int r1, int r2, String sPart) {
         char delimiter = sPart.charAt(1);
         String[] parts = sPart.substring(2).split(Pattern.quote(String.valueOf(delimiter)), 3);
 
@@ -3318,7 +3532,7 @@ public class ModalEditor {
             return;
         }
 
-        String javaReplacement = translateVimReplacement(rawReplacement);
+        String javaReplacement = translateVimReplacementLegacy(rawReplacement);
 
         String[] lines = getLines();
         int maxRow = Math.max(0, lines.length - 1);
@@ -3371,9 +3585,9 @@ public class ModalEditor {
 
     /**
      * Vim式置換文字列（\1..\9=後方参照, &=マッチ全体, \&/\\=エスケープ）を
-     * Java の Matcher 置換構文（$1..$9, $0, リテラル$のエスケープ）に変換する。
+     * Java の Matcher 置換構文（$1..$9, $0, リテラル$のエスケープ）に変換する（レガシー）。
      */
-    private String translateVimReplacement(String vimReplacement) {
+    String translateVimReplacementLegacy(String vimReplacement) {
         StringBuilder sb = new StringBuilder();
         int len = vimReplacement.length();
         for (int i = 0; i < len; i++) {
