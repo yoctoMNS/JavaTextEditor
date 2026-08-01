@@ -70,8 +70,8 @@ public final class LiveDiagnostics {
         AtomicLong compileGeneration = new AtomicLong(0);
         Runnable trigger = () -> {
             if (isJavaBuffer(editor)) {
-                editor.setStatusMessage("auto-import: 解析中...");
-                runCompileAnalysis(editor, canvas, true, "auto-import: 解析失敗", compileGeneration);
+                editor.setStatusMessage("auto-import: analyzing...");
+                runCompileAnalysis(editor, canvas, true, "auto-import: analysis failed", compileGeneration);
             } else if (isCBuffer(editor)) {
                 runCAnalysis(editor, canvas, true);
             }
@@ -86,12 +86,12 @@ public final class LiveDiagnostics {
         // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
         editor.setOnOrganizeImports(() -> {
             if (isJavaBuffer(editor)) {
-                editor.setStatusMessage("import 整理中...");
-                runCompileAnalysis(editor, canvas, false, "E: コンパイル解析失敗", compileGeneration);
+                editor.setStatusMessage("cleaning up imports...");
+                runCompileAnalysis(editor, canvas, false, "E: compile analysis failed", compileGeneration);
             } else if (isCBuffer(editor)) {
                 organizeCIncludes(editor);
             } else {
-                editor.setStatusMessage("E: Java/Cファイルではありません");
+                editor.setStatusMessage("E: not a Java/C file");
             }
         });
         // dd/p/u/Ctrl+R等、INSERT離脱・保存を経由しないバッファ変更操作は上記2フックの対象外で、
@@ -197,7 +197,7 @@ public final class LiveDiagnostics {
                     canvas.setDiagnostics(diags);
                     if (autoInclude && !headers.isEmpty()) {
                         int n = editor.applyCIncludes(headers);
-                        if (n > 0) editor.setStatusMessage("#include " + n + "件 追加しました");
+                        if (n > 0) editor.setStatusMessage("#include: added " + n + " item(s)");
                     }
                 });
             } catch (AnalysisException e) {
@@ -217,10 +217,10 @@ public final class LiveDiagnostics {
         List<String> headers = dev.javatexteditor.analysis.CIncludeManager
             .missingHeadersForSource(editor.getText());
         if (headers.isEmpty()) {
-            editor.setStatusMessage("#include 整理完了（追加なし）");
+            editor.setStatusMessage("#include cleanup complete (nothing added)");
             return;
         }
         int n = editor.applyCIncludes(headers);
-        editor.setStatusMessage("#include " + n + "件 追加しました");
+        editor.setStatusMessage("#include: added " + n + " item(s)");
     }
 }

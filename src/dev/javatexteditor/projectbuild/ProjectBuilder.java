@@ -63,24 +63,24 @@ public class ProjectBuilder {
         try {
             sources = collectJavaFiles(projectRoot);
         } catch (IOException e) {
-            return new BuildResult(false, 0, List.of(), "ソース走査に失敗しました: " + e.getMessage(), "");
+            return new BuildResult(false, 0, List.of(), "Failed to scan sources: " + e.getMessage(), "");
         }
         if (sources.isEmpty()) {
             return new BuildResult(false, 0, List.of(),
-                "コンパイル対象の.javaファイルが見つかりません: " + projectRoot, "");
+                "No .java files found to compile: " + projectRoot, "");
         }
 
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             return new BuildResult(false, 0, List.of(),
-                "JavaCompilerが見つかりません。JDKで実行してください。", "");
+                "JavaCompiler not found. Run with a JDK.", "");
         }
 
         Path binDir = binDirFor(projectRoot);
         try {
             Files.createDirectories(binDir);
         } catch (IOException e) {
-            return new BuildResult(false, 0, List.of(), "出力先ディレクトリを作成できません: " + binDir, "");
+            return new BuildResult(false, 0, List.of(), "Cannot create output directory: " + binDir, "");
         }
 
         List<String> options = buildCompilerOptions(binDir, extraClasspath);
@@ -110,7 +110,7 @@ public class ProjectBuilder {
             return new BuildResult(called && !hasErrors, sources.size(), diagnostics, null, command);
         } catch (IOException e) {
             return new BuildResult(false, sources.size(), List.of(),
-                "コンパイル中にエラーが発生しました: " + e.getMessage(), command);
+                "An error occurred during compilation: " + e.getMessage(), command);
         }
     }
 

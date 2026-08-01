@@ -1885,25 +1885,25 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         String[] lines = {
             "Java Text Editor",
             "",
-            "Java SE 製の軽量テキストエディタ",
+            "A lightweight text editor built on Java SE",
             "",
             "version 1.0.0  |  Java " + System.getProperty("java.version"),
             "",
             "─────────────────────────────────────────",
             "",
-            "  i        INSERTモードへ（文字入力）",
-            "  Esc      NORMALモードへ戻る",
-            "  :e <path>  ファイルを開く",
-            "  :w <path>  ファイルを保存",
-            "  :q         終了",
-            "  K        カーソル位置の JDK API を表示",
-            "  :tutor または :tutorial  対話型チュートリアルを開く",
-            "  Ctrl+W              左右ペイン切り替え",
-            "  Ctrl+Shift+↑↓←→  アクティブペインのフォントサイズ変更",
+            "  i        Enter INSERT mode (type text)",
+            "  Esc      Return to NORMAL mode",
+            "  :e <path>  Open a file",
+            "  :w <path>  Save a file",
+            "  :q         Quit",
+            "  K        Show JDK API info for the symbol under the cursor",
+            "  :tutor or :tutorial  Open the interactive tutorial",
+            "  Ctrl+W              Switch between left/right panes",
+            "  Ctrl+Shift+↑↓←→  Change the active pane's font size",
             "",
             "─────────────────────────────────────────",
             "",
-            "何かキーを押すと編集を開始します",
+            "Press any key to start editing",
         };
 
         // タイトル行（index 0）は大きなフォントで描く
@@ -1946,7 +1946,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                 g2.drawString(line, keyBlockX, y);
             } else if (!line.isBlank()) {
                 // サブタイトル・説明文：センタリング・前景色
-                boolean isHint = line.contains("キーを押すと");
+                boolean isHint = line.contains("Press any key");
                 g2.setColor(isHint ? theme.accent : theme.foreground);
                 if (isHint) {
                     g2.setFont(SPLASH_FONT.deriveFont(Font.ITALIC));

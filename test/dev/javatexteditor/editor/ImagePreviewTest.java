@@ -206,7 +206,7 @@ public class ImagePreviewTest {
         ed.simulateImageLoadFailureForTest(png);
         assertTrue("読み込み失敗後はMode.IMAGEを抜ける", !ed.isImageMode());
         assertTrue("読み込み失敗のエラーメッセージが表示される",
-            ed.getStatusMessage().contains("表示できません"));
+            ed.getStatusMessage().contains("cannot be displayed"));
     }
 
     /**

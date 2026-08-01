@@ -61,11 +61,11 @@ public class ProjectRootCommandTest {
         ed.setProjectRoot(root);
         sendCommand(ed, "pr?");
         assertTrue("未設定時の :pr? は :cd 追従中である旨を表示",
-                ed.getStatusMessage().contains("未設定"));
+                ed.getStatusMessage().contains("not set"));
         sendCommand(ed, "pr");
         sendCommand(ed, "pr?");
         assertTrue("設定後の :pr? はルートパスを表示",
-                ed.getStatusMessage().contains(root.toString()) && !ed.getStatusMessage().contains("未設定"));
+                ed.getStatusMessage().contains(root.toString()) && !ed.getStatusMessage().contains("not set"));
         passed("testPrQueryUnsetVsSet");
     }
 

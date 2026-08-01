@@ -13,7 +13,7 @@ public final class ClassFileFormatter {
     private ClassFileFormatter() {}
 
     public static String header(String fileName) {
-        return "*class* " + fileName + " — structure view (:nimo でニーモニック表示)";
+        return "*class* " + fileName + " — structure view (:nimo for mnemonic view)";
     }
 
     public static String format(ClassFile cf, String fileName) {

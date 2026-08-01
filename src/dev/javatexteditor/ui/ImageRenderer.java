@@ -98,7 +98,7 @@ public final class ImageRenderer {
     }
 
     /** 読み込み中インジケーターの表示に使う簡易文言。 */
-    public static final String LOADING_TEXT = "読み込み中...";
+    public static final String LOADING_TEXT = "Loading...";
 
     /** ビューポート中央に文言を描画する（読み込み中表示用の下請け）。 */
     public static void paintCenteredMessage(Graphics2D g2, String message, int viewportX, int viewportY,

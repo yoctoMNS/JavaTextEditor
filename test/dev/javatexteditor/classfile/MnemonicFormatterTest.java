@@ -36,7 +36,7 @@ public class MnemonicFormatterTest {
         byte[] abstractClassBytes = TestClassBytes.compile("SampleAbstract", ABSTRACT_SOURCE);
         ClassFile abstractCf = ClassFileParser.parse(abstractClassBytes);
         String abstractText = MnemonicFormatter.format(abstractCf, "SampleAbstract.class");
-        pass += check("abstractメソッドはCodeなしの案内を表示する", abstractText.contains("Codeなし"));
+        pass += check("abstractメソッドはCodeなしの案内を表示する", abstractText.contains("no Code"));
 
         int fail = total - pass;
         System.out.println("---");

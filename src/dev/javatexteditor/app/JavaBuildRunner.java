@@ -65,7 +65,7 @@ public final class JavaBuildRunner {
     public void triggerRun(ModalEditor editor) {
         Path projectRoot = editor.getBuildRoot();
         if (!builder.hasCompiledClasses(projectRoot)) {
-            editor.setStatusMessage("run: bin/ に.classファイルがありません。先にF10でコンパイルしてください");
+            editor.setStatusMessage("run: no .class files in bin/. Compile with F10 first");
             return;
         }
         editor.enterClasspathInput("F11",
@@ -126,12 +126,12 @@ public final class JavaBuildRunner {
      */
     private void resolveAndRunMainClass(
             ModalEditor editor, Path projectRoot, List<Path> extraClasspath) {
-        editor.setStatusMessage("mainクラスを検索中...");
+        editor.setStatusMessage("searching for main class...");
         Thread.ofVirtual().start(() -> {
             List<String> mainClasses = mainClassFinder.findMainClasses(projectRoot);
             SwingUtilities.invokeLater(() -> {
                 if (mainClasses.isEmpty()) {
-                    editor.setStatusMessage("run: mainメソッドを持つクラスが見つかりません");
+                    editor.setStatusMessage("run: no class with a main method was found");
                 } else if (mainClasses.size() == 1) {
                     runJavaClass(editor, projectRoot, mainClasses.get(0), extraClasspath);
                 } else {
@@ -173,7 +173,7 @@ public final class JavaBuildRunner {
                 stderrReader.join();
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() ->
-                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
+                    editor.setStatusMessage("run: failed to start process: " + e.getMessage()));
                 return;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

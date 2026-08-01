@@ -24,7 +24,7 @@ public class SourceAnalyzer {
         try {
             source = Files.readString(path);
         } catch (IOException e) {
-            throw new AnalysisException("ファイルの読み込みに失敗しました: " + path, e);
+            throw new AnalysisException("Failed to read file: " + path, e);
         }
         return analyze(path.toString(), source);
     }
@@ -33,7 +33,7 @@ public class SourceAnalyzer {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             throw new AnalysisException(
-                "JavaCompiler が見つかりません。JDK で実行してください。");
+                "JavaCompiler not found. Run with a JDK.");
         }
 
         List<ImportEntry> imports = new ArrayList<>();
@@ -58,7 +58,7 @@ public class SourceAnalyzer {
             try {
                 units = javacTask.parse();
             } catch (IOException e) {
-                throw new AnalysisException("解析中にエラーが発生しました", e);
+                throw new AnalysisException("An error occurred during analysis", e);
             }
 
             // 構文エラーがあったか確認
@@ -94,7 +94,7 @@ public class SourceAnalyzer {
         } catch (AnalysisException e) {
             throw e;
         } catch (Exception e) {
-            throw new AnalysisException("解析中に予期しないエラーが発生しました: " + e.getMessage(), e);
+            throw new AnalysisException("An unexpected error occurred during analysis: " + e.getMessage(), e);
         }
 
         return new SourceIndex(filePath, Collections.unmodifiableList(imports),

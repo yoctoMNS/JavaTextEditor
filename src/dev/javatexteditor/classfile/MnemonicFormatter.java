@@ -24,7 +24,7 @@ public final class MnemonicFormatter {
 
             AttributeInfo codeAttr = findAttribute(cf, method, "Code");
             if (codeAttr == null) {
-                sb.append("  (Codeなし — abstract/nativeメソッド)\n\n");
+                sb.append("  (no Code — abstract/native method)\n\n");
                 continue;
             }
             try {

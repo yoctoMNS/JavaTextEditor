@@ -38,10 +38,10 @@ public class TutorialTest {
 
     static void testContentHasAllLessons() {
         for (int i = 1; i <= 19; i++) {
-            assertTrue("contains lesson " + i, Tutorial.CONTENT.contains("レッスン " + i + ":"));
+            assertTrue("contains lesson " + i, Tutorial.CONTENT.contains("Lesson " + i + ":"));
         }
         // C言語開発支援レッスンが含まれていること
-        assertTrue("mentions C tooling lesson", Tutorial.CONTENT.contains("C言語の開発支援"));
+        assertTrue("mentions C tooling lesson", Tutorial.CONTENT.contains("C language development support"));
         assertTrue("mentions :tutor", Tutorial.CONTENT.contains(":tutor"));
         assertTrue("mentions hjkl basics", Tutorial.CONTENT.contains("h j k l"));
         passed("testContentHasAllLessons");
@@ -63,15 +63,15 @@ public class TutorialTest {
     // =========================================================================
 
     static void testTutorCommandOpensBuffer() {
-        ModalEditor editor = new ModalEditor("元のファイルの内容");
+        ModalEditor editor = new ModalEditor("original file content");
         sendCommand(editor, "tutor");
         assertTrue("buffer shows tutorial header",
-            editor.getText().contains("JavaTextEditor チュートリアルへようこそ"));
+            editor.getText().contains("Welcome to the JavaTextEditor Tutorial"));
         passed("testTutorCommandOpensBuffer");
     }
 
     static void testTutorCommandClearsFilePath() {
-        ModalEditor editor = new ModalEditor("元のファイルの内容");
+        ModalEditor editor = new ModalEditor("original file content");
         sendCommand(editor, "tutor");
         assertEquals("no current file path", null, editor.getCurrentFilePath());
         passed("testTutorCommandClearsFilePath");
@@ -89,13 +89,13 @@ public class TutorialTest {
     }
 
     static void testTutorCommandPushesPreviousBuffer() {
-        ModalEditor editor = new ModalEditor("元のバッファの内容です");
+        ModalEditor editor = new ModalEditor("original buffer content");
         sendCommand(editor, "tutor");
         assertTrue("tutorial buffer active",
-            editor.getText().contains("チュートリアルへようこそ"));
+            editor.getText().contains("Welcome to the JavaTextEditor Tutorial"));
         // Ctrl+U で直前のバッファ（履歴）に戻れること
         editor.processKey(KeyEvent.VK_U, KeyEvent.CHAR_UNDEFINED, KeyEvent.CTRL_DOWN_MASK);
-        assertTrue("returned to previous buffer", editor.getText().contains("元のバッファの内容です"));
+        assertTrue("returned to previous buffer", editor.getText().contains("original buffer content"));
         passed("testTutorCommandPushesPreviousBuffer");
     }
 
@@ -103,7 +103,7 @@ public class TutorialTest {
         ModalEditor editor = new ModalEditor("hello");
         sendCommand(editor, "tutorial");
         assertTrue("alias :tutorial works",
-            editor.getText().contains("チュートリアルへようこそ"));
+            editor.getText().contains("Welcome to the JavaTextEditor Tutorial"));
         passed("testTutorAliasTutorial");
     }
 

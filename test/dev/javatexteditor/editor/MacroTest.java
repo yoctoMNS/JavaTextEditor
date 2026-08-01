@@ -115,7 +115,7 @@ public class MacroTest {
         pressKey(ed, '@');
         pressKey(ed, 'z');
         check("バッファ不変", ed.getText().equals("abc"));
-        check("エラーメッセージ", ed.getStatusMessage().contains("空です"));
+        check("エラーメッセージ", ed.getStatusMessage().contains("is empty"));
     }
 
     static void testInvalidRegisterCharShowsErrorAndDoesNotRecord() {
@@ -125,7 +125,7 @@ public class MacroTest {
         pressKey(ed, 'q');
         pressKey(ed, '1');
         check("記録は開始しない", !ed.isRecordingMacro());
-        check("エラーメッセージ", ed.getStatusMessage().contains("無効なレジスタです"));
+        check("エラーメッセージ", ed.getStatusMessage().contains("Invalid register"));
 
         pressKey(ed, '@');
         pressKey(ed, '1');

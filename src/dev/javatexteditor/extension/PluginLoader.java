@@ -38,12 +38,12 @@ public class PluginLoader {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             throw new PluginLoadException(
-                "JavaCompiler が見つかりません。JDK (JRE ではなく) で実行してください。");
+                "JavaCompiler not found. Run with a JDK (not a JRE).");
         }
 
         String fileName = sourceFile.getFileName().toString();
         if (!fileName.endsWith(".java")) {
-            throw new PluginLoadException("ソースファイルの拡張子が .java ではありません: " + fileName);
+            throw new PluginLoadException("Source file extension is not .java: " + fileName);
         }
         String className = fileName.substring(0, fileName.length() - 5);
 
@@ -56,7 +56,7 @@ public class PluginLoader {
         try {
             classDir = Files.createTempDirectory("jte-plugin-" + className + "-");
         } catch (IOException e) {
-            throw new PluginLoadException("一時ディレクトリの作成に失敗しました", e);
+            throw new PluginLoadException("Failed to create temporary directory", e);
         }
 
         // コンパイル
@@ -69,7 +69,7 @@ public class PluginLoader {
         int result = compiler.run(null, null, errStream, compileArgs);
         if (result != 0) {
             deleteDirQuietly(classDir);
-            throw new PluginLoadException("コンパイルエラー:\n" + errStream.toString().trim());
+            throw new PluginLoadException("Compile error:\n" + errStream.toString().trim());
         }
 
         // ロード
@@ -81,7 +81,7 @@ public class PluginLoader {
             );
         } catch (Exception e) {
             deleteDirQuietly(classDir);
-            throw new PluginLoadException("ClassLoader の作成に失敗しました", e);
+            throw new PluginLoadException("Failed to create ClassLoader", e);
         }
 
         EditorPlugin plugin;
@@ -91,7 +91,7 @@ public class PluginLoader {
                 loader.close();
                 deleteDirQuietly(classDir);
                 throw new PluginLoadException(
-                    className + " は EditorPlugin を実装していません");
+                    className + " does not implement EditorPlugin");
             }
             plugin = (EditorPlugin) clazz.getDeclaredConstructor().newInstance();
         } catch (PluginLoadException e) {
@@ -99,7 +99,7 @@ public class PluginLoader {
         } catch (Exception e) {
             try { loader.close(); } catch (IOException ignored) {}
             deleteDirQuietly(classDir);
-            throw new PluginLoadException("プラグインのインスタンス化に失敗しました: " + e.getMessage(), e);
+            throw new PluginLoadException("Failed to instantiate plugin: " + e.getMessage(), e);
         }
 
         if (defaultContext != null) {
@@ -116,7 +116,7 @@ public class PluginLoader {
     public void executePlugin(String name, EditorContext ctx) throws PluginLoadException {
         LoadedPlugin lp = loaded.get(name);
         if (lp == null) {
-            throw new PluginLoadException("プラグインが見つかりません: " + name);
+            throw new PluginLoadException("Plugin not found: " + name);
         }
         lp.plugin().execute(ctx);
     }

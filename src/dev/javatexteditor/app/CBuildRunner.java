@@ -41,7 +41,7 @@ public final class CBuildRunner {
     public void triggerRun(ModalEditor editor) {
         Path projectRoot = editor.getBuildRoot();
         if (!builder.hasExecutable(projectRoot)) {
-            editor.setStatusMessage("run: 実行ファイルがありません。先にF10でコンパイルしてください");
+            editor.setStatusMessage("run: executable not found. Compile with F10 first");
             return;
         }
         runCExecutable(editor, projectRoot);
@@ -99,7 +99,7 @@ public final class CBuildRunner {
                 stderrReader.join();
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() ->
-                    editor.setStatusMessage("run: プロセス起動に失敗しました: " + e.getMessage()));
+                    editor.setStatusMessage("run: failed to start process: " + e.getMessage()));
                 return;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

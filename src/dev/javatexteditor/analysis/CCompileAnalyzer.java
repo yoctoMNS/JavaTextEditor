@@ -45,7 +45,7 @@ public class CCompileAnalyzer {
             throws AnalysisException {
         String compiler = findCompiler();
         if (compiler == null) {
-            throw new AnalysisException("Cコンパイラ（gcc/clang/cc）が見つかりません。");
+            throw new AnalysisException("C compiler (gcc/clang/cc) not found.");
         }
 
         Path temp;
@@ -53,7 +53,7 @@ public class CCompileAnalyzer {
             temp = Files.createTempFile("jte-cdiag-", ".c");
             Files.writeString(temp, sourceCode, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new AnalysisException("一時ファイルの作成に失敗しました", e);
+            throw new AnalysisException("Failed to create temporary file", e);
         }
 
         try {
@@ -86,10 +86,10 @@ public class CCompileAnalyzer {
             process.waitFor();
             return Collections.unmodifiableList(result);
         } catch (IOException e) {
-            throw new AnalysisException("解析中にエラーが発生しました", e);
+            throw new AnalysisException("An error occurred during analysis", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new AnalysisException("解析が中断されました", e);
+            throw new AnalysisException("Analysis was interrupted", e);
         } finally {
             try {
                 Files.deleteIfExists(temp);
