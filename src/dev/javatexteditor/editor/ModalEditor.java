@@ -2863,6 +2863,16 @@ public class ModalEditor {
 
     /** isearch セッション中のキー入力を処理する。通常の NORMAL/INSERT 処理には渡さない。 */
     private void processEmacsIsearchKey(int keyCode, char keyChar, int modifiers) {
+        // 修飾キー単体のKEY_PRESSED（例: Ctrl+Sの「Ctrl」だけが先に届くイベント）は、
+        // それ自体では何のキー入力でもないため無視する。ここで無視せず後段の「未対応キー」
+        // 分岐に落ちると、Ctrl+S連打の1打鍵目「Ctrl」だけでセッションが誤って確定終了し、
+        // 続く「S」が新規セッション扱いになって検索語が消える不具合になる
+        // （実機のAWTキーイベント列で確認済み。ModalEditor.processKey()を1回だけ呼ぶ
+        // 単体テストでは Ctrl 単体イベントを送らないため再現しなかった）。
+        if (keyCode == KeyEvent.VK_CONTROL || keyCode == KeyEvent.VK_SHIFT
+                || keyCode == KeyEvent.VK_ALT || keyCode == KeyEvent.VK_META) {
+            return;
+        }
         boolean ctrlOnly = (modifiers & KeyEvent.CTRL_DOWN_MASK) != 0
             && (modifiers & (KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)) == 0;
         if (ctrlOnly && keyCode == KeyEvent.VK_S) {

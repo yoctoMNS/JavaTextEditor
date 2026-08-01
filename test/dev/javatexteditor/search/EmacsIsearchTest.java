@@ -60,6 +60,15 @@ public class EmacsIsearchTest {
         }
     }
 
+    private static void assertEq(String label, String expected, String actual) {
+        if (expected.equals(actual)) {
+            pass++;
+        } else {
+            fail++;
+            System.out.println("FAIL [" + label + "] expected=" + expected + " actual=" + actual);
+        }
+    }
+
     private static void assertTrue(String label, boolean cond) {
         if (cond) {
             pass++;
@@ -174,6 +183,33 @@ public class EmacsIsearchTest {
         sendCode(ed, KeyEvent.VK_B, KeyEvent.CTRL_DOWN_MASK);
         assertFalse("isearch ended by unrelated key (NORMAL)", ed.isEmacsIsearchActive());
         assertTrue("still NORMAL mode after fallback", ed.isNormalMode());
+    }
+
+    /**
+     * 実機のAWTでは Ctrl+S は「Ctrlキー単体のKEY_PRESSED（keyCode=VK_CONTROL,
+     * keyChar=CHAR_UNDEFINED, modifiers=CTRL）」→「SキーのKEY_PRESSED（CTRL修飾子つき）」の
+     * 2イベント順で届く。ctrlS() ヘルパーは VK_S の1イベントしか送らないためこの中間イベントを
+     * 再現できず、実機でのみ発生する不具合（isearchセッション中にCtrl単体イベントが「未対応キー」
+     * 扱いされ commitEmacsIsearch() で即終了してしまい、続くSキーで検索語が消えたまま新規セッション
+     * になる）を見逃していた。本テストはその中間イベントを明示的に送って再現・回帰防止する。
+     */
+    static void testBareCtrlKeyDuringIsearchDoesNotResetQuery() {
+        ModalEditor ed = editor("foo bar foo baz foo");
+        // C-s 開始（Ctrl単体 -> Sキー、の順で送る）
+        sendCode(ed, KeyEvent.VK_CONTROL, KeyEvent.CTRL_DOWN_MASK);
+        ctrlS(ed);
+        type(ed, "foo");
+        int firstMatch = ed.getCursorCol();
+        assertTrue("isearch active after typing", ed.isEmacsIsearchActive());
+        assertEq("query kept after typing", "foo", ed.getIsearchQuery());
+
+        // 2回目の C-s も Ctrl単体イベント -> Sキーの順で送る（Enterを挟まない、症状2の再現手順）
+        sendCode(ed, KeyEvent.VK_CONTROL, KeyEvent.CTRL_DOWN_MASK);
+        ctrlS(ed);
+        assertTrue("isearch still active (not reset to a new session)", ed.isEmacsIsearchActive());
+        assertEq("query NOT reset by the bare Ctrl keydown", "foo", ed.getIsearchQuery());
+        assertTrue("advanced to a further match, not stuck/reset",
+            ed.getCursorCol() > firstMatch);
     }
 
     static void testPendingSequenceDiscardedWhenIsearchStarts() {
@@ -344,6 +380,7 @@ public class EmacsIsearchTest {
         testEscapeCancelsAndRestoresCursorInNormalMode();
         testHighlightClearedAfterCommitInNormalMode();
         testUnhandledKeyEndsIsearchAndFallsThroughInNormalMode();
+        testBareCtrlKeyDuringIsearchDoesNotResetQuery();
         testPendingSequenceDiscardedWhenIsearchStarts();
 
         // INSERTモード
