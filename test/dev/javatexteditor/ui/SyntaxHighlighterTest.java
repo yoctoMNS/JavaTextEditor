@@ -87,6 +87,16 @@ public class SyntaxHighlighterTest {
         total++; pass += check("detect: .txtはNONE", SourceLanguage.detect("readme.txt") == SourceLanguage.NONE);
         total++; pass += check("detect: nullパスはNONE", SourceLanguage.detect(null) == SourceLanguage.NONE);
 
+        // --- SourceLanguage.detect: jdk-source疑似バッファ（"*jdk-source:...*"）のラッパー剥がし ---
+        total++; pass += check("detect: jdk-sourceでfqcn(拡張子なし)はJAVA",
+            SourceLanguage.detect("*jdk-source:java.lang.String*") == SourceLanguage.JAVA);
+        total++; pass += check("detect: jdk-sourceで.cppはC(HotSpotソース)",
+            SourceLanguage.detect("*jdk-source:openjdk-native/hotspot/share/prims/jvm.cpp*") == SourceLanguage.C);
+        total++; pass += check("detect: jdk-sourceで.hppはC(HotSpotヘッダ)",
+            SourceLanguage.detect("*jdk-source:openjdk-native/hotspot/share/prims/jvm.hpp*") == SourceLanguage.C);
+        total++; pass += check("detect: jdk-sourceで.cはC(JNIグルーコード)",
+            SourceLanguage.detect("*jdk-source:openjdk-native/java.base/share/native/libjava/System.c*") == SourceLanguage.C);
+
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");
