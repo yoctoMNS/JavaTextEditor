@@ -63,7 +63,13 @@ public class PieceTable {
         this.addBuffer = new StringBuilder();
         this.pieces = new ArrayList<>();
         this.mappedSource = mappedSource;
-        this.mappedLineIndex = new LazyLineIndex(mappedSource);
+        // 小規模ファイル経路（Files.readAllBytes + new String(...)）はBOM(EF BB BF)を除去して
+        // 読み込むため、mmap経路でも同じ挙動にしないと「同じ内容のファイルなのにサイズだけで
+        // 見た目が変わる」ことになる。BOMは文書のどの行にも属さない先頭3バイトなので、
+        // LazyLineIndexの文字カウントの起点をBOM分だけ後ろにずらすだけで対応できる
+        // （全文コピーは不要）。
+        long bomBytes = hasUtf8Bom(mappedSource) ? 3 : 0;
+        this.mappedLineIndex = new LazyLineIndex(mappedSource, bomBytes);
         long charCount = mappedLineIndex.totalCharCount();
         if (charCount > Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
@@ -74,6 +80,13 @@ public class PieceTable {
             pieces.add(new Piece(Piece.Source.MAPPED, 0, (int) charCount));
         }
         this.totalLength = (int) charCount;
+    }
+
+    private static boolean hasUtf8Bom(MappedFileSource src) {
+        return src.size() >= 3
+                && src.byteAt(0) == 0xEF
+                && src.byteAt(1) == 0xBB
+                && src.byteAt(2) == 0xBF;
     }
 
     public void insert(int offset, String text) {
@@ -206,7 +219,15 @@ public class PieceTable {
             case MAPPED -> {
                 long byteStart = mappedLineIndex.byteOffsetOfCharOffset(p.start() + fromInPiece);
                 long byteEnd = mappedLineIndex.byteOffsetOfCharOffset(p.start() + toInPiece);
-                result.append(mappedSource.decode(byteStart, byteEnd));
+                String decoded = mappedSource.decode(byteStart, byteEnd);
+                // 小規模ファイル経路が開いた時点で行う "\r\n"→"\n" 正規化と揃えるための後処理。
+                // LazyLineIndexの文字カウントは既にCRLFの\rを0幅として扱っているため
+                // （byteOffsetOfCharOffsetが返す境界は\rと\nの間で割れることが無い）、
+                // ここで単純に置換しても要求文字数(toInPiece-fromInPiece)と結果の文字列長は一致する。
+                if (decoded.indexOf('\r') >= 0) {
+                    decoded = decoded.replace("\r\n", "\n");
+                }
+                result.append(decoded);
             }
         }
     }

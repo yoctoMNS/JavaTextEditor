@@ -226,11 +226,30 @@ PieceTable buffer = new PieceTable(originalText);
 |---|---|---|
 | 1 | ファイルサイズは実質`Integer.MAX_VALUE`バイト強（約2GiB）まで | `Piece.start`/`length`が`int`のため。真に無制限にするには`Piece`を`long`化し`ModalEditor`のカーソル/オフセットAPI全体を`long`へ作り替える必要があり、影響範囲が過大なため見送った。超過時は`PieceTable`のmmapコンストラクタが`IllegalArgumentException`を投げる。 |
 | 2 | `PieceTable(MappedFileSource)`のコンストラクタ内で`LazyLineIndex.totalCharCount()`を呼び、最初の1ピースの文字数を確定させるためファイル全体を1回だけバイト単位で走査する | 「行オフセットは遅延構築」という設計方針への一見した例外に見えるが、この走査は`String`/`char[]`へのデコード・確保を一切伴わないバイト分類カウントのみであり、副作用として`LazyLineIndex`のチェックポイントも同時に埋まる。旧実装（`Files.readAllBytes`+`new String(...)`によるO(n)コピー2回＋それを永続的にヒープへ保持し続ける方式）とは質的に異なる改善である。真にゼロコストな開封を実現するには`Piece`の文字長を遅延確定できる可変構造が必要で、スコープ外とした。 |
-| 3 | mmap経由で開いたファイルは`\r\n`→`\n`正規化・BOM除去を行わない | 全文スキャンが必要になるため。CRLFファイルは行末に`\r`が残ったまま表示・編集される。小規模ファイル経路（`Files.readAllBytes`）はこれまでどおり正規化する。 |
+| 3 | ~~mmap経由で開いたファイルは`\r\n`→`\n`正規化・BOM除去を行わない~~（2026-08-02 対応済み。下記「CRLF/BOM対応」節参照） | - |
 | 4 | バイナリ判定（`ModalEditor.readLargeFileViaMmap`）は先頭64KiBのみで行う | GB級ファイルでバイナリ判定のためだけに全体を読むコストの方が実害が大きいと判断。誤判定（末尾だけバイナリ等）のリスクは許容している。 |
 | 5 | 閾値超の`.class`ファイルは`.class`判定をスキップする | 現実的に8MiBを超えるクラスファイルは存在しないため。 |
 | 6 | mmapで検出したバイナリファイルは結局`Files.readAllBytes`で全読みする（`Mode.BINARY`へのフォールバック） | `Mode.BINARY`（hexdumpエディタ）の既存実装が`byte[]`全体保持を前提としており、今回のスコープ（テキストファイルの大容量対応）には含まれない。巨大バイナリファイルのmmap対応は別途の改修が必要。 |
 | 7 | **ビューポート限定描画（要件5・Stage④）は未着手** | 下記「Stage④が未着手である理由」参照。 |
+
+### CRLF/BOM対応（2026-08-02追記。旧スコープ境界#3の解消）
+
+初版では「mmap経路はCRLF正規化・BOM除去を行わない」としていたが、これは**同じ内容のファイルでも
+サイズ次第で改行・BOMの扱いが変わる**（8MiB未満なら正規化される、以上なら生のまま）という、
+性能とは別軸のユーザー可視バグに該当するため、Stage④より優先して解消した。全文コピーを
+一切増やさずに対応できている:
+
+- **BOM**: `PieceTable(MappedFileSource)`が先頭3バイトをチェックし、BOMがあれば
+  `LazyLineIndex`の走査開始バイトオフセットを3にずらすだけ（`LazyLineIndex(source, startByteOffset)`）。
+  BOM自体を文字として数えないため、以後のあらゆる文字/バイトオフセット計算から自動的に除外される。
+- **CRLF**: `LazyLineIndex`の1バイトずつの分類スキャンに「直後が`\n`である`\r`は0幅の文字として
+  数える」というルールを追加した（`charUnitsAt`）。これにより文字オフセットの境界が`\r`と`\n`の
+  間で割れることが原理的に無くなるため、`MappedFileSource#decode`で得た文字列に対して単純に
+  `"\r\n"→"\n"`の置換をかけるだけで、要求した文字数と置換後の文字列長が必ず一致する
+  （`PieceTable.appendPieceRange`のMAPPEDケース）。孤立した`\r`（`\n`を伴わない旧Mac形式）は
+  小規模ファイル経路の`.replace("\r\n","\n")`と同じく変更しない。
+- 検証は`test/dev/javatexteditor/buffer/MappedCrlfBomTest.java`（12/12、CRLF単体・孤立`\r`・
+  BOM単体・BOM+CRLF複合・編集後の整合性を確認）。
 
 ### Stage④（ビューポート限定描画）が未着手である理由
 

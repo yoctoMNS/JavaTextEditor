@@ -45,7 +45,7 @@ public final class LazyLineIndex {
     private final MappedFileSource source;
     // checkpoints.get(k) == 行番号 (k * CHECKPOINT_INTERVAL) が始まる (バイト, 文字) オフセット
     private final List<Checkpoint> checkpoints = new ArrayList<>();
-    private long scannedUpToByte = 0;
+    private long scannedUpToByte;
     private long scannedUpToChar = 0;
     private int scannedUpToLine = 0;
     private boolean finished = false;
@@ -53,8 +53,19 @@ public final class LazyLineIndex {
     private long totalCharCount = -1;
 
     public LazyLineIndex(MappedFileSource source) {
+        this(source, 0L);
+    }
+
+    /**
+     * startByteOffsetを指定する版。UTF-8 BOM（EF BB BF）付きファイルを開く際、BOMの3バイトを
+     * 文書の先頭から除外して数えたい場合に使う（{@code PieceTable(MappedFileSource)}参照）。
+     * BOM自体はどの行にも属さない「文書が始まる前」のバイト列として扱われるため、0行目は
+     * 常にこのオフセットから、文字オフセット0から始まるものとして数える。
+     */
+    public LazyLineIndex(MappedFileSource source, long startByteOffset) {
         this.source = source;
-        checkpoints.add(new Checkpoint(0L, 0L)); // 0行目は常にバイト0・文字0から始まる
+        this.scannedUpToByte = startByteOffset;
+        checkpoints.add(new Checkpoint(startByteOffset, 0L));
     }
 
     /** lineNumber行目（0-based）が始まる文字(char)オフセットを返す。範囲外はファイル末尾扱い。 */
@@ -69,7 +80,7 @@ public final class LazyLineIndex {
 
     /** lineNumber行目（0-based）が始まるバイトオフセットを返す。範囲外はファイル末尾扱い。 */
     public long byteOffsetOfLine(int lineNumber) {
-        if (lineNumber <= 0) return 0;
+        if (lineNumber <= 0) return checkpoints.get(0).byteOffset(); // BOM分だけ先頭がずれている場合がある
         ensureScannedToLine(lineNumber);
         if (lineNumber > scannedUpToLine) {
             return source.size();
@@ -84,7 +95,7 @@ public final class LazyLineIndex {
      * 「チェックポイント間隔（既定4096行）ぶんのバイト数」に収まる。
      */
     public long byteOffsetOfCharOffset(long targetChar) {
-        if (targetChar <= 0) return 0;
+        if (targetChar <= 0) return checkpoints.get(0).byteOffset(); // BOM分だけ先頭がずれている場合がある
         ensureScannedToChar(targetChar);
         if (targetChar >= scannedUpToChar) {
             return finished ? source.size() : scannedUpToByte;
@@ -98,9 +109,9 @@ public final class LazyLineIndex {
         Checkpoint cp = checkpoints.get(lo);
         long bytePos = cp.byteOffset();
         long charPos = cp.charOffset();
+        long size = source.size();
         while (charPos < targetChar) {
-            int b = source.byteAt(bytePos);
-            if (isLeadByte(b)) charPos += charUnitsForLeadByte(b);
+            charPos += charUnitsAt(bytePos, size);
             bytePos++;
         }
         return bytePos;
@@ -124,9 +135,8 @@ public final class LazyLineIndex {
         long size = source.size();
         int line = lo * CHECKPOINT_INTERVAL;
         while (charPos < charOffset && bytePos < size) {
-            int b = source.byteAt(bytePos);
-            if (isLeadByte(b)) charPos += charUnitsForLeadByte(b);
-            if (b == '\n') line++;
+            charPos += charUnitsAt(bytePos, size);
+            if (source.byteAt(bytePos) == '\n') line++;
             bytePos++;
         }
         return line;
@@ -156,11 +166,11 @@ public final class LazyLineIndex {
         Checkpoint cp = checkpoints.get(checkpointIndex);
         long bytePos = cp.byteOffset();
         long charPos = cp.charOffset();
+        long size = source.size();
         int line = checkpointIndex * CHECKPOINT_INTERVAL;
         while (line < lineNumber) {
-            int b = source.byteAt(bytePos);
-            if (isLeadByte(b)) charPos += charUnitsForLeadByte(b);
-            if (b == '\n') line++;
+            charPos += charUnitsAt(bytePos, size);
+            if (source.byteAt(bytePos) == '\n') line++;
             bytePos++;
         }
         return new Checkpoint(bytePos, charPos);
@@ -183,9 +193,8 @@ public final class LazyLineIndex {
         int line = scannedUpToLine;
         long size = source.size();
         while (!stop.getAsBoolean() && bytePos < size) {
-            int b = source.byteAt(bytePos);
-            if (isLeadByte(b)) charPos += charUnitsForLeadByte(b);
-            if (b == '\n') {
+            charPos += charUnitsAt(bytePos, size);
+            if (source.byteAt(bytePos) == '\n') {
                 line++;
                 if (line % CHECKPOINT_INTERVAL == 0) {
                     int idx = line / CHECKPOINT_INTERVAL;
@@ -214,5 +223,35 @@ public final class LazyLineIndex {
     private static int charUnitsForLeadByte(int b) {
         if ((b & 0xF8) == 0xF0) return 2;
         return 1;
+    }
+
+    /**
+     * bytePos位置のバイトが論理文書（=行間の文字数勘定）にとって何文字ぶんかを返す。
+     * 継続バイトは0（先頭バイトの分にまとめて数えるため）。それ以外は
+     * {@link #charUnitsForLeadByte}どおりだが、唯一の例外として「直後が{@code \n}である
+     * {@code \r}」は0を返す——CRLF改行の{@code \r}を論理文書から除外するためのルール。
+     *
+     * <p>なぜこの位置に実装するか: 小規模ファイル経路（{@code ModalEditor.readFileContentForBuffer}）
+     * は開いた時点で{@code text.replace("\r\n", "\n")}によりCRLFをLFへ正規化しており、以後の
+     * 文字数・カーソル位置はすべて正規化後の文字列を基準にしている。mmap経路だけCRLFを
+     * 正規化せず生のまま扱うと、同じ内容のファイルでもサイズ次第で改行の見え方・文字数が
+     * 変わってしまう（ユーザーから見ると「大きいファイルを開いたら壊れて見える」バグになる）。
+     * mmap経路では全文コピーを避けたいためString.replace()は使えないが、「\rを0幅の文字として
+     * 数える」だけであれば、この既存の1バイトずつの分類スキャンにコストを足さずに実現できる
+     * （行の途中までデコードする必要がない）。
+     *
+     * <p>境界の安全性: このルールにより「\rの直後の\n」は必ず同じ論理文字カウント区間に
+     * 含まれる（\rはカウントを一切進めないため、区間の境界がこのペアの間で止まることがない）。
+     * したがって{@link MappedFileSource#decode}で得た文字列に対して単純に
+     * {@code "\r\n"→"\n"}の置換をかけるだけで、要求した文字数（{@code to - from}）と
+     * 置換後の文字列長が必ず一致する（{@code PieceTable}のMAPPEDピース読み出し側を参照）。
+     */
+    private int charUnitsAt(long bytePos, long size) {
+        int b = source.byteAt(bytePos);
+        if (!isLeadByte(b)) return 0;
+        if (b == '\r' && bytePos + 1 < size && source.byteAt(bytePos + 1) == '\n') {
+            return 0;
+        }
+        return charUnitsForLeadByte(b);
     }
 }

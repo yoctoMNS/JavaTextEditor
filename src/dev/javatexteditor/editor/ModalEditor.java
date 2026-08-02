@@ -3974,7 +3974,7 @@ public class ModalEditor {
      * 全展開しない」の実体はここにある。
      *
      * 通常経路（readFileContentForBuffer）と異なりファイル全体は一切読まないため、
-     * 以下2点は意図的にスコープを狭めている（.claude/skills/editor-buffer-architecture/
+     * 以下は意図的にスコープを狭めている（.claude/skills/editor-buffer-architecture/
      * SKILL.md に理由を記録済み）:
      * - .classファイル判定は行わない（8MiBを超えるクラスファイルは現実的に存在しないため）。
      * - バイナリ判定は先頭64KiBだけを見る。誤判定リスクはあるが、GB級ファイルの
@@ -3982,8 +3982,11 @@ public class ModalEditor {
      *   バイナリと判定した場合のフォールバック（Files.readAllBytes）は既存の
      *   Mode.BINARY実装が byte[] 全体保持を前提とするための暫定措置であり、
      *   巨大バイナリファイルの軽量化は本改修のスコープ外（テキストファイルが対象）。
-     * - \r\n から \n への正規化やBOM除去は行わない（全文スキャンが必要になるため）。
-     *   mmap経由で開いたCRLFファイルは行末に \r が残ったまま表示・編集される。
+     *
+     * なお \r\n→\n 正規化とBOM除去は、全文コピーを伴わない形で通常経路と同じ挙動に
+     * 揃えている（PieceTable(MappedFileSource)・LazyLineIndex参照。ファイルサイズだけで
+     * 改行やBOMの見え方が変わるのはユーザーから見てバグにしか見えないため、Stage④より
+     * 優先して対応した）。
      */
     private FileLoadResult readLargeFileViaMmap(Path path, long fileSize) throws IOException {
         MappedFileSource mapped = new MappedFileSource(path);
