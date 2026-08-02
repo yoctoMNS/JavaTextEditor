@@ -21,6 +21,11 @@ public class UndoablePieceTable extends PieceTable {
         super(initialText);
     }
 
+    /** 大容量ファイル向け: mmap経由でファイル全体をStringへ展開せずに開く（PieceTable参照）。 */
+    public UndoablePieceTable(MappedFileSource mappedSource) {
+        super(mappedSource);
+    }
+
     private void snapshotBeforeEdit() {
         undoStack.push(getPieces());
         redoStack.clear();
