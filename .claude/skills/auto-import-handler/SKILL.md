@@ -118,6 +118,31 @@ import 挿入で行数が変わると、既に画面に表示済みの波下線�
 行数差（`countLines(after) - countLines(before)`）だけ現在表示中の診断リストを一律シフトし直す
 （import は常にコード本体より前にのみ挿入されるため、一律シフトで正しく補正できるという前提）。
 
+### `shiftCursorAfterImportEdit()` — 挿入直後のカーソル位置ズレ補正（2026-08-02）
+
+カーソルは `cursorRow`/`cursorCol`（行番号＋列番号）で保持している。従来 `handleAutoImport()`/
+`exitImportSelect()` は `autoImportHandler.applyImport()` でバッファへ import 文を挿入した後、
+表示中の診断（上記 `shiftDiagnosticsAfterImportEdit()`）だけをシフトし、カーソルの `cursorRow`
+自体は更新していなかった。カーソルより上（ファイル先頭側）に import 行が挿入されるため、
+`cursorRow` を挿入行数分だけ加算しないと「内容だけが下にずれ、カーソルは古い行番号のまま」
+という見かけ上のズレが発生していた。
+
+修正は `shiftDiagnosticsAfterImportEdit()` と対になる `shiftCursorAfterImportEdit(before, after,
+caretBefore)` を新設し、挿入前後の絶対オフセット差分（`after.length() - before.length()`）を
+`caretBefore`（挿入前のカーソルの絶対オフセット、`offsetOfCursor()`）に加算して
+`moveCursorToOffset()` で行番号・列番号を再計算する方式にした。行番号を直接加算する方式（本文
+参照の方針A）ではなく絶対オフセットで管理する方式（方針B）を採ったのは、`applyImportKeepingCursor()`
+（Ctrl+Space 補完確定時の既存の同種処理、コード補完のクラス名確定でも import を挿入する）が
+既にこの方式を採用しており、実装を統一するため。
+
+**境界値（カーソルが挿入区間より前にある場合）の扱い**: `insertAndReorganize()` は import
+ブロック全体を書き直すため、挿入の正確な開始オフセットを呼び出し側は知らない。そこで
+before/after 文字列の共通接頭辞の長さ（`commonPrefixLength()`）を「書き換えられていないことが
+保証される境界」の近似値として使い、`caretBefore` がその範囲内（package 宣言行など、import
+ブロックより前）にあればシフトしない。この判定が無いと、package 宣言行にカーソルがある状態で
+auto-import が発火した際にカーソルが誤って下にずれる回帰が起きる（`AutoImportCursorPositionTest`
+の `testCursorAboveInsertPointUnaffected` で検証）。
+
 ---
 
 ## 設計判断ログ（詳細は `docs/decision-log.md` を参照）
