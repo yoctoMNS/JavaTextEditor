@@ -6839,6 +6839,32 @@ public class ModalEditor {
     }
 
     /**
+     * import 文の自動挿入でバッファに行が追加された直後に呼ぶ。カーソルの絶対オフセットが
+     * 挿入区間より後ろにあれば、増えた文字数だけ後ろへずらして「編集していた同じ論理的な
+     * 位置（同じ文字）」を指し続けさせる。カーソルが挿入区間より前（package行など）に
+     * ある場合はそもそも内容がずれていないので変更しない。
+     *
+     * <p>{@code insertAndReorganize()} は import ブロック全体を書き直すため、挿入区間の
+     * 正確な開始オフセットを直接は知らない。代わりに before/after の共通接頭辞の長さを
+     * 境界の近似値として使う（共通接頭辞より前は書き換えられていないことが保証されるため、
+     * その範囲にあるカーソルは安全に「未変更」と判定できる）。
+     */
+    private void shiftCursorAfterImportEdit(String before, String after, int caretBefore) {
+        int delta = after.length() - before.length();
+        if (delta == 0) return;
+        int commonPrefixLen = commonPrefixLength(before, after);
+        if (caretBefore <= commonPrefixLen) return;
+        moveCursorToOffset(caretBefore + delta);
+    }
+
+    private static int commonPrefixLength(String a, String b) {
+        int max = Math.min(a.length(), b.length());
+        int i = 0;
+        while (i < max && a.charAt(i) == b.charAt(i)) i++;
+        return i;
+    }
+
+    /**
      * コンパイル診断から未解決シンボルを検出し、import の自動挿入または選択を行う。
      * 候補が1件の場合は即座に挿入。複数の場合は選択待ちモードへ。
      * Must be called on the EDT.
@@ -6860,6 +6886,7 @@ public class ModalEditor {
         importAppliedCount = 0;
         List<Map.Entry<String, List<String>>> multi = new ArrayList<>();
         String beforeAutoApply = buffer.getText();
+        int caretBefore = offsetOfCursor();
         for (Map.Entry<String, List<String>> e : entries) {
             if (e.getValue().size() == 1) {
                 autoImportHandler.applyImport(e.getValue().get(0), buffer);
@@ -6869,7 +6896,9 @@ public class ModalEditor {
             }
         }
         if (importAppliedCount > 0) {
-            shiftDiagnosticsAfterImportEdit(beforeAutoApply, buffer.getText());
+            String afterAutoApply = buffer.getText();
+            shiftCursorAfterImportEdit(beforeAutoApply, afterAutoApply, caretBefore);
+            shiftDiagnosticsAfterImportEdit(beforeAutoApply, afterAutoApply);
         }
 
         if (!multi.isEmpty()) {
@@ -6968,12 +6997,15 @@ public class ModalEditor {
         if (apply && importSelectIdx < importSelectFqns.size()) {
             String fqn = importSelectFqns.get(importSelectIdx);
             String beforeApply = buffer.getText();
+            int caretBefore = offsetOfCursor();
             if (pendingImportApply != null) {
                 pendingImportApply.accept(fqn);
             } else if (autoImportHandler != null) {
                 autoImportHandler.applyImport(fqn, buffer);
             }
-            shiftDiagnosticsAfterImportEdit(beforeApply, buffer.getText());
+            String afterApply = buffer.getText();
+            shiftCursorAfterImportEdit(beforeApply, afterApply, caretBefore);
+            shiftDiagnosticsAfterImportEdit(beforeApply, afterApply);
             importAppliedCount++;
         }
         mode = Mode.NORMAL;
