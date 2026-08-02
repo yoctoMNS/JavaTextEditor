@@ -88,7 +88,8 @@ public final class EditorApplication {
         new CompileAnalyzer(),
         new dev.javatexteditor.analysis.CCompileAnalyzer(),
         SERVICES.jdkClassIndex(),
-        () -> WD_MANAGER.getWorkingDirectory());
+        () -> WD_MANAGER.getWorkingDirectory(),
+        SERVICES::wordIndex);
 
     // -------------------------------------------------------------------------
     // F10/F11/F12: プロジェクト全体のコンパイル・実行

@@ -89,6 +89,15 @@ public final class AnalysisServices {
     }
 
     /**
+     * Alt+/ 単語索引。{@link LiveDiagnostics} が保存時の差分更新（{@code WordIndex.updateFile}）に使う。
+     * {@link #startProjectIndexing(Path)} 呼び出し前は {@code null}（呼び出し側は {@link java.util.function.Supplier}
+     * 経由で遅延解決すること。クラス Javadoc「completionIndex / wordIndex を volatile にしていない理由」参照）。
+     */
+    public WordIndex wordIndex() {
+        return wordIndex;
+    }
+
+    /**
      * 1つの編集ペインに解析サービス一式を配線する。ペインを作るたびに呼ぶ。
      *
      * <p>索引が未構築（{@code null}）の場合は設定をスキップする。
