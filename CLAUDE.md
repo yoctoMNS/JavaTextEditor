@@ -250,7 +250,7 @@ project-root/
 
 1. **（2026-07 解消済み）NORMAL モード Ctrl+U/P のバッファ切替が二重実装だった問題**: 以前は `ModalEditor.processNormalKey` 冒頭のハードコード（`bufferHistory` スナップショット方式）が無条件に優先され、`switchToRelativeBuffer`（`Main.BUFFER_REGISTRY` を巡回する本来の `:bnext`/`:bprev` 相当の実装）には既定キーから到達しなかった。詳細は本ファイル末尾の「Ctrl+U/Ctrl+P のバッファ切替（:bnext/:bprev 方式への統一）」節を参照。
 2. **COMMAND モードの registry 束縛は機能しない**: `processCommandKey` は KeymapRegistry を参照せず ESC/Enter/TAB をハードコードで処理するため、`KeymapRegistry` の COMMAND モード束縛（`enter.normal`/`execute.command`）は現状到達不能。外部（プラグイン）からの参照想定が不明なため削除しない。
-3. **`CompletionIndex.refreshProjectSymbols()` は未使用**: 本番・テストとも呼び出しゼロ。Javadoc の「保存時に呼ぶ」想定で呼ぶ場合は、`ready==true` 後にバックグラウンドで `TreeMap` を更新すると EDT の `query()` と同期なしで競合するため、不変マップ差し替え等の並行更新対策が先に必要。
+3. **（2026-08 解消済み）`WordIndex` が保存後も更新されない問題**: 以前は `WordIndex`/`CompletionIndex` ともエディタ起動時に1回だけ構築され、以後は再構築されなかった（新規作成・保存したクラス名/メソッド名が他ファイルの補完候補に出ない不具合）。`WordIndex.updateFile(Path)` によるファイル単位の差分更新を追加し、`LiveDiagnostics.install()` の `onSave` フックから呼ぶことで解決した。`CompletionIndex`（JDKクラス名のみを保持）は起動時1回のままで変更していない（JDKクラス構成は実行中に増減しないため）。詳細は `.claude/skills/intellij-style-completion/SKILL.md` 参照。
 4. **`extension/` パッケージ（PluginLoader ほか）は本番経路から未接続**: `:plugin` 等の起動コマンドが未実装のため、動的コンパイル・プラグイン機構はテストからしか呼ばれない（ロードマップ③⑥は機構としては完了、UI 接続のみ未着手）。
 5. **疑似バッファ退避2系統の相互作用は未定義**: jdk-source 疑似バッファ（`saved*` フィールド群）と `*cd候補*` 疑似バッファ（`cdSaved*` フィールド群）を重ねて使った場合の挙動は未定義・未テスト。
 6. **`ScrollTest` の2ケース（halfPageUp 系）は恒常的に FAIL する**: Ctrl+U の仕様変更（半ページスクロール → バッファ履歴を前へ）にテストが追従しておらず、ベースライン時点で 18/20 PASS。テストを更新するかキー割当てを戻すかは未決定（docs/archive/REFACTORING_PLAN.md U-7）。どちらの修正も仕様判断を伴うため「ついでに」直さないこと。

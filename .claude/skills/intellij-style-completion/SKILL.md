@@ -125,6 +125,41 @@ IntelliJ の "middle matching"（`Builder` → `StringBuilder`）に相当する
 一覧の先頭が信用できなくなるため。ファジー一致のスコアは 99 で頭打ちにして、
 上位 Tier との序列が入れ替わらないようにしてある。
 
+### `WordIndex` は保存のたびに差分更新する（2026-08-02）
+
+PLAIN 位置（`obj.` のような修飾なし）で新規クラス名・追加メソッド名が補完候補に出ない不具合の
+修正。原因は `WordIndex`（PLAIN 位置の主な候補源）が **エディタ起動時に1回だけ** バックグラウンド
+スキャンで構築され、以後は再構築されない設計だったこと（`CompletionIndex` は JDK クラス名専用に
+既に一本化済みで、プロジェクト内シンボルはそもそも保持していない。この点は元から正しい設計）。
+
+一方、`obj.` のメンバー補完（MEMBER 位置）は `JavacCompletionAnalyzer` が呼ぶたびに
+`JavaSourceCollector.collect()` でプロジェクト配下の `.java` をディスクから読み直しており、
+**元から動的**だった。今回手を入れたのは PLAIN 位置用の `WordIndex` のみ。
+
+**採用した設計**: プロジェクト全体の再スキャンではなく、保存されたファイル1つだけを再解析する
+差分更新（`WordIndex.updateFile(Path)`）。`words`（小文字→原表記の集合）を `TreeMap` + volatile
+差し替えから `ConcurrentSkipListMap` に変え、`wordFiles`（単語→参照ファイル集合）という参照カウント
+的な逆引きテーブルを追加した。ある単語をどのファイルが参照しているかを追跡することで、
+「複数ファイルに同じ単語がある場合、片方を更新しても消えない」を差分更新のまま実現している
+（プロジェクト全体を舐めて再計算すれば単純だが、ファイル数が多いプロジェクトで保存のたびに
+重くなるため採らなかった）。
+
+`updateFile()` は「読めない・対象外拡張子ならその ファイルの単語集合を空とみなす」という1つの
+規則で、新規作成・変更・削除のすべてを扱う（削除されたファイルは `Files.isRegularFile` が false
+になり自動的に空集合＝そのファイル由来の単語が消える）。
+
+**フックの配線**: `ModalEditor` には既に `onSave`（`:w` 成功時）という Runnable フックがあり、
+`LiveDiagnostics.install()` がコンパイル診断・auto-import のトリガとして使っていた。同じフックに
+`WordIndex.updateFile()` を相乗りさせた（新しいフックを増やさない）。`WordIndex` は
+`AnalysisServices.startProjectIndexing()` が作業ディレクトリ確定後に構築するため `LiveDiagnostics`
+の生成時点（クラスロード時）ではまだ `null` になりうる。`jdkClassIndex`/`workingDirectory` と同じ
+理由で `Supplier<WordIndex>` として遅延解決する。
+
+**経路B（`WatchService` によるファイルシステム監視）は実装しなかった**: エディタ自身の保存経路
+（経路A）で要件（新規作成・保存したクラスが他ファイルの補完候補に出る）は満たせる。エディタ外部
+からの変更に追従する必要が出た場合のみ検討する（常駐スレッド・監視対象の管理・終了時のクローズ
+処理が新たに必要になり、費用対効果が見合わないと判断）。
+
 ### `completion2` パッケージとの関係
 
 `dev.javatexteditor.completion2` は本番経路から未接続の独立コンポーネントであり
@@ -161,6 +196,7 @@ javac の解析は**キャンセルできない**。レシーバを次々に変�
 | `analysis/JavacCompletionAnalyzerTest` | javac によるメンバー解決（ジェネリクス・`var`・チェーン・static/instance・private） |
 | `editor/IntelliJCompletionTest` | ModalEditor 経由の一連の動作（候補・シグネチャ表示・括弧挿入・import 挿入・非 Java バッファの非干渉） |
 | `editor/WordCompletionTest`・`editor/CWordCompletionTest` | Alt+/ と C バッファの従来動作が壊れていないこと（回帰テスト） |
+| `analysis/WordIndexTest`（`testUpdateFile*`） | `WordIndex.updateFile()` の差分更新（新規クラス追加・メソッド追加・単語削除・ファイル削除・複数ファイル間の共有単語・他ファイルへの無影響） |
 
 `IntelliJCompletionTest` は `JdkClassIndex.buildSync()` を伴うため実行に時間がかかる。
 javac の型解決を同期で検証したい場合は `enableMemberCompletionLookup(Runnable::run, Runnable::run)`

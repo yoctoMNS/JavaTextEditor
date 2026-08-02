@@ -29,6 +29,12 @@ public class WordIndexTest {
         testExtractWords();
         testCaseInsensitivePrefix();
         testBuildTimeOnProjectSrc();
+        testUpdateFileAddsNewClass();
+        testUpdateFileReflectsAddedMethod();
+        testUpdateFileRemovesStaleWords();
+        testUpdateFileDeletedFileRemovesWords();
+        testUpdateFileSharedWordSurvivesOtherFileUpdate();
+        testUpdateFileDoesNotRescanWholeProject();
 
         System.out.println("=== " + passed + "/" + (passed + failed) + " PASSED ===");
         if (failed > 0) System.exit(1);
@@ -189,6 +195,142 @@ public class WordIndexTest {
         // このクラス自身に含まれる識別子が拾えるはず
         assertTrue("'CompletionIndex' が拾える", !idx.query("CompletionIndex", 5, null).isEmpty());
         System.out.println("  buildSync(src/) elapsed: " + elapsed + " ms");
+    }
+
+    /** 再現手順1・2: 起動後（=buildSync 済み）に新規作成・保存したクラスの単語が updateFile() で反映される。 */
+    private static void testUpdateFileAddsNewClass() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_newclass_");
+        try {
+            Files.writeString(tmp.resolve("Existing.java"), "class Existing {}");
+            WordIndex idx = WordIndex.buildSync(tmp);
+            assertTrue("更新前は新規クラス名がヒットしない",
+                idx.query("BrandNewWidget", 10, null).isEmpty());
+
+            Path newFile = tmp.resolve("BrandNewWidget.java");
+            Files.writeString(newFile,
+                "class BrandNewWidget { int widgetField; void widgetMethod() {} }");
+            idx.updateFile(newFile);
+
+            assertTrue("新規クラス名が反映される", idx.query("BrandNewWidget", 10, null).contains("BrandNewWidget"));
+            assertTrue("新規フィールド名が反映される", idx.query("widgetField", 10, null).contains("widgetField"));
+            assertTrue("新規メソッド名が反映される", idx.query("widgetMethod", 10, null).contains("widgetMethod"));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    /** 再現手順6-2: 既存クラスへメソッドを追加保存すると updateFile() で反映される。 */
+    private static void testUpdateFileReflectsAddedMethod() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_addmethod_");
+        try {
+            Path file = tmp.resolve("Widget.java");
+            Files.writeString(file, "class Widget { void oldMethod() {} }");
+            WordIndex idx = WordIndex.buildSync(tmp);
+            assertTrue("更新前は新メソッド名がヒットしない",
+                idx.query("freshlyAddedMethod", 10, null).isEmpty());
+
+            Files.writeString(file, "class Widget { void oldMethod() {} void freshlyAddedMethod() {} }");
+            idx.updateFile(file);
+
+            assertTrue("追加したメソッド名が反映される",
+                idx.query("freshlyAddedMethod", 10, null).contains("freshlyAddedMethod"));
+            assertTrue("既存メソッド名も引き続き候補に残る",
+                idx.query("oldMethod", 10, null).contains("oldMethod"));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    /** そのファイルにしか出現しない単語が、内容の書き換えで消えれば候補からも消える。 */
+    private static void testUpdateFileRemovesStaleWords() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_stale_");
+        try {
+            Path file = tmp.resolve("Renamed.java");
+            Files.writeString(file, "class Renamed { void staleOnlyHereMethod() {} }");
+            WordIndex idx = WordIndex.buildSync(tmp);
+            assertTrue("更新前は存在する", idx.query("staleOnlyHereMethod", 10, null).contains("staleOnlyHereMethod"));
+
+            Files.writeString(file, "class Renamed { void renamedMethod() {} }");
+            idx.updateFile(file);
+
+            assertTrue("書き換え後は古い単語が消える", idx.query("staleOnlyHereMethod", 10, null).isEmpty());
+            assertTrue("新しい単語は反映される", idx.query("renamedMethod", 10, null).contains("renamedMethod"));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    /** テスト観点3: ファイル削除を updateFile() に伝えると、そのファイル由来の単語が候補から消える。 */
+    private static void testUpdateFileDeletedFileRemovesWords() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_delete_");
+        try {
+            Path file = tmp.resolve("Doomed.java");
+            Files.writeString(file, "class Doomed { void doomedOnlyMethod() {} }");
+            WordIndex idx = WordIndex.buildSync(tmp);
+            assertTrue("削除前は存在する", idx.query("doomedOnlyMethod", 10, null).contains("doomedOnlyMethod"));
+
+            Files.delete(file);
+            idx.updateFile(file); // ファイル削除後も安全に呼べる（読み取り不可→空集合扱い）
+
+            assertTrue("削除後は候補から消える", idx.query("doomedOnlyMethod", 10, null).isEmpty());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    /** 複数ファイルにまたがる単語は、片方だけ更新しても消えない（wordFiles の参照カウント設計の検証）。 */
+    private static void testUpdateFileSharedWordSurvivesOtherFileUpdate() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_shared_");
+        try {
+            Path a = tmp.resolve("A.java");
+            Path b = tmp.resolve("B.java");
+            Files.writeString(a, "class A { void sharedHelperMethod() {} }");
+            Files.writeString(b, "class B { void sharedHelperMethod() {} }");
+            WordIndex idx = WordIndex.buildSync(tmp);
+            assertTrue("両ファイルに存在する単語がヒットする",
+                idx.query("sharedHelperMethod", 10, null).contains("sharedHelperMethod"));
+
+            // A.java だけを書き換えて、その単語を削除する
+            Files.writeString(a, "class A { void onlyInAMethod() {} }");
+            idx.updateFile(a);
+
+            assertTrue("B.java にまだ残っているので候補から消えない",
+                idx.query("sharedHelperMethod", 10, null).contains("sharedHelperMethod"));
+            assertTrue("A.java の新しい単語も反映される",
+                idx.query("onlyInAMethod", 10, null).contains("onlyInAMethod"));
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    /**
+     * テスト観点4: 1ファイルの updateFile() が他ファイルの単語に影響しないこと
+     * （＝プロジェクト全体の再スキャンが走っていないこと）を、他ファイル側の単語が
+     * 保存のたびに消えたりしないことで間接的に確認する。
+     */
+    private static void testUpdateFileDoesNotRescanWholeProject() throws IOException {
+        Path tmp = Files.createTempDirectory("wordidx_norescan_");
+        try {
+            Path untouched = tmp.resolve("Untouched.java");
+            Path touched = tmp.resolve("Touched.java");
+            Files.writeString(untouched, "class Untouched { void untouchedMethod() {} }");
+            Files.writeString(touched, "class Touched { void touchedMethod() {} }");
+            WordIndex idx = WordIndex.buildSync(tmp);
+
+            // Untouched.java を消してからディスク上の Touched.java だけを更新する。
+            // もし updateFile がプロジェクト全体を再スキャンしていたら、削除済みの
+            // Untouched.java 由来の単語まで巻き込んで消えてしまうはず。
+            Files.delete(untouched);
+            Files.writeString(touched, "class Touched { void touchedMethod() {} void touchedMethod2() {} }");
+            idx.updateFile(touched);
+
+            assertTrue("更新対象ファイルの新しい単語は反映される",
+                idx.query("touchedMethod2", 10, null).contains("touchedMethod2"));
+            assertTrue("更新していない（かつディスクからは消えた）他ファイルの単語は影響を受けず残る",
+                idx.query("untouchedMethod", 10, null).contains("untouchedMethod"));
+        } finally {
+            deleteDir(tmp);
+        }
     }
 
     // -------------------------------------------------------------------------

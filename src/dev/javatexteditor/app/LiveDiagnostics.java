@@ -5,6 +5,7 @@ import dev.javatexteditor.analysis.CCompileAnalyzer;
 import dev.javatexteditor.analysis.CompileAnalyzer;
 import dev.javatexteditor.analysis.CompileDiagnostic;
 import dev.javatexteditor.analysis.JdkClassIndex;
+import dev.javatexteditor.analysis.WordIndex;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.EditorCanvas;
 import java.nio.file.Path;
@@ -38,13 +39,18 @@ public final class LiveDiagnostics {
     private final CCompileAnalyzer cAnalyzer;
     private final JdkClassIndex jdkIndex;
     private final Supplier<Path> workingDirectory;
+    // Alt+/ 単語索引の差分更新（updateFile）に使う。startProjectIndexing() が完了するまで null の
+    // ことがあるため（本クラスは AnalysisServices より前に static フィールドとして初期化される）、
+    // Supplier で遅延解決する（workingDirectory と同じ理由）。
+    private final Supplier<WordIndex> wordIndexSupplier;
 
     public LiveDiagnostics(CompileAnalyzer javaAnalyzer, CCompileAnalyzer cAnalyzer,
-            JdkClassIndex jdkIndex, Supplier<Path> workingDirectory) {
+            JdkClassIndex jdkIndex, Supplier<Path> workingDirectory, Supplier<WordIndex> wordIndexSupplier) {
         this.javaAnalyzer = javaAnalyzer;
         this.cAnalyzer = cAnalyzer;
         this.jdkIndex = jdkIndex;
         this.workingDirectory = workingDirectory;
+        this.wordIndexSupplier = wordIndexSupplier;
     }
 
     /**
@@ -82,7 +88,10 @@ public final class LiveDiagnostics {
             canvas.clearImeComposition();
             trigger.run();
         });
-        editor.setOnSave(trigger);
+        editor.setOnSave(() -> {
+            trigger.run();
+            updateWordIndexForSavedFile(editor);
+        });
         // Ctrl+Shift+O: コンパイル→未定義シンボルへの import 挿入→未使用 import 削除
         editor.setOnOrganizeImports(() -> {
             if (isJavaBuffer(editor)) {
@@ -106,6 +115,24 @@ public final class LiveDiagnostics {
                 debounceTimer.restart();
             }
         });
+    }
+
+    /**
+     * :w 等で保存が成功したファイルだけを {@link WordIndex} に差分反映する（4.3節・経路A）。
+     * プロジェクト全体を再スキャンする {@code WordIndex.build}/{@code buildSync} と違い、
+     * 保存されたファイル1つ分の再解析で済むため、保存のたびに実行してもファイル数の多い
+     * プロジェクトで重くならない。ファイル I/O を伴うため EDT をブロックしないよう
+     * バックグラウンド（仮想スレッド）で実行する。
+     *
+     * <p>{@code wordIndexSupplier.get()} が {@code null} を返す場合（プロジェクトルート未確定など）
+     * や {@code currentFilePath} が未設定（:enew 等の疑似バッファ）の場合は何もしない。
+     */
+    private void updateWordIndexForSavedFile(ModalEditor editor) {
+        WordIndex wordIndex = wordIndexSupplier.get();
+        String path = editor.getCurrentFilePath();
+        if (wordIndex == null || path == null) return;
+        Path savedPath = Path.of(path);
+        Thread.ofVirtual().start(() -> wordIndex.updateFile(savedPath));
     }
 
     /**
