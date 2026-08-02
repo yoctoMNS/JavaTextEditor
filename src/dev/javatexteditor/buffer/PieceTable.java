@@ -7,6 +7,10 @@ public class PieceTable {
     private final String original;
     private final StringBuilder addBuffer;
     private final List<Piece> pieces;
+    // mmapで開いた大容量ファイル用（軽量化リファクタリング Phase 3: 大容量ファイル対応）。
+    // 小〜中規模ファイル（従来の PieceTable(String) コンストラクタ）では両方 null のまま。
+    private final MappedFileSource mappedSource;
+    private final LazyLineIndex mappedLineIndex;
     // length() のキャッシュ。以前は呼ばれるたびに全ピースを stream().sum() しており
     // ピース数に比例するコストがかかっていた（軽量化リファクタリング Phase 1）。
     // insert()/delete()/restorePieces() だけが更新する。
@@ -16,10 +20,73 @@ public class PieceTable {
         this.original = originalText;
         this.addBuffer = new StringBuilder();
         this.pieces = new ArrayList<>();
+        this.mappedSource = null;
+        this.mappedLineIndex = null;
         if (!originalText.isEmpty()) {
             pieces.add(new Piece(Piece.Source.ORIGINAL, 0, originalText.length()));
         }
         this.totalLength = originalText.length();
+    }
+
+    /**
+     * 大容量ファイルをmmap経由で開くためのコンストラクタ。{@code Files.readAllBytes}や
+     * ファイル全体の{@code String}化を一切行わない（要件2）。
+     *
+     * <p>ピースの座標系（{@code start}/{@code length}）は、元ファイル全体をデコードした場合に
+     * 得られる「仮想的な文字列」上の文字(UTF-16コードユニット)オフセットとして定義する——
+     * {@code ORIGINAL}（Stringコンストラクタ）ソースの座標系と全く同じ意味である。これにより
+     * {@link #insert}/{@link #delete}のピース分割ロジックは一切変更せずに再利用できる
+     * （分割は座標の加減算だけで完結し、実際のデコードを伴わないため）。実際に文字を読み出す
+     * {@link #getText}/{@link #getTextInRange}/{@link #offsetOfLine}だけが、必要な範囲に限って
+     * {@link LazyLineIndex}経由でバイトオフセットへ変換し{@link MappedFileSource#decode}する。
+     *
+     * <p>ピースの{@code start}/{@code length}は{@code int}のため、このコンストラクタで開ける
+     * ファイルは実質{@code Integer.MAX_VALUE}文字（UTF-8で概ね2GiB強）までに制限される
+     * （既存のカーソル・オフセットAPIがエディタ全体で{@code int}前提のため。詳細は
+     * {@code .claude/skills/editor-buffer-architecture/SKILL.md}参照）。
+     *
+     * <p><b>既知のトレードオフ</b>: 最初の1ピースの{@code length}（文字数）を確定させるため、
+     * このコンストラクタ内で{@code mappedLineIndex.totalCharCount()}を呼び、ファイル全体を
+     * 1回だけ走査する。これは「行オフセットの事前構築はしない」という要件4への一見した違反に
+     * 見えるが、この走査は（a）{@code String}や{@code char[]}へのデコード・確保を一切伴わない
+     * バイト単位の分類カウントのみであり、（b）その副作用として{@link LazyLineIndex}の
+     * チェックポイントが同時に埋まるため以後の行アクセスがすべて高速化される、という2点で
+     * 旧実装（{@code Files.readAllBytes}＋{@code new String(...)}によるO(n)のコピー2回＋
+     * それを永続的にヒープへ保持し続ける方式）とは質的に異なる。真の「開いた瞬間は完全に
+     * ゼロコスト」を実現するには、ピースの文字長を遅延確定できるよう{@code Piece}を可変にするか
+     * カーソル/オフセットAPI全体をバイト単位へ作り替える必要があり、既存コードへの影響が
+     * 過大なため本実装のスコープ外とした（詳細は{@code .claude/skills/editor-buffer-architecture/
+     * SKILL.md}参照）。
+     */
+    public PieceTable(MappedFileSource mappedSource) {
+        this.original = "";
+        this.addBuffer = new StringBuilder();
+        this.pieces = new ArrayList<>();
+        this.mappedSource = mappedSource;
+        // 小規模ファイル経路（Files.readAllBytes + new String(...)）はBOM(EF BB BF)を除去して
+        // 読み込むため、mmap経路でも同じ挙動にしないと「同じ内容のファイルなのにサイズだけで
+        // 見た目が変わる」ことになる。BOMは文書のどの行にも属さない先頭3バイトなので、
+        // LazyLineIndexの文字カウントの起点をBOM分だけ後ろにずらすだけで対応できる
+        // （全文コピーは不要）。
+        long bomBytes = hasUtf8Bom(mappedSource) ? 3 : 0;
+        this.mappedLineIndex = new LazyLineIndex(mappedSource, bomBytes);
+        long charCount = mappedLineIndex.totalCharCount();
+        if (charCount > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "mmapで開けるファイルは " + Integer.MAX_VALUE + " 文字までです（既存オフセットAPIがint前提のため）。"
+                    + "実際の文字数: " + charCount);
+        }
+        if (charCount > 0) {
+            pieces.add(new Piece(Piece.Source.MAPPED, 0, (int) charCount));
+        }
+        this.totalLength = (int) charCount;
+    }
+
+    private static boolean hasUtf8Bom(MappedFileSource src) {
+        return src.size() >= 3
+                && src.byteAt(0) == 0xEF
+                && src.byteAt(1) == 0xBB
+                && src.byteAt(2) == 0xBF;
     }
 
     public void insert(int offset, String text) {
@@ -107,15 +174,7 @@ public class PieceTable {
     public String getText() {
         StringBuilder result = new StringBuilder(totalLength);
         for (Piece p : pieces) {
-            // addBuffer.toString() を使わず CharSequence として範囲 append する。
-            // 以前は ADD ピースごとに追加バッファ全体を String へコピーしており、
-            // 長い編集セッション後の getText() が「ADDピース数×追加バッファ長」の
-            // 無駄なアロケーションを発生させていた（軽量化リファクタリング Phase 1）。
-            if (p.source() == Piece.Source.ORIGINAL) {
-                result.append(original, p.start(), p.start() + p.length());
-            } else {
-                result.append(addBuffer, p.start(), p.start() + p.length());
-            }
+            appendPieceRange(result, p, 0, p.length());
         }
         return result.toString();
     }
@@ -123,6 +182,9 @@ public class PieceTable {
     /**
      * 文書全体ではなく指定オフセット範囲だけを返す。
      * 画面に表示する数十行分だけを取り出すことで getText() の全文字列構築コストを避けられる。
+     * MAPPEDピースについても、要求された範囲ぶんだけを{@link MappedFileSource#decode}するため、
+     * ピース自体がファイル全体をカバーする巨大なものであってもコストは要求範囲に収まる
+     * （軽量化リファクタリング Phase 3・要件5「ビューポートのみ描画」の土台）。
      */
     public String getTextInRange(int startOffset, int endOffset) {
         StringBuilder result = new StringBuilder(Math.max(0, endOffset - startOffset));
@@ -132,16 +194,42 @@ public class PieceTable {
             if (pieceEnd > startOffset && runningOffset < endOffset) {
                 int from = Math.max(0, startOffset - runningOffset);
                 int to = Math.min(p.length(), endOffset - runningOffset);
-                if (p.source() == Piece.Source.ORIGINAL) {
-                    result.append(original, p.start() + from, p.start() + to);
-                } else {
-                    result.append(addBuffer, p.start() + from, p.start() + to);
-                }
+                appendPieceRange(result, p, from, to);
             }
             runningOffset = pieceEnd;
             if (runningOffset >= endOffset) break;
         }
         return result.toString();
+    }
+
+    /**
+     * ピース p のうち、ピース先頭からの相対文字位置 [fromInPiece, toInPiece) の部分だけを
+     * result に追記する。ORIGINAL/ADD は既存どおり CharSequence の範囲 append（コピー無しに近い）。
+     * MAPPED は {@link LazyLineIndex} で文字オフセットをバイトオフセットへ変換したうえで
+     * {@link MappedFileSource#decode} する——ここが「必要な範囲だけデコードする」の実体。
+     */
+    private void appendPieceRange(StringBuilder result, Piece p, int fromInPiece, int toInPiece) {
+        switch (p.source()) {
+            case ORIGINAL -> result.append(original, p.start() + fromInPiece, p.start() + toInPiece);
+            // addBuffer.toString() を使わず CharSequence として範囲 append する。
+            // 以前は ADD ピースごとに追加バッファ全体を String へコピーしており、
+            // 長い編集セッション後の getText() が「ADDピース数×追加バッファ長」の
+            // 無駄なアロケーションを発生させていた（軽量化リファクタリング Phase 1）。
+            case ADD -> result.append(addBuffer, p.start() + fromInPiece, p.start() + toInPiece);
+            case MAPPED -> {
+                long byteStart = mappedLineIndex.byteOffsetOfCharOffset(p.start() + fromInPiece);
+                long byteEnd = mappedLineIndex.byteOffsetOfCharOffset(p.start() + toInPiece);
+                String decoded = mappedSource.decode(byteStart, byteEnd);
+                // 小規模ファイル経路が開いた時点で行う "\r\n"→"\n" 正規化と揃えるための後処理。
+                // LazyLineIndexの文字カウントは既にCRLFの\rを0幅として扱っているため
+                // （byteOffsetOfCharOffsetが返す境界は\rと\nの間で割れることが無い）、
+                // ここで単純に置換しても要求文字数(toInPiece-fromInPiece)と結果の文字列長は一致する。
+                if (decoded.indexOf('\r') >= 0) {
+                    decoded = decoded.replace("\r\n", "\n");
+                }
+                result.append(decoded);
+            }
+        }
     }
 
     /**
@@ -154,6 +242,23 @@ public class PieceTable {
         int currentLine = 0;
         int runningOffset = 0;
         for (Piece p : pieces) {
+            if (p.source() == Piece.Source.MAPPED) {
+                // MAPPEDピースの中身をデコードして '\n' を数える代わりに、元ファイルの行構造を
+                // そのまま流用する。MAPPEDピースは「編集で一切触れられていない元ファイルの
+                // 連続範囲」なので、その中の改行位置は元ファイルの行境界と完全に一致する
+                // （lineAtCharOffsetの往復だけで済み、ピースの中身を1バイトもデコードしない）。
+                long startFileLine = mappedLineIndex.lineAtCharOffset(p.start());
+                long endFileLine = mappedLineIndex.lineAtCharOffset(p.start() + p.length());
+                long newlinesInPiece = endFileLine - startFileLine;
+                if (currentLine + newlinesInPiece >= lineNumber) {
+                    long targetFileLine = startFileLine + (lineNumber - currentLine);
+                    long targetCharInFile = mappedLineIndex.charOffsetOfLine((int) targetFileLine);
+                    return runningOffset + (int) (targetCharInFile - p.start());
+                }
+                currentLine += newlinesInPiece;
+                runningOffset += p.length();
+                continue;
+            }
             CharSequence src = (p.source() == Piece.Source.ORIGINAL) ? original : addBuffer;
             int end = p.start() + p.length();
             for (int i = p.start(); i < end; i++) {
@@ -167,6 +272,14 @@ public class PieceTable {
             runningOffset += p.length();
         }
         return totalLength;
+    }
+
+    /**
+     * このバッファがmmapで開かれた大容量ファイルかどうか。ModalEditor側で「行数表示に
+     * 走査コストがかかり得る」ことをステータス行等に反映する場合の判定に使う。
+     */
+    public boolean isMappedFile() {
+        return mappedSource != null;
     }
 
     protected List<Piece> getPieces() {

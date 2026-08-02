@@ -82,7 +82,7 @@ project-root/
 
 | # | Skill名 | 担当領域 | 状態 |
 |---|---|---|---|
-| ① | `editor-buffer-architecture` | バッファ・データ構造 | ✅ 完了（15/15テスト・getTextInRange/offsetOfLine追加済み） |
+| ① | `editor-buffer-architecture` | バッファ・データ構造 | ✅ 完了（15/15テスト・getTextInRange/offsetOfLine追加済み。2026-08 Phase 3でmmap経由の大容量ファイル対応追加、詳細はSKILL.md参照。ビューポート限定描画は60箇所以上への影響のため未着手） |
 | ② | `modal-editing-engine` | Vimモーダル編集（Insert中のEmacs式カーソル移動含む） | ✅ v5 完了（151/151テスト・NORMAL/INSERT/COMMAND/VISUAL/VISUAL LINE） |
 | ③ | `extension-language-runtime` | Java動的コンパイルによる拡張機構 | ✅ v1 完了（9/9テスト） |
 | ④ | `keymap-conflict-resolution` | Vim式モーダルキー / Emacs式カーソル移動の共存 | ✅ Phase 3 完了（38/38テスト・getKeymap()/registerAction() でプラグインがキーバインド登録可能） |
@@ -197,6 +197,7 @@ project-root/
 - `Main` クラス解体リファクタリング 第9弾（2026-07-27〜28、段階0〜7・全完了）
 - `:e` で存在しないファイルを指定した際の新規作成確認（2026-07-28）
 - `:w`/`:enew` への新規作成確認の拡張と、`:e`/`:cd` 同様の TAB 補完（2026-07-28）
+- 大容量ファイル対応（mmap化。軽量化リファクタリング Phase 3・2026-08-02）
 
 ## 作業時の方針
 

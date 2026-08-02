@@ -15,6 +15,7 @@ import dev.javatexteditor.analysis.ReceiverTypeResolver;
 import dev.javatexteditor.app.EditorHost;
 import dev.javatexteditor.buffer.BinaryFileDetector;
 import dev.javatexteditor.buffer.HexDumpFormatter;
+import dev.javatexteditor.buffer.MappedFileSource;
 import dev.javatexteditor.buffer.UndoablePieceTable;
 import dev.javatexteditor.classfile.ClassFile;
 import dev.javatexteditor.classfile.ClassFileFormatException;
@@ -2557,7 +2558,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), p.getFileName().toString(), p.toString());
                 statusMessage = "\"" + p.getFileName() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = acquireBufferForOpen(p.toString(), result.text());
+                buffer = acquireBufferForOpen(p.toString(), result);
                 currentFilePath = p.toString();
                 cursorRow = Math.max(0, lineNumber);
                 cursorCol = 0;
@@ -2702,7 +2703,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + relPath + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = acquireBufferForOpen(target.toString(), result.text());
+                buffer = acquireBufferForOpen(target.toString(), result);
                 currentFilePath = target.toString();
                 cursorRow = 0;
                 cursorCol = 0;
@@ -3896,7 +3897,19 @@ public class ModalEditor {
      * null 扱いにすること）。binary()==true の場合、text() は使わず rawBytes() を
      * {@link #enterBinaryMode} に渡すこと（呼び出し側は5箇所あり、いずれも同じ分岐パターンを踏襲する）。
      */
-    private record FileLoadResult(String text, boolean binary, byte[] rawBytes, byte[] classFileBytes, String classFileDisplayName) {}
+    private record FileLoadResult(String text, boolean binary, byte[] rawBytes, byte[] classFileBytes,
+            String classFileDisplayName, MappedFileSource mapped) {
+        FileLoadResult(String text, boolean binary, byte[] rawBytes, byte[] classFileBytes, String classFileDisplayName) {
+            this(text, binary, rawBytes, classFileBytes, classFileDisplayName, null);
+        }
+    }
+
+    // このサイズ以上のファイルは Files.readAllBytes による全文String化を行わず、mmap経由
+    // （MappedFileSource）で開く（軽量化リファクタリング Phase 3・大容量ファイル対応）。
+    // 8MiBという値は「通常サイズのソースファイルは従来どおり最短経路で開く一方、数十MB〜GB級の
+    // ログ等ではmmap化の恩恵が支配的になる」という経験則の閾値であり、厳密な計測に基づく
+    // チューニング値ではない（将来的に設定可能にする余地はあるが、現状は固定定数で十分）。
+    private static final long LARGE_FILE_MMAP_THRESHOLD_BYTES = 8L * 1024 * 1024;
 
     private static final int CLASS_FILE_MAGIC_0 = 0xCA;
     private static final int CLASS_FILE_MAGIC_1 = 0xFE;
@@ -3932,6 +3945,10 @@ public class ModalEditor {
      * 永久に解消されずimport選択ポップアップが再発し続ける、の双方の原因になる）。
      */
     private FileLoadResult readFileContentForBuffer(Path path) throws IOException {
+        long fileSize = Files.size(path);
+        if (fileSize >= LARGE_FILE_MMAP_THRESHOLD_BYTES) {
+            return readLargeFileViaMmap(path, fileSize);
+        }
         byte[] bytes = Files.readAllBytes(path);
         String displayName = path.getFileName().toString();
         if (looksLikeClassFile(bytes)) {
@@ -3952,6 +3969,43 @@ public class ModalEditor {
     }
 
     /**
+     * LARGE_FILE_MMAP_THRESHOLD_BYTES 以上のファイルを Files.readAllBytes を経由せず
+     * MappedFileSource で開く。要件2「ファイル全体をString/配列として即座にメモリへ
+     * 全展開しない」の実体はここにある。
+     *
+     * 通常経路（readFileContentForBuffer）と異なりファイル全体は一切読まないため、
+     * 以下は意図的にスコープを狭めている（.claude/skills/editor-buffer-architecture/
+     * SKILL.md に理由を記録済み）:
+     * - .classファイル判定は行わない（8MiBを超えるクラスファイルは現実的に存在しないため）。
+     * - バイナリ判定は先頭64KiBだけを見る。誤判定リスクはあるが、GB級ファイルの
+     *   バイナリ判定のためだけに全体を読むコストの方が実害が大きいと判断した。
+     *   バイナリと判定した場合のフォールバック（Files.readAllBytes）は既存の
+     *   Mode.BINARY実装が byte[] 全体保持を前提とするための暫定措置であり、
+     *   巨大バイナリファイルの軽量化は本改修のスコープ外（テキストファイルが対象）。
+     *
+     * なお \r\n→\n 正規化とBOM除去は、全文コピーを伴わない形で通常経路と同じ挙動に
+     * 揃えている（PieceTable(MappedFileSource)・LazyLineIndex参照。ファイルサイズだけで
+     * 改行やBOMの見え方が変わるのはユーザーから見てバグにしか見えないため、Stage④より
+     * 優先して対応した）。
+     */
+    private FileLoadResult readLargeFileViaMmap(Path path, long fileSize) throws IOException {
+        MappedFileSource mapped = new MappedFileSource(path);
+        byte[] prefix = mapped.readPrefix(64 * 1024);
+        if (BinaryFileDetector.isBinary(prefix)) {
+            mapped.close();
+            byte[] bytes = Files.readAllBytes(path);
+            return new FileLoadResult(null, true, bytes, null, null);
+        }
+        if (fileSize > Integer.MAX_VALUE) {
+            mapped.close();
+            throw new IOException(
+                    "このファイルは大きすぎて開けません（" + fileSize + " バイト）。"
+                    + "現在の実装は " + Integer.MAX_VALUE + " バイトまでに対応しています。");
+        }
+        return new FileLoadResult(null, false, null, null, null, mapped);
+    }
+
+    /**
      * Vim方式の共有バッファ: 同じ絶対パスを他ペインが既に開いていれば（liveBufferLookup経由で）
      * その生きた UndoablePieceTable 参照をそのまま再利用し、無ければ読み込んだテキストから
      * 新規インスタンスを作る。前者の場合はディスクから読んだ text は使われず捨てられる
@@ -3965,6 +4019,24 @@ public class ModalEditor {
             if (existing != null) return existing;
         }
         return new UndoablePieceTable(text);
+    }
+
+    /**
+     * {@link #readLargeFileViaMmap} の結果（{@code result.mapped() != null}）を渡す版。
+     * mmap経由で開いた場合はテキストへ全展開せず {@link MappedFileSource} をそのまま
+     * {@link UndoablePieceTable} へ渡す。共有バッファが既に存在する場合の再利用ロジックは
+     * 上のオーバーロードと同じ——その場合 mapped は使われず、呼び出し元で確保済みの
+     * {@link MappedFileSource} は不要になる（GCに委ねる。詳細は{@link MappedFileSource}参照）。
+     */
+    private UndoablePieceTable acquireBufferForOpen(String absolutePath, FileLoadResult result) {
+        if (liveBufferLookup != null) {
+            UndoablePieceTable existing = liveBufferLookup.apply(absolutePath);
+            if (existing != null) return existing;
+        }
+        if (result.mapped() != null) {
+            return new UndoablePieceTable(result.mapped());
+        }
+        return new UndoablePieceTable(result.text());
     }
 
     /**
@@ -4083,7 +4155,7 @@ public class ModalEditor {
             } else if (result.binary()) {
                 enterBinaryMode(result.rawBytes(), name, path.toString());
             } else {
-                buffer = acquireBufferForOpen(path.toString(), result.text());
+                buffer = acquireBufferForOpen(path.toString(), result);
                 currentFilePath = path.toString();
             }
             trackClassFileBuffer(result);
@@ -4396,7 +4468,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), name, path);
                 statusMessage = "\"" + PathDisplay.baseName(path) + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = acquireBufferForOpen(path, result.text());
+                buffer = acquireBufferForOpen(path, result);
                 currentFilePath = path;
                 cursorRow = 0;
                 cursorCol = 0;
@@ -4587,7 +4659,7 @@ public class ModalEditor {
                 enterBinaryMode(result.rawBytes(), target.getFileName().toString(), target.toString());
                 statusMessage = "\"" + r.filePath() + "\" [binary] " + result.rawBytes().length + " bytes";
             } else {
-                buffer = acquireBufferForOpen(target.toString(), result.text());
+                buffer = acquireBufferForOpen(target.toString(), result);
                 currentFilePath = target.toString();
                 cursorRow = Math.max(0, r.lineNumber() - 1);
                 cursorCol = 0;

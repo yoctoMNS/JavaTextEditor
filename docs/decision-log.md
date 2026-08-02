@@ -1726,3 +1726,78 @@ y/n で尋ね、y なら新規作成・n なら何もしない」という要望
   （fqcn→JAVA、HotSpotの`.cpp`/`.hpp`→C、JNIグルーコードの`.c`→C）。全43/43 PASS。
   既存ベースラインFAIL（`ScrollTest`のhalfPageUp系2件、他無関係な既知1件）以外は
   全PASSであることを確認済み。
+
+## 大容量ファイル対応（mmap化。軽量化リファクタリング Phase 3・2026-08-02）
+
+- **背景**: 数十MB〜GB級ファイルを開くと動作が重くなる問題への対応依頼。要件は
+  ①`Files.readAllBytes`/`Files.readString`によるファイル全体の即時メモリ展開の廃止、
+  ②`RandomAccessFile`+`FileChannel#map`（mmap）による必要範囲のみの読み込み、
+  ③Piece Table方式の踏襲、④行オフセットテーブルの遅延構築、⑤ビューポート限定描画、
+  ⑥マルチバイト文字境界の考慮、の6点。
+- **調査結果（着手前）**: `ModalEditor.readFileContentForBuffer`が`Files.readAllBytes`+
+  `new String(...)`でファイル全体を毎回コピー・保持し、`PieceTable.original`はコンストラクタ
+  時点で受け取った`String`をそのまま持つ設計だった。さらに`ModalEditor.refreshCanvasTextCache()`
+  が編集のたびに`buffer.getText()`（全文再構築）→`split("\n",-1)`（全行配列化）を行っており、
+  `offsetAt()`はこの配列を毎回先頭から合算していた（69箇所から呼ばれる）。行オフセット索引は
+  存在せず、`PieceTable.offsetOfLine()`は毎回ピースを文字単位で線形走査していた。
+- **既存Skillとの矛盾の確認**: `.claude/skills/editor-buffer-architecture/SKILL.md`は
+  「`original`は`Files.readString()`で読んだ`String`をそのまま保持する」「想定規模は数百〜
+  数十万行」と明記しており、GB級対応はこれと正面から矛盾する。CLAUDE.mdの方針に従い、
+  実装前にユーザーへ確認を取った。ユーザーの選択: 「Skillを更新して全面mmap化を進める」
+  「EditorCanvasのAPIをrow配列からPieceTable直接参照に変更する」（後者は結果的にStage④の
+  スコープ判断に反映——後述）。
+- **実装した範囲（Stage①②③）**:
+  - `MappedFileSource`（新規）: `RandomAccessFile`+`FileChannel#map`によるチャンク分割mmap
+    読み込み。UTF-8継続バイトを辿るだけの軽量な文字境界スナップ（`safeBoundaryAtOrBefore`）で
+    マルチバイト文字化けを防止。
+  - `LazyLineIndex`（新規）: 行番号⇔バイト⇔文字(UTF-16)オフセットの相互変換を、4096行おきの
+    スパースなチェックポイントで遅延構築。
+  - `Piece.Source.MAPPED`（追加）・`PieceTable(MappedFileSource)`（新規コンストラクタ）:
+    座標系を既存の`ORIGINAL`と同じ「文字オフセット」に統一したことで、`insert`/`delete`の
+    ピース分割ロジックは一切変更せずに済んだ（詳細判断はSKILL.md参照）。
+  - `ModalEditor`: 8MiB以上のファイルは`readLargeFileViaMmap()`経由で開き、
+    `Files.readAllBytes`によるバイナリ判定・.class判定・CRLF正規化は行わない
+    （先頭64KiBのみのバイナリ判定にとどめる）。
+- **Stage④（ビューポート限定描画）を見送った判断**: `canvasCachedLines`（`String[]`、文書全体を
+  表す）は`EditorCanvas`の描画だけでなく`offsetAt`・カーソルクランプ・検索・置換・
+  リファクタリング等60箇所以上から「絶対行番号でインデックスアクセスできる配列」として
+  直接参照されていた。ビューポート窓に置き換えると、大容量ファイルに限ってこれら60箇所以上が
+  暗黙に壊れる（グレップジャンプ・行番号ジャンプ・置換の誤動作等）重大な回帰リスクがあると
+  判断し、本Phaseでは見送った。安全に実施するには消費側60箇所以上を絶対行番号ベースの
+  遅延アクセスAPIへ置き換える改修が別途必要（詳細はSKILL.mdの該当節参照）。
+- **既知のスコープ境界**: ファイルサイズ上限は実質`Integer.MAX_VALUE`バイト強（`Piece`が
+  `int`座標のため）。`PieceTable(MappedFileSource)`コンストラクタは初期ピースの文字数確定の
+  ためファイル全体を1回だけバイト分類スキャンする（デコード・確保は伴わない軽量なもの）。
+  CRLF正規化・BOM除去・.class判定はmmap経路では行わない。大容量バイナリファイルは
+  結局`Files.readAllBytes`にフォールバックする（`Mode.BINARY`の既存実装が`byte[]`全体保持
+  前提のため、今回のスコープ外）。全項目をSKILL.mdの表に記録済み。
+- **テスト**: `MappedFileSourceTest`(8/8)・`LazyLineIndexTest`(10/10)・
+  `PieceTableMappedTest`(21/21、mmap経路と従来のString経路の操作結果を突き合わせて検証)・
+  `LargeFileOpenTest`(9/9、`ModalEditor`経由で9MiB超のASCII/マルチバイトファイルを開き、
+  内容一致・編集・保存・末尾付近への行ジャンプを検証)を新規追加。既存の全テストスイートを
+  実行し、`ScrollTest`(18/20)・`ModalEditorTest`(286/287)・`FilerTest`(122/123)の
+  既存ベースラインFAILがこの変更の前後で変わらないこと（git stashで変更前と比較して同一の
+  FAILのみであること）を確認済み。
+
+## mmap経路のCRLF/BOM対応（大容量ファイル対応 Phase 3 続報・2026-08-02）
+
+- **背景**: 上記「大容量ファイル対応（mmap化）」のレビューで、「mmap経路（8MiB以上）はCRLF
+  正規化・BOM除去を行わない」という初版のスコープ境界が、性能とは別軸のユーザー可視バグ
+  （同じ内容のファイルでもサイズだけで改行・BOMの見え方が変わる）に該当するという指摘を受け、
+  Stage④（ビューポート限定描画）より優先して対応した。
+- **対応方針の検討**: 「デコード後の文字列に対して`\r\n`除去を行う」という素朴な案は、
+  `getTextInRange`が返す文字列の長さが要求した文字数（`toOffset - fromOffset`）と一致すると
+  いう既存の暗黙の前提を壊す（除去した分だけ短くなる）ため、そのままでは採用できないと判断した。
+  最終的に採用した方式: `LazyLineIndex`の文字カウント自体に「直後が`\n`である`\r`は0幅」という
+  ルールを追加し、文字オフセットの境界が原理的に`\r`と`\n`の間で割れないようにしたうえで、
+  デコード後の文字列に単純な`"\r\n"→"\n"`置換をかける。境界が割れない保証があるため、この
+  置換は前提を壊さない（要求文字数と結果の文字列長が必ず一致する）。BOMは`LazyLineIndex`の
+  走査開始バイトオフセットを3バイトずらすだけで対応（全文コピー不要）。
+- **判断が正しいことの確認**: 既存の小規模ファイル経路（`Files.readAllBytes`+
+  `new String(...).replace("\r\n","\n")`）が孤立した`\r`（`\n`を伴わない旧Mac形式）を
+  変更しない仕様であることを確認し、mmap経路も同じ仕様（`\r\n`ペアのみ対象、孤立`\r`は保持）に
+  揃えた。
+- **テスト**: `MappedCrlfBomTest`（新規、12/12）でCRLF単体・孤立`\r`・BOM単体・BOM+CRLF複合・
+  編集（insert）後の整合性を検証。既存の全テストスイートを再実行し、`ScrollTest`(18/20)・
+  `ModalEditorTest`(286/287)・`FilerTest`(122/123)の既存ベースラインFAILがこの変更の前後で
+  変わらないことを確認済み。
