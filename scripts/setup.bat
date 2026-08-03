@@ -27,6 +27,14 @@ set FONT_TTF=%FONTS_DIR%\IBMPlexMono-Regular.ttf
 set FONT_LICENSE=%FONTS_DIR%\IBMPlexMono-OFL.txt
 set FONT_TTF_URL=https://raw.githubusercontent.com/IBM/plex/master/packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf
 set FONT_LICENSE_URL=https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt
+set JB_FONT_TTF=%FONTS_DIR%\JetBrainsMono-Regular.ttf
+set JB_FONT_LICENSE=%FONTS_DIR%\JetBrainsMono-OFL.txt
+set JB_FONT_TTF_URL=https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/fonts/ttf/JetBrainsMono-Regular.ttf
+set JB_FONT_LICENSE_URL=https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/OFL.txt
+set CM_FONT_TTF=%FONTS_DIR%\ComicMono.ttf
+set CM_FONT_LICENSE=%FONTS_DIR%\ComicMono-LICENSE.txt
+set CM_FONT_TTF_URL=https://raw.githubusercontent.com/dtinth/comic-mono-font/master/ComicMono.ttf
+set CM_FONT_LICENSE_URL=https://raw.githubusercontent.com/dtinth/comic-mono-font/master/LICENSE
 
 if not exist "%LIB_DIR%\" mkdir "%LIB_DIR%\"
 
@@ -167,14 +175,14 @@ rem committed, since lib\ is gitignored the same way as src.zip/openjdk-native a
 :setup_fonts
 if exist "%FONT_TTF%" (
     echo IBM Plex Mono Regular already exists: %FONT_TTF%
-    goto :setup_done
+    goto :setup_fonts_jb
 )
 
 where curl >nul 2>&1
 if %errorlevel% neq 0 (
     echo WARNING: curl not found; skipping IBM Plex Mono Regular download.
     echo          :font 1 will fall back to a substitute monospace font.
-    goto :setup_done
+    goto :setup_fonts_jb
 )
 
 echo === Downloading IBM Plex Mono Regular SIL OFL 1.1 ===
@@ -184,13 +192,79 @@ if %errorlevel% neq 0 (
     echo WARNING: failed to download IBM Plex Mono Regular from %FONT_TTF_URL%
     echo          :font 1 will fall back to a substitute monospace font.
     if exist "%FONT_TTF%.tmp" del "%FONT_TTF%.tmp"
-    goto :setup_done
+    goto :setup_fonts_jb
 )
 move /y "%FONT_TTF%.tmp" "%FONT_TTF%" >nul
 echo Saved: %FONT_TTF%
 
 if not exist "%FONT_LICENSE%" (
     curl -fsSL -o "%FONT_LICENSE%" "%FONT_LICENSE_URL%"
+)
+
+rem ---- 5. Fetch JetBrains Mono Regular (TTF) ----
+rem Font selectable via :font 2. Distributed under SIL OFL 1.1.
+
+:setup_fonts_jb
+if exist "%JB_FONT_TTF%" (
+    echo JetBrains Mono Regular already exists: %JB_FONT_TTF%
+    goto :setup_fonts_cm
+)
+
+where curl >nul 2>&1
+if %errorlevel% neq 0 (
+    echo WARNING: curl not found; skipping JetBrains Mono Regular download.
+    echo          :font 2 will fall back to a substitute monospace font.
+    goto :setup_fonts_cm
+)
+
+echo === Downloading JetBrains Mono Regular SIL OFL 1.1 ===
+if not exist "%FONTS_DIR%\" mkdir "%FONTS_DIR%\"
+curl -fsSL -o "%JB_FONT_TTF%.tmp" "%JB_FONT_TTF_URL%"
+if %errorlevel% neq 0 (
+    echo WARNING: failed to download JetBrains Mono Regular from %JB_FONT_TTF_URL%
+    echo          :font 2 will fall back to a substitute monospace font.
+    if exist "%JB_FONT_TTF%.tmp" del "%JB_FONT_TTF%.tmp"
+    goto :setup_fonts_cm
+)
+move /y "%JB_FONT_TTF%.tmp" "%JB_FONT_TTF%" >nul
+echo Saved: %JB_FONT_TTF%
+
+if not exist "%JB_FONT_LICENSE%" (
+    curl -fsSL -o "%JB_FONT_LICENSE%" "%JB_FONT_LICENSE_URL%"
+)
+
+rem ---- 6. Fetch Comic Mono (TTF) ----
+rem Font selectable via :font 3. Distributed under the MIT License.
+rem Official distribution page: https://dtinth.github.io/comic-mono-font/
+rem (fetched here from the dtinth/comic-mono-font GitHub repo instead).
+
+:setup_fonts_cm
+if exist "%CM_FONT_TTF%" (
+    echo Comic Mono already exists: %CM_FONT_TTF%
+    goto :setup_done
+)
+
+where curl >nul 2>&1
+if %errorlevel% neq 0 (
+    echo WARNING: curl not found; skipping Comic Mono download.
+    echo          :font 3 will fall back to a substitute monospace font.
+    goto :setup_done
+)
+
+echo === Downloading Comic Mono MIT License ===
+if not exist "%FONTS_DIR%\" mkdir "%FONTS_DIR%\"
+curl -fsSL -o "%CM_FONT_TTF%.tmp" "%CM_FONT_TTF_URL%"
+if %errorlevel% neq 0 (
+    echo WARNING: failed to download Comic Mono from %CM_FONT_TTF_URL%
+    echo          :font 3 will fall back to a substitute monospace font.
+    if exist "%CM_FONT_TTF%.tmp" del "%CM_FONT_TTF%.tmp"
+    goto :setup_done
+)
+move /y "%CM_FONT_TTF%.tmp" "%CM_FONT_TTF%" >nul
+echo Saved: %CM_FONT_TTF%
+
+if not exist "%CM_FONT_LICENSE%" (
+    curl -fsSL -o "%CM_FONT_LICENSE%" "%CM_FONT_LICENSE_URL%"
 )
 
 :setup_done
@@ -200,3 +274,5 @@ if exist "%SRC_ZIP%"    echo   src.zip    : %SRC_ZIP%
 if exist "%NATIVE_DIR%" echo   native src : %NATIVE_DIR%
 if exist "%HOTSPOT_DIR%" echo   hotspot src: %HOTSPOT_DIR%
 if exist "%FONT_TTF%"   echo   font       : %FONT_TTF%
+if exist "%JB_FONT_TTF%" echo   font       : %JB_FONT_TTF%
+if exist "%CM_FONT_TTF%" echo   font       : %CM_FONT_TTF%

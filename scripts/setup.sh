@@ -150,9 +150,75 @@ else
     fi
 fi
 
+# ---- 5. JetBrains Mono Regular (TTF) の取得 ----
+# :font 2 で選択できる半角ASCIIフォント。SIL OFL 1.1 で配布されている。
+# 上記IBM Plex Monoと同じ理由でsetup.sh経由でダウンロードする。
+JB_FONT_TTF="$FONTS_DIR/JetBrainsMono-Regular.ttf"
+JB_FONT_LICENSE="$FONTS_DIR/JetBrainsMono-OFL.txt"
+JB_FONT_TTF_URL="https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/fonts/ttf/JetBrainsMono-Regular.ttf"
+JB_FONT_LICENSE_URL="https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/OFL.txt"
+
+if [ -f "$JB_FONT_TTF" ]; then
+    echo "JetBrains Mono Regular already exists: $JB_FONT_TTF"
+else
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "WARNING: curl not found; skipping JetBrains Mono Regular download."
+        echo "         :font 2 will fall back to a substitute monospace font."
+    else
+        echo "=== Downloading JetBrains Mono Regular (SIL OFL 1.1) ==="
+        mkdir -p "$FONTS_DIR"
+        if curl -fsSL -o "$JB_FONT_TTF.tmp" "$JB_FONT_TTF_URL"; then
+            mv "$JB_FONT_TTF.tmp" "$JB_FONT_TTF"
+            echo "Saved: $JB_FONT_TTF"
+        else
+            echo "WARNING: failed to download JetBrains Mono Regular from $JB_FONT_TTF_URL"
+            echo "         :font 2 will fall back to a substitute monospace font."
+            rm -f "$JB_FONT_TTF.tmp"
+        fi
+        if [ -f "$JB_FONT_TTF" ] && [ ! -f "$JB_FONT_LICENSE" ]; then
+            curl -fsSL -o "$JB_FONT_LICENSE" "$JB_FONT_LICENSE_URL" \
+                || echo "WARNING: failed to download the OFL license text (non-fatal)."
+        fi
+    fi
+fi
+
+# ---- 6. Comic Mono Regular (TTF) の取得 ----
+# :font 3 で選択できる半角ASCIIフォント。配布元: https://dtinth.github.io/comic-mono-font/
+# （実体は GitHub リポジトリ dtinth/comic-mono-font）。MIT License で配布されている。
+CM_FONT_TTF="$FONTS_DIR/ComicMono.ttf"
+CM_FONT_LICENSE="$FONTS_DIR/ComicMono-LICENSE.txt"
+CM_FONT_TTF_URL="https://raw.githubusercontent.com/dtinth/comic-mono-font/master/ComicMono.ttf"
+CM_FONT_LICENSE_URL="https://raw.githubusercontent.com/dtinth/comic-mono-font/master/LICENSE"
+
+if [ -f "$CM_FONT_TTF" ]; then
+    echo "Comic Mono already exists: $CM_FONT_TTF"
+else
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "WARNING: curl not found; skipping Comic Mono download."
+        echo "         :font 3 will fall back to a substitute monospace font."
+    else
+        echo "=== Downloading Comic Mono (MIT License) ==="
+        mkdir -p "$FONTS_DIR"
+        if curl -fsSL -o "$CM_FONT_TTF.tmp" "$CM_FONT_TTF_URL"; then
+            mv "$CM_FONT_TTF.tmp" "$CM_FONT_TTF"
+            echo "Saved: $CM_FONT_TTF"
+        else
+            echo "WARNING: failed to download Comic Mono from $CM_FONT_TTF_URL"
+            echo "         :font 3 will fall back to a substitute monospace font."
+            rm -f "$CM_FONT_TTF.tmp"
+        fi
+        if [ -f "$CM_FONT_TTF" ] && [ ! -f "$CM_FONT_LICENSE" ]; then
+            curl -fsSL -o "$CM_FONT_LICENSE" "$CM_FONT_LICENSE_URL" \
+                || echo "WARNING: failed to download the MIT license text (non-fatal)."
+        fi
+    fi
+fi
+
 echo ""
 echo "=== Setup complete ==="
 [ -f "$SRC_ZIP" ]    && echo "  src.zip    : $SRC_ZIP"
 [ -d "$NATIVE_DIR" ] && echo "  native src : $NATIVE_DIR"
 [ -d "$HOTSPOT_DIR" ] && echo "  hotspot src: $HOTSPOT_DIR"
 [ -f "$FONT_TTF" ]   && echo "  font       : $FONT_TTF"
+[ -f "$JB_FONT_TTF" ] && echo "  font       : $JB_FONT_TTF"
+[ -f "$CM_FONT_TTF" ] && echo "  font       : $CM_FONT_TTF"
