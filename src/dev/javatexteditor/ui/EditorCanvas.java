@@ -148,6 +148,17 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private record UiGlyphKey(int codePoint, int cellW, int cellH, int rgb) {}
     private final Map<UiGlyphKey, BufferedImage> uiGlyphCache = new HashMap<>();
 
+    // 本文中の非ASCII文字（日本語コメント等、MiscFixedBold9x15が非対応でSwingフォントに
+    // フォールバックする文字）用グリフキャッシュ。以前はキャッシュせず毎paintごとに
+    // g2.drawString()でラスタライズしていたため、フォントサイズを大きくするほど
+    // 1文字あたりの再描画コストが増え、カーソル移動・スクロールの体感が重くなっていた
+    // （2026-08 フォントサイズ別描画コスト調査、詳細は gui-rendering-pipeline スキル参照）。
+    // ASCII本文キャッシュ(glyphCacheFg)と同じ理由でセルサイズ・テーマが変わったら
+    // invalidateGlyphCache() でクリアする。UiGlyphKeyを再利用しているが、非ASCII文字の
+    // codePointはbitmapFont.isSupported()の範囲(0x20-0x7E)と重ならないためuiGlyphCacheとの
+    // キー衝突は起きない一方、意味的に別キャッシュのため独立したMapにしてある。
+    private final Map<UiGlyphKey, BufferedImage> nonAsciiGlyphCache = new HashMap<>();
+
     // 非ASCII文字描画用フォールバック Swing フォント（セルサイズに合わせて動的生成）
     private Font swingFont = null;
     private int  swingFontCellH = 0;   // swingFont を生成した時の cellH
@@ -737,12 +748,44 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         glyphCacheFg.clear();
         glyphCacheBg.clear();
         uiGlyphCache.clear();
+        nonAsciiGlyphCache.clear();
     }
 
     private BufferedImage getUiGlyph(int codePoint, int cw, int ch, Color color) {
         UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
         return uiGlyphCache.computeIfAbsent(key,
             k -> bitmapFont.renderGlyph(codePoint, cw, ch, color.getRGB()));
+    }
+
+    /**
+     * 本文中の非ASCII文字（MiscFixedBold9x15非対応、Swingフォントにフォールバックする文字）を
+     * 1文字ぶんのBufferedImageとしてレンダリングしキャッシュする。cw/chはASCII本文と同じ
+     * 1セル分の幅・高さ（全角文字はxForCol/charCellWidth側で2セル幅として扱われているため、
+     * ここでは1セル分だけ描画すれば足りる。呼び出し側は widthMult 個ぶん並べて配置しない点に注意
+     * ——描画自体は1グリフ画像で完結し、2セル目には何も描かれないが、全角文字の視覚的な字面は
+     * 概ね1セル幅に収まるビットマップフォントの描き方に合わせている）。
+     */
+    private BufferedImage getNonAsciiGlyph(int codePoint, int cw, int ch, Color color) {
+        UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
+        return nonAsciiGlyphCache.computeIfAbsent(key,
+            k -> renderNonAsciiGlyph(codePoint, cw, ch, color));
+    }
+
+    private BufferedImage renderNonAsciiGlyph(int codePoint, int cw, int ch, Color color) {
+        int widthMult = charCellWidth(codePoint);
+        int w = Math.max(1, cw * widthMult);
+        int h = Math.max(1, ch);
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D gg = img.createGraphics();
+        gg.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        gg.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        gg.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+        gg.setFont(getSwingFont());
+        gg.setColor(color);
+        int baselineY = h - bitmapFont.descentPixels(h);
+        gg.drawString(new String(Character.toChars(codePoint)), 0, baselineY);
+        gg.dispose();
+        return img;
     }
 
     /**
@@ -1493,7 +1536,6 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             List<SyntaxToken> tokens) {
         int x = gutterWidth - scrollOffsetX;
         int cellTopOffset = cellH; // y - cellTopOffset = cellTopY
-        int swingBaselineY = y - bitmapFont.descentPixels(cellH);
         int tokenIdx = 0;
         for (int i = 0; i < line.length(); ) {
             int codePoint = line.codePointAt(i);
@@ -1522,8 +1564,9 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                     }
                     g2.drawImage(glyph, x, y - cellTopOffset, null);
                 } else {
-                    g2.setColor(isErrorLine ? ERROR_COLOR : color);
-                    g2.drawString(new String(Character.toChars(codePoint)), x, swingBaselineY);
+                    Color drawColor = isErrorLine ? ERROR_COLOR : color;
+                    BufferedImage glyph = getNonAsciiGlyph(codePoint, charWidth, cellH, drawColor);
+                    g2.drawImage(glyph, x, y - cellTopOffset, null);
                 }
             }
             x += charPixelWidth;
