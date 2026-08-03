@@ -97,6 +97,47 @@ public class SyntaxHighlighterTest {
         total++; pass += check("detect: jdk-sourceで.cはC(JNIグルーコード)",
             SourceLanguage.detect("*jdk-source:openjdk-native/java.base/share/native/libjava/System.c*") == SourceLanguage.C);
 
+        // --- computeBlockCommentStartsIncremental: 差分更新が全文再計算と常に一致すること ---
+        {
+            String[] oldLines = {"class A {", "int x = 1;", "int y = 2;", "}"};
+            boolean[] oldStarts = SyntaxHighlighter.computeBlockCommentStarts(oldLines, SourceLanguage.JAVA);
+
+            // 1. 中間の1行だけ内容を変更（ブロックコメント状態には影響しない編集）
+            String[] newLines1 = {"class A {", "int x = 99;", "int y = 2;", "}"};
+            boolean[] inc1 = SyntaxHighlighter.computeBlockCommentStartsIncremental(
+                oldLines, oldStarts, newLines1, SourceLanguage.JAVA);
+            boolean[] full1 = SyntaxHighlighter.computeBlockCommentStarts(newLines1, SourceLanguage.JAVA);
+            total++; pass += check("差分更新: 単純な1行編集で全文再計算と一致", java.util.Arrays.equals(inc1, full1));
+
+            // 2. 編集によって新たにブロックコメントが開始し、以降の行の状態が変わるケース
+            //   （収束せず末尾まで再計算が波及することを確認）
+            String[] newLines2 = {"class A {", "/* int x = 99;", "int y = 2;", "}"};
+            boolean[] inc2 = SyntaxHighlighter.computeBlockCommentStartsIncremental(
+                oldLines, oldStarts, newLines2, SourceLanguage.JAVA);
+            boolean[] full2 = SyntaxHighlighter.computeBlockCommentStarts(newLines2, SourceLanguage.JAVA);
+            total++; pass += check("差分更新: ブロックコメント開始行の編集が後続行へ正しく波及", java.util.Arrays.equals(inc2, full2));
+            total++; pass += check("差分更新: 波及後は3行目もブロックコメント継続扱い", inc2[2]);
+
+            // 3. 末尾行だけを編集（追記に相当。前方一致走査が最長になるケース）
+            String[] newLines3 = {"class A {", "int x = 1;", "int y = 2;", "} // trailing"};
+            boolean[] inc3 = SyntaxHighlighter.computeBlockCommentStartsIncremental(
+                oldLines, oldStarts, newLines3, SourceLanguage.JAVA);
+            boolean[] full3 = SyntaxHighlighter.computeBlockCommentStarts(newLines3, SourceLanguage.JAVA);
+            total++; pass += check("差分更新: 末尾行だけの編集でも全文再計算と一致", java.util.Arrays.equals(inc3, full3));
+
+            // 4. 行数が変化する編集は安全側にフォールバックし、全文再計算と一致する
+            String[] newLines4 = {"class A {", "int x = 1;", "int y = 2;", "int z = 3;", "}"};
+            boolean[] inc4 = SyntaxHighlighter.computeBlockCommentStartsIncremental(
+                oldLines, oldStarts, newLines4, SourceLanguage.JAVA);
+            boolean[] full4 = SyntaxHighlighter.computeBlockCommentStarts(newLines4, SourceLanguage.JAVA);
+            total++; pass += check("差分更新: 行数変化はフォールバックし全文再計算と一致", java.util.Arrays.equals(inc4, full4));
+
+            // 5. oldLines/oldStarts が無い（初回相当）場合も全文再計算と一致する
+            boolean[] inc5 = SyntaxHighlighter.computeBlockCommentStartsIncremental(
+                null, null, newLines1, SourceLanguage.JAVA);
+            total++; pass += check("差分更新: 直前情報が無ければ全文再計算と一致", java.util.Arrays.equals(inc5, full1));
+        }
+
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

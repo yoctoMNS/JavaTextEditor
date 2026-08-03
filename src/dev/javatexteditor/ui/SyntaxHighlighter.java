@@ -64,6 +64,57 @@ public final class SyntaxHighlighter {
         return starts;
     }
 
+    /**
+     * computeBlockCommentStarts() の差分更新版。1文字入力のたびに文書全体を
+     * tokenizeLine() し直す O(文書行数) のコストを避けるため、直前の結果
+     * （oldLines/oldStarts）と比較し、実際に変化した行の周辺だけを再計算する。
+     *
+     * <p>正しさの保証（推測に頼らない）: 呼び出し元からの「この行が変わった」という
+     * ヒントは一切受け取らない。まず新旧の行配列を先頭から素朴に String#equals() で
+     * 比較し、実際に内容が異なる最初の行（firstDiff）を自分で確定させる。そこから
+     * tokenizeLine() を前方に再実行し、各行で「新旧の行内容が一致し、かつ新たに
+     * 計算した終端状態が旧キャッシュの次行開始状態と一致する」ことを確認できた時点
+     * （収束点）で打ち切り、それ以降は oldStarts をそのまま使い続ける。この収束判定
+     * 自体が内容比較に基づく検証であり、"おそらくここまで" という当て推量ではない。
+     *
+     * <p>計算量: 行数を n、実際に変化した行（firstDiff）が末尾から数えて k 行目だとすると、
+     * 旧実装は入力のたびに常に O(n) の tokenizeLine（トークン列のList/record確保を伴う
+     * 相対的に重い処理）。本メソッドは firstDiff を見つけるための String#equals() 比較が
+     * 最悪 O(n) だが、比較コスト自体は tokenizeLine よりはるかに軽い（アロケーション無し）
+     * ため、行内容が単純な1行編集（文字入力・BackSpace等、行数が変わらない編集）では
+     * 実質 O(k)（変化行から収束するまでの数行分の tokenizeLine のみ）に収まる。
+     * 行数が変わる編集（改行の挿入・削除、複数行貼り付け等）は安全側に倒し
+     * computeBlockCommentStarts() へフォールバックする（呼び出し元の60箇所以上の
+     * canvasCachedLines 消費コードには一切手を入れず、この関数の内部だけで完結する）。
+     */
+    public static boolean[] computeBlockCommentStartsIncremental(
+            String[] oldLines, boolean[] oldStarts, String[] newLines, SourceLanguage lang) {
+        int n = newLines.length;
+        if (oldLines == null || oldStarts == null
+                || oldLines.length != n || oldStarts.length != n) {
+            return computeBlockCommentStarts(newLines, lang);
+        }
+        int firstDiff = 0;
+        while (firstDiff < n && newLines[firstDiff].equals(oldLines[firstDiff])) {
+            firstDiff++;
+        }
+        if (firstDiff == n) {
+            return oldStarts.clone(); // 内容差分なし（理論上は呼ばれない想定だが安全側の結果を返す）
+        }
+
+        boolean[] starts = oldStarts.clone();
+        boolean state = starts[firstDiff];
+        for (int i = firstDiff; i < n; i++) {
+            starts[i] = state;
+            state = tokenizeLine(newLines[i], lang, state).endsInBlockComment();
+            boolean nextIsUnchanged = (i + 1 < n) && newLines[i + 1].equals(oldLines[i + 1]);
+            if (nextIsUnchanged && state == oldStarts[i + 1]) {
+                break; // 収束: これ以降は旧キャッシュのまま正しいと検証できた
+            }
+        }
+        return starts;
+    }
+
     public static LineResult tokenizeLine(String line, SourceLanguage lang, boolean startInBlockComment) {
         int n = line.length();
         List<SyntaxToken> tokens = new ArrayList<>();

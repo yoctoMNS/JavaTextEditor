@@ -473,7 +473,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         this.cachedLines = lines;
         if (language != SourceLanguage.NONE) {
             if (lines != blockCommentLinesOwner || language != blockCommentLangOwner) {
-                blockCommentStartsAt = SyntaxHighlighter.computeBlockCommentStarts(lines, language);
+                // 直前の結果が同じ言語で残っていれば差分更新（変化した行の周辺のみ再走査）、
+                // 無ければ（初回・言語切替・行数変化）全文再計算にフォールバックする。
+                // どちらの経路でも SyntaxHighlighter 側で内容比較により正しさを検証済み。
+                blockCommentStartsAt = (blockCommentLinesOwner != null && language == blockCommentLangOwner)
+                    ? SyntaxHighlighter.computeBlockCommentStartsIncremental(
+                        blockCommentLinesOwner, blockCommentStartsAt, lines, language)
+                    : SyntaxHighlighter.computeBlockCommentStarts(lines, language);
                 blockCommentLinesOwner = lines;
                 blockCommentLangOwner = language;
             }
