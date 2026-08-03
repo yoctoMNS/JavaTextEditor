@@ -13,37 +13,30 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * IBM Plex Mono Regular (TTF, SIL OFL 1.1) を使って半角ASCII (0x20-0x7E) を
- * 描画するフォント。:font 1 で選択できる（既定は MiscFixedBold9x15、:font 0）。
- * 事前生成した固定サイズのビットマップ集合を持たず、任意の cellW×cellH に対して
- * ベクターアウトラインを非等方向（縦横別々）にスケールしてラスタライズする。これにより
- * Ctrl+Shift+矢印 でセル幅・高さを個別に伸縮する既存の可変仕様（横縦比率がネイティブ比率
- * からずれても破綻しない）を、複数の固定サイズを切り替える仕組み無しにそのまま満たす。
+ * JetBrains Mono Regular (TTF, SIL OFL 1.1) を使って半角ASCII (0x20-0x7E) を
+ * 描画するフォント。:font 2 で選択できる（既定は MiscFixedBold9x15、:font 0）。
+ * 実装は {@link IbmPlexMonoFont} と同一の設計（事前生成した固定サイズのビットマップ集合を
+ * 持たず、任意の cellW×cellH に対してベクターアウトラインを非等方向にスケールして
+ * ラスタライズする）をそのまま踏襲している。
  *
- * TTF実体は lib/fonts/IBMPlexMono-Regular.ttf に配置される（scripts/setup.sh/setup.bat が
+ * TTF実体は lib/fonts/JetBrainsMono-Regular.ttf に配置される（scripts/setup.sh/setup.bat が
  * ダウンロードする外部リソース。lib/ は .gitignore 対象のためリポジトリには含まれない）。
  * 見つからない場合は Font.MONOSPACED にフォールバックする。
  *
- * <p>{@link #BASE_CELL_W}/{@link #BASE_CELL_H}（Ctrl+Shift+矢印で一度もリサイズしていない
- * :font 1 選択直後の既定セルサイズ）は MiscFixedBold9x15 の値を流用せず、IBM Plex Mono
- * Regular 自体のフォントメトリクスから算出した値。TTF の hhea/hmtx テーブルを実測すると
- * unitsPerEm=1000・ascender=1025・descender=-275・advanceWidth('M')=600 であり、
- * このクラスが実際に描画で使う {@link FontMetrics}（AWT実測、ascent+descentがフォントの
- * 行高）でも advance/cellH ≒ 0.458（600/1310px相当、REF_SIZE=100pt換算で実測: advance=60,
- * ascent+descent=131）と、hhea由来の比率(600/1300≒0.4615)にほぼ一致する。この実測比率を
- * MiscFixedの既定高さ(15px)に当てはめて BASE_CELL_H=15・BASE_CELL_W=round(15*0.458)=7 とした
- * （幅だけを見て「9x15をそのまま流用」にならないよう、高さを既定値に合わせた上で幅を
- * 比率から逆算する形にしている。単純な3:5(0.6)ではなく実測比率を採用した理由は
- * font-and-statusline-animation SKILL.md 参照）。
+ * <p>{@link #BASE_CELL_W}/{@link #BASE_CELL_H} は、IbmPlexMonoFont と同じ手順（REF_SIZE=100pt
+ * でレンダリングした実測 FontMetrics から advance/(ascent+descent) 比率を求め、MiscFixedの
+ * 既定高さ15pxに当てはめて幅を逆算）で求めた値。JetBrains Mono Regular の実測は
+ * ascent=102・descent=30・advance('M')=60・比率≒0.4545 で、round(15*0.4545)=7 となり
+ * IBM Plex Mono と同じ BASE_CELL_W=7 になった（偶然の一致で、独自に測定した値）。
  */
-public final class IbmPlexMonoFont implements MonoFont {
+public final class JetBrainsMonoFont implements MonoFont {
 
     public static final int BASE_CELL_W = 7;
     public static final int BASE_CELL_H = 15;
     public static final int FIRST_CHAR  = 0x20;
     public static final int LAST_CHAR   = 0x7E;
 
-    public static final IbmPlexMonoFont INSTANCE = new IbmPlexMonoFont();
+    public static final JetBrainsMonoFont INSTANCE = new JetBrainsMonoFont();
 
     // 参照サイズでレンダリングして得たフォント固有の縦横比率を、実際のセルサイズへの
     // 非等方向スケール係数の算出に使う。参照サイズ自体の絶対値に意味はない。
@@ -56,7 +49,7 @@ public final class IbmPlexMonoFont implements MonoFont {
     private final int refCellH;
     private final boolean bundledFontLoaded;
 
-    private IbmPlexMonoFont() {
+    private JetBrainsMonoFont() {
         LoadResult lr = loadFontResult();
         this.bundledFontLoaded = lr.loaded();
         this.refFont = lr.font().deriveFont(REF_SIZE);
@@ -68,9 +61,9 @@ public final class IbmPlexMonoFont implements MonoFont {
     }
 
     /**
-     * lib/fonts/IBMPlexMono-Regular.ttf を実際に読み込めたかどうかを返す。
+     * lib/fonts/JetBrainsMono-Regular.ttf を実際に読み込めたかどうかを返す。
      * false の場合は Font.MONOSPACED へフォールバック済み（起動・描画自体は継続する）。
-     * :font 1 実行時にステータスバーへ setup.sh/setup.bat の実行を促す表示を出すために使う
+     * :font 2 実行時にステータスバーへ setup.sh/setup.bat の実行を促す表示を出すために使う
      * （ModalEditor.applyFontCommand参照）。
      */
     public boolean isBundledFontLoaded() { return bundledFontLoaded; }
@@ -104,9 +97,9 @@ public final class IbmPlexMonoFont implements MonoFont {
 
     private static Path findTtf() throws IOException {
         var found = CodeSourceLocator.findUpward(
-            IbmPlexMonoFont.class, "lib/fonts/IBMPlexMono-Regular.ttf", 4, Files::exists);
+            JetBrainsMonoFont.class, "lib/fonts/JetBrainsMono-Regular.ttf", 4, Files::exists);
         if (found.isPresent()) return found.get();
-        Path fromCwd = Path.of("lib", "fonts", "IBMPlexMono-Regular.ttf");
+        Path fromCwd = Path.of("lib", "fonts", "JetBrainsMono-Regular.ttf");
         if (Files.exists(fromCwd)) return fromCwd.toAbsolutePath();
         return null;
     }
@@ -132,9 +125,7 @@ public final class IbmPlexMonoFont implements MonoFont {
      * アウトラインを縦横別々のスケール（sx=cellW/参照アドバンス幅、
      * sy=cellH/参照アセント+ディセント）で変換してから描画するため、
      * cellW/cellH の比率がフォント本来の比率からずれても
-     * セル全体を過不足なく埋める（MiscFixedBold9x15の独立軸ニアレストネイバー
-     * 拡縮と同じ「セルに合わせて歪める」挙動を、アンチエイリアス付きの
-     * ベクター描画で実現したもの）。
+     * セル全体を過不足なく埋める（IbmPlexMonoFontと同じ方式）。
      */
     @Override
     public BufferedImage renderGlyph(int codePoint, int cellW, int cellH, int fgRgb) {

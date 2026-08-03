@@ -113,14 +113,19 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）。
     // cellW/cellH は「今アクティブなフォントの現在サイズ」を保持する実体で、
-    // フォントごとの独立した状態は miscCellW/H・plexCellW/H に退避する
-    // （setFontChoice()参照。片方のフォントをリサイズしても他方には一切影響しない）。
+    // フォントごとの独立した状態は miscCellW/H・plexCellW/H・jetbrainsCellW/H・
+    // comicCellW/H に退避する（setFontChoice()参照。1つのフォントをリサイズしても
+    // 他のフォントには一切影響しない）。
     private int cellW = MiscFixedBold9x15.BASE_CELL_W;
     private int cellH = MiscFixedBold9x15.BASE_CELL_H;
     private int miscCellW = MiscFixedBold9x15.BASE_CELL_W;
     private int miscCellH = MiscFixedBold9x15.BASE_CELL_H;
     private int plexCellW = IbmPlexMonoFont.BASE_CELL_W;
     private int plexCellH = IbmPlexMonoFont.BASE_CELL_H;
+    private int jetbrainsCellW = JetBrainsMonoFont.BASE_CELL_W;
+    private int jetbrainsCellH = JetBrainsMonoFont.BASE_CELL_H;
+    private int comicCellW = ComicMonoFont.BASE_CELL_W;
+    private int comicCellH = ComicMonoFont.BASE_CELL_H;
 
     // Ctrl+Shift+矢印でセルサイズを変更した直後、現在の幅×高さ(px)を3秒間だけ
     // 画面右上に表示して自動的に消えるオーバーレイ。sizeOverlayHideTimerは
@@ -524,34 +529,52 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
     public Theme getTheme() { return theme; }
 
+    /** フォントごとに退避したセルサイズ(w,h)の組。stashedCellSize()/setFontChoice()参照。 */
+    private record CellSize(int w, int h) {}
+
+    private CellSize stashedCellSize(FontChoice fc) {
+        return switch (fc) {
+            case MISC_FIXED     -> new CellSize(miscCellW, miscCellH);
+            case IBM_PLEX_MONO  -> new CellSize(plexCellW, plexCellH);
+            case JETBRAINS_MONO -> new CellSize(jetbrainsCellW, jetbrainsCellH);
+            case COMIC_MONO     -> new CellSize(comicCellW, comicCellH);
+        };
+    }
+
+    private void setStashedCellSize(FontChoice fc, int w, int h) {
+        switch (fc) {
+            case MISC_FIXED     -> { miscCellW = w; miscCellH = h; }
+            case IBM_PLEX_MONO  -> { plexCellW = w; plexCellH = h; }
+            case JETBRAINS_MONO -> { jetbrainsCellW = w; jetbrainsCellH = h; }
+            case COMIC_MONO     -> { comicCellW = w; comicCellH = h; }
+        }
+    }
+
+    private static MonoFont monoFontFor(FontChoice fc) {
+        return switch (fc) {
+            case MISC_FIXED     -> MiscFixedBold9x15.INSTANCE;
+            case IBM_PLEX_MONO  -> IbmPlexMonoFont.INSTANCE;
+            case JETBRAINS_MONO -> JetBrainsMonoFont.INSTANCE;
+            case COMIC_MONO     -> ComicMonoFont.INSTANCE;
+        };
+    }
+
     /**
      * 半角ASCIIフォントを切り替える（:font コマンド）。両ペインから独立に設定可能。
      *
-     * <p>切替元フォントの現在のセルサイズを miscCellW/H・plexCellW/H へ退避し、
-     * 切替先フォントの退避済みサイズ（Ctrl+Shift+矢印で一度も変更していなければ
-     * そのフォントの既定値のまま）を cellW/cellH へ復元する。これにより
-     * MiscFixedのセルサイズをPlex Monoが引き継ぐ（またはその逆）ことがない。
+     * <p>切替元フォントの現在のセルサイズを miscCellW/H・plexCellW/H・jetbrainsCellW/H・
+     * comicCellW/H へ退避し、切替先フォントの退避済みサイズ（Ctrl+Shift+矢印で一度も
+     * 変更していなければそのフォントの既定値のまま）を cellW/cellH へ復元する。これにより
+     * 1つのフォントのセルサイズを他のフォントが引き継ぐことがない。
      */
     public void setFontChoice(FontChoice fontChoice) {
         if (this.fontChoice == fontChoice) return;
-        if (this.fontChoice == FontChoice.MISC_FIXED) {
-            miscCellW = cellW;
-            miscCellH = cellH;
-        } else {
-            plexCellW = cellW;
-            plexCellH = cellH;
-        }
+        setStashedCellSize(this.fontChoice, cellW, cellH);
         this.fontChoice = fontChoice;
-        this.bitmapFont = (fontChoice == FontChoice.IBM_PLEX_MONO)
-            ? IbmPlexMonoFont.INSTANCE
-            : MiscFixedBold9x15.INSTANCE;
-        if (fontChoice == FontChoice.MISC_FIXED) {
-            cellW = miscCellW;
-            cellH = miscCellH;
-        } else {
-            cellW = plexCellW;
-            cellH = plexCellH;
-        }
+        this.bitmapFont = monoFontFor(fontChoice);
+        CellSize restored = stashedCellSize(fontChoice);
+        cellW = restored.w();
+        cellH = restored.h();
         cachedCharWidth = cellW;
         cachedLineHeight = cellH;
         invalidateGlyphCache();
@@ -704,13 +727,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     /** cellW/cellH（現在アクティブなフォントの現在サイズ）を、対応する退避フィールドへ書き戻す。 */
     private void stashCurrentCellSize() {
-        if (fontChoice == FontChoice.MISC_FIXED) {
-            miscCellW = cellW;
-            miscCellH = cellH;
-        } else {
-            plexCellW = cellW;
-            plexCellH = cellH;
-        }
+        setStashedCellSize(fontChoice, cellW, cellH);
     }
 
     /**

@@ -44,8 +44,10 @@ import dev.javatexteditor.telescope.TelescopePicker;
 import dev.javatexteditor.tutorial.Tutorial;
 import dev.javatexteditor.ui.CompletionView;
 import dev.javatexteditor.ui.EditorCanvas;
+import dev.javatexteditor.ui.ComicMonoFont;
 import dev.javatexteditor.ui.FontChoice;
 import dev.javatexteditor.ui.IbmPlexMonoFont;
+import dev.javatexteditor.ui.JetBrainsMonoFont;
 import dev.javatexteditor.ui.MiscFixedBold9x15;
 import dev.javatexteditor.ui.ImageRenderer;
 import dev.javatexteditor.ui.SelectionView;
@@ -3178,36 +3180,86 @@ public class ModalEditor {
     }
 
     /**
-     * :font 0（MiscFixed、既定）/ :font 1（IBM Plex Mono）で半角ASCIIフォントを切り替える。
+     * :font 0（MiscFixed、既定）/ :font 1（IBM Plex Mono）/ :font 2（JetBrains Mono）/
+     * :font 3（Comic Mono）で半角ASCIIフォントを切り替える。
      * 実際の描画への反映は syncCanvas() の canvas.setFontChoice() 経由。
+     *
+     * <p>IBM Plex Mono・JetBrains Mono・Comic Mono はいずれも lib/fonts/ 配下の
+     * TTF実体（scripts/setup.sh/setup.bat が取得）を Font.createFont() で読み込む方式のため、
+     * setup未実行でファイルが無い場合はコマンド自体は成功させつつ（Font.MONOSPACED への
+     * フォールバックで描画は継続する）、対処方法を明示したステータスメッセージに差し替える。
      */
     private void applyFontCommand(String arg) {
-        if (arg.equals("0")) {
-            fontChoice = FontChoice.MISC_FIXED;
-            statusMessage = "font: Misc Fixed";
-        } else if (arg.equals("1")) {
-            fontChoice = FontChoice.IBM_PLEX_MONO;
-            statusMessage = "font: IBM Plex Mono";
-        } else {
-            statusMessage = "E: usage :font 0 (Misc Fixed) | :font 1 (IBM Plex Mono)";
+        switch (arg) {
+            case "0" -> { fontChoice = FontChoice.MISC_FIXED;     statusMessage = "font: Misc Fixed"; }
+            case "1" -> { fontChoice = FontChoice.IBM_PLEX_MONO;  statusMessage = "font: IBM Plex Mono"; }
+            case "2" -> { fontChoice = FontChoice.JETBRAINS_MONO; statusMessage = "font: JetBrains Mono"; }
+            case "3" -> { fontChoice = FontChoice.COMIC_MONO;     statusMessage = "font: Comic Mono"; }
+            default -> {
+                statusMessage = "E: usage :font 0 (Misc Fixed) | :font 1 (IBM Plex Mono) | "
+                    + ":font 2 (JetBrains Mono) | :font 3 (Comic Mono)";
+                return;
+            }
+        }
+        if (isBundledFontFileMissing(fontChoice)) {
+            statusMessage = "font file not found for " + fontDisplayName(fontChoice)
+                + ". Run scripts/setup.sh (or setup.bat) to download it. Using the default font for now.";
         }
     }
 
+    /** IBM Plex Mono・JetBrains Mono・Comic Mono の同梱TTFが未取得(setup未実行)かどうか。 */
+    private static boolean isBundledFontFileMissing(FontChoice fc) {
+        return switch (fc) {
+            case IBM_PLEX_MONO  -> !IbmPlexMonoFont.INSTANCE.isBundledFontLoaded();
+            case JETBRAINS_MONO -> !JetBrainsMonoFont.INSTANCE.isBundledFontLoaded();
+            case COMIC_MONO     -> !ComicMonoFont.INSTANCE.isBundledFontLoaded();
+            case MISC_FIXED     -> false;
+        };
+    }
+
+    /** フォント名（:fsのエラーメッセージ・:fontのステータス表示に使う表示名）。 */
+    private static String fontDisplayName(FontChoice fc) {
+        return switch (fc) {
+            case MISC_FIXED     -> "Misc Fixed";
+            case IBM_PLEX_MONO  -> "IBM Plex Mono";
+            case JETBRAINS_MONO -> "JetBrains Mono";
+            case COMIC_MONO     -> "Comic Mono";
+        };
+    }
+
+    private static int fontBaseCellW(FontChoice fc) {
+        return switch (fc) {
+            case MISC_FIXED     -> MiscFixedBold9x15.BASE_CELL_W;
+            case IBM_PLEX_MONO  -> IbmPlexMonoFont.BASE_CELL_W;
+            case JETBRAINS_MONO -> JetBrainsMonoFont.BASE_CELL_W;
+            case COMIC_MONO     -> ComicMonoFont.BASE_CELL_W;
+        };
+    }
+
+    private static int fontBaseCellH(FontChoice fc) {
+        return switch (fc) {
+            case MISC_FIXED     -> MiscFixedBold9x15.BASE_CELL_H;
+            case IBM_PLEX_MONO  -> IbmPlexMonoFont.BASE_CELL_H;
+            case JETBRAINS_MONO -> JetBrainsMonoFont.BASE_CELL_H;
+            case COMIC_MONO     -> ComicMonoFont.BASE_CELL_H;
+        };
+    }
+
     /**
-     * :font 0 (MiscFixed)・:font 1 (IBM Plex Mono) それぞれ専用の絶対フォントサイズテーブル。
-     * どちらもそのフォント固有の既定セルサイズ(N=0)の整数倍(N+1)倍で10段階固定（N=0〜9）。
+     * :font 0 (MiscFixed)・:font 1 (IBM Plex Mono)・:font 2 (JetBrains Mono)・
+     * :font 3 (Comic Mono) それぞれ専用の絶対フォントサイズテーブル。
+     * いずれもそのフォント固有の既定セルサイズ(N=0)の整数倍(N+1)倍で10段階固定（N=0〜9）。
      * :fs Nは前回の状態に依存しないべき等な絶対値参照とする（2026-07-29 決定）。
-     * 2つのテーブルは互いに独立しており、一方の:fs実行がもう一方のフォントの
-     * セルサイズ状態（EditorCanvasのmiscCellW/H・plexCellW/H）に影響することはない
-     * （詳細はfont-and-statusline-animationスキル参照）。
+     * 各テーブルは互いに独立しており、あるフォントでの:fs実行が他のフォントの
+     * セルサイズ状態（EditorCanvasのmiscCellW/H・plexCellW/H・jetbrainsCellW/H・comicCellW/H）
+     * に影響することはない（詳細はfont-and-statusline-animationスキル参照）。
      */
     private static final int FONT_FS_STEPS = 10;
 
     /**
      * :fs <N> — フォントセルサイズを絶対値テーブルで変更する。
-     * MiscFixed(:font 0)選択中は9x15の整数倍固定10段階（N=0〜9、cellW=9*(N+1)・cellH=15*(N+1)）。
-     * IBM Plex Mono(:font 1)選択中はPlex Mono固有の既定セルサイズ(7x15、IbmPlexMonoFont.BASE_CELL_W/H)
-     * を基準(N=0)とした同形式の10段階（cellW=7*(N+1)・cellH=15*(N+1)）。
+     * 現在選択中のフォントの既定セルサイズ（N=0、fontBaseCellW/H参照）を基準とした
+     * 整数倍10段階（N=0〜9、cellW=baseW*(N+1)・cellH=baseH*(N+1)）。
      * Ctrl+Shift+矢印と同じ canvas.setInitialCellSize() 経由で反映する（範囲は同じ 5〜90 / 8〜150 にクランプされる）。
      * canvas を持たないテスト環境では no-op としエラーメッセージのみ表示する。
      */
@@ -3216,15 +3268,11 @@ public class ModalEditor {
             statusMessage = "E: no canvas";
             return;
         }
-        int baseW = (fontChoice == FontChoice.MISC_FIXED)
-            ? MiscFixedBold9x15.BASE_CELL_W
-            : IbmPlexMonoFont.BASE_CELL_W;
-        int baseH = (fontChoice == FontChoice.MISC_FIXED)
-            ? MiscFixedBold9x15.BASE_CELL_H
-            : IbmPlexMonoFont.BASE_CELL_H;
+        int baseW = fontBaseCellW(fontChoice);
+        int baseH = fontBaseCellH(fontChoice);
         String usage = "E: usage :fs 0-9 (0=" + baseW + "x" + baseH + " .. 9="
             + (baseW * FONT_FS_STEPS) + "x" + (baseH * FONT_FS_STEPS) + ", "
-            + (fontChoice == FontChoice.MISC_FIXED ? "Misc Fixed" : "IBM Plex Mono") + " 10 steps)";
+            + fontDisplayName(fontChoice) + " 10 steps)";
         int step;
         try {
             step = Integer.parseInt(arg.trim());

@@ -1,15 +1,15 @@
 package dev.javatexteditor.ui;
 
 /**
- * :font 0 (MiscFixed) / :font 1 (IBM Plex Mono) 切替時のセルサイズ独立性の
- * 回帰テスト（mainメソッド形式・JUnit不使用）。
+ * :font 0 (MiscFixed) / :font 1 (IBM Plex Mono) / :font 2 (JetBrains Mono) /
+ * :font 3 (Comic Mono) 切替時のセルサイズ独立性の回帰テスト（mainメソッド形式・JUnit不使用）。
  *
  * 従来 EditorCanvas.cellW/cellH は fontChoice に関わらず単一のグローバル状態を
  * 共有しており、MiscFixed(9x15)で表示中に:font 1へ切り替えるとPlex Monoが
  * MiscFixedのセルサイズをそのまま引き継いでしまうバグがあった（本来は
  * IbmPlexMonoFont.BASE_CELL_W/H=7x15 に復元されるべき）。この修正で
- * EditorCanvasにフォントごとの独立したセルサイズ退避（miscCellW/H・plexCellW/H）を
- * 追加した。詳細はfont-and-statusline-animationスキル参照。
+ * EditorCanvasにフォントごとの独立したセルサイズ退避（miscCellW/H・plexCellW/H・
+ * jetbrainsCellW/H・comicCellW/H）を追加した。詳細はfont-and-statusline-animationスキル参照。
  */
 public class FontCellSizeIndependenceTest {
     private static int pass = 0;
@@ -21,6 +21,9 @@ public class FontCellSizeIndependenceTest {
         testSwitchBackToMiscFixedRestoresMiscDefault();
         testResizingOneFontDoesNotAffectTheOther();
         testRoundTripPreservesEachFontsCustomSize();
+        testSwitchToJetBrainsMonoWithoutResizeUsesItsDefault();
+        testSwitchToComicMonoWithoutResizeUsesItsDefault();
+        testAllFourFontsKeepIndependentCustomSizes();
 
         int fail = total - pass;
         System.out.println("---");
@@ -85,6 +88,51 @@ public class FontCellSizeIndependenceTest {
         canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
         check(":font 0 -> :font 1 でPlex Monoのカスタム幅が保持される", 28, canvas.getCellW());
         check(":font 0 -> :font 1 でPlex Monoのカスタム高さが保持される", 60, canvas.getCellH());
+    }
+
+    static void testSwitchToJetBrainsMonoWithoutResizeUsesItsDefault() {
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setFontChoice(FontChoice.JETBRAINS_MONO);
+        check(":font 2直後はJetBrains Mono本来の既定幅になる",
+            JetBrainsMonoFont.BASE_CELL_W, canvas.getCellW());
+        check(":font 2直後はJetBrains Mono本来の既定高さになる",
+            JetBrainsMonoFont.BASE_CELL_H, canvas.getCellH());
+    }
+
+    static void testSwitchToComicMonoWithoutResizeUsesItsDefault() {
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setFontChoice(FontChoice.COMIC_MONO);
+        check(":font 3直後はComic Mono本来の既定幅になる",
+            ComicMonoFont.BASE_CELL_W, canvas.getCellW());
+        check(":font 3直後はComic Mono本来の既定高さになる",
+            ComicMonoFont.BASE_CELL_H, canvas.getCellH());
+    }
+
+    static void testAllFourFontsKeepIndependentCustomSizes() {
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setInitialCellSize(18, 30); // MiscFixed
+        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        canvas.setInitialCellSize(28, 60); // IBM Plex Mono
+        canvas.setFontChoice(FontChoice.JETBRAINS_MONO);
+        canvas.setInitialCellSize(35, 75); // JetBrains Mono
+        canvas.setFontChoice(FontChoice.COMIC_MONO);
+        canvas.setInitialCellSize(42, 90); // Comic Mono
+
+        canvas.setFontChoice(FontChoice.MISC_FIXED);
+        check("4フォント間切替後もMiscFixedのカスタム幅が保持される", 18, canvas.getCellW());
+        check("4フォント間切替後もMiscFixedのカスタム高さが保持される", 30, canvas.getCellH());
+
+        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        check("4フォント間切替後もIBM Plex Monoのカスタム幅が保持される", 28, canvas.getCellW());
+        check("4フォント間切替後もIBM Plex Monoのカスタム高さが保持される", 60, canvas.getCellH());
+
+        canvas.setFontChoice(FontChoice.JETBRAINS_MONO);
+        check("4フォント間切替後もJetBrains Monoのカスタム幅が保持される", 35, canvas.getCellW());
+        check("4フォント間切替後もJetBrains Monoのカスタム高さが保持される", 75, canvas.getCellH());
+
+        canvas.setFontChoice(FontChoice.COMIC_MONO);
+        check("4フォント間切替後もComic Monoのカスタム幅が保持される", 42, canvas.getCellW());
+        check("4フォント間切替後もComic Monoのカスタム高さが保持される", 90, canvas.getCellH());
     }
 
     static void check(String name, Object expected, Object actual) {
