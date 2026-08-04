@@ -42,6 +42,9 @@ public class FilerTest {
         testCdCompleteQCancelsAndRestoresBuffer();
         testCdCompleteJKNavigation();
         testCdTabEmptyPrefixListsAllDirs();
+        testMkdirTabSingleCandidateCompletes();
+        testMkdirTabMultipleCandidatesOpensPseudoBuffer();
+        testMkdirCompleteEnterAppliesSelection();
         testParentDirEntryNavigatesUp();
         testColonInFilerEntersCommandModeAndCdSwitchesAndReloads();
         testColonCdNonexistentFromFilerPromptsAndCreates();
@@ -675,6 +678,58 @@ public class FilerTest {
             editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
             assertTrue("cd selection active (files excluded from candidates)", editor.isCdSelectionActive());
             assertEquals("only the 2 directories are candidates", 2, editor.getCdCandidates().size());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    // ── :mkdir タブ補完テスト ────────────────────────────────────────────────
+    // :cd と機構を共用しているため（handleCdTabCompletion(verb) の verb="mkdir"）、
+    // ここでは cd と同じ挙動になることだけを軽く確認する（詳細な分岐は :cd 側のテストで担保済み）。
+
+    static void testMkdirTabSingleCandidateCompletes() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_mkdir_tabcomp1_");
+        try {
+            Files.createDirectory(tmp.resolve("project"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "mkdir proj");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("stays in command mode after single-candidate completion", editor.isCommandMode());
+            assertEquals("commandBuffer completed to project/", "mkdir project/", editor.getCommandBuffer());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testMkdirTabMultipleCandidatesOpensPseudoBuffer() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_mkdir_tabcomp2_");
+        try {
+            Files.createDirectory(tmp.resolve("project-a"));
+            Files.createDirectory(tmp.resolve("project-b"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "mkdir proj");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("returns to NORMAL mode (not an overlay mode)", editor.isNormalMode());
+            assertTrue("cd selection is active (shared machinery)", editor.isCdSelectionActive());
+            assertEquals("two candidates found", 2, editor.getCdCandidates().size());
+        } finally {
+            deleteDir(tmp);
+        }
+    }
+
+    static void testMkdirCompleteEnterAppliesSelection() throws Exception {
+        Path tmp = Files.createTempDirectory("filer_mkdir_tabcomp3_");
+        try {
+            Files.createDirectory(tmp.resolve("aaa"));
+            Files.createDirectory(tmp.resolve("aab"));
+            ModalEditor editor = makeEditorWithFilerSupport(tmp);
+            typeCommandNoEnter(editor, "mkdir aa");
+            editor.processKey(KeyEvent.VK_TAB, KeyEvent.CHAR_UNDEFINED, 0);
+            String first = editor.getCdCandidates().get(0);
+            editor.processKey(KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED, 0);
+            assertTrue("Enter returns to command mode", editor.isCommandMode());
+            assertEquals("commandBuffer completed with mkdir verb preserved",
+                "mkdir " + first + "/", editor.getCommandBuffer());
         } finally {
             deleteDir(tmp);
         }

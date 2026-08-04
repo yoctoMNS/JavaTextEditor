@@ -156,13 +156,23 @@ FILER 内でサブディレクトリを選んで Enter を押した場合（`ope
 `docs/decision-log.md`「第2弾」節）。`exitFiler()` は `mode = Mode.NORMAL` にした上で
 `restoreFromStash(filerStash)` を呼ぶだけ。
 
-### `:cd` の TAB 補完（`handleCdTabCompletion()`）
+### `:cd`/`:mkdir` の TAB 補完（`handleCdTabCompletion(verb)`、2026-08-04に`:mkdir`対応追加）
 
-FILER 本体とは別の、`:cd` コマンドライン入力を助ける機能。`commandBuffer` が `"cd"`/`"cd "` で
-始まる場合のみ Tab を横取りし、`DirectoryLister.listDirectoryEntries()` で候補ディレクトリ
-（`Kind.DIRECTORY` のみ）を列挙して入力中の末尾セグメントを前方一致でフィルタする。候補0件は
-何もしない、1件はその場で `commandBuffer` を補完、複数件は `*cd候補*` 疑似バッファ（telescope
-と同型だが独立実装）で選択させる。
+FILER 本体とは別の、`:cd`/`:mkdir` コマンドライン入力を助ける機能。`commandBuffer` が
+`"<verb>"`/`"<verb> "`（`verb` は `"cd"` または `"mkdir"`）で始まる場合のみ Tab を横取りし、
+`DirectoryLister.listDirectoryEntries()` で候補ディレクトリ（`Kind.DIRECTORY` のみ）を列挙して
+入力中の末尾セグメントを前方一致でフィルタする。候補0件は何もしない、1件はその場で
+`commandBuffer` を補完、複数件は `*<verb>-candidates*` 疑似バッファ（telescope と同型だが
+独立実装）で選択させる。
+
+**`:mkdir` への対応方針**: `:e`/`:enew`/`:w`（`handleEditTabCompletion(verb)`）のように
+ファイルも候補に含める方式ではなく、`:cd` と全く同じ「ディレクトリのみ列挙」機構を
+`cdVerb`フィールド（"cd"|"mkdir"）で使い回した。理由は `:mkdir` が「既存の親ディレクトリを
+辿りながら、まだ存在しない末尾のディレクトリ名を入力する」用途のため、ファイルを候補に混ぜる
+意味が無く、`:cd` の「1件なら末尾に `/` を付けて継続入力可能にする」挙動がそのまま
+ネストしたディレクトリ作成（`mkdir a/b/c`）にも都合が良いため。`applyCdCandidate()`/
+`openCdCandidateBuffer()` 等の共通処理は `cdVerb` を見てコマンド名・疑似バッファ名
+（`*cd-candidates*`/`*mkdir-candidates*`）を出し分ける。
 
 ---
 
