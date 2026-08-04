@@ -186,6 +186,37 @@ PieceTable buffer = new PieceTable(originalText);
 > 変更のため、undo 粒度（1insert=1undo）は変わらない（PieceTableTest Test 17 で固定）。本文中のサンプル
 > コードは学習用に結合前の最小実装を保っている。実装の正は `src/dev/javatexteditor/buffer/PieceTable.java`。
 > ランダム位置編集の蓄積によるピース増加は残るため、ピースツリー化は引き続き将来課題。
+>
+> **追記（2026-08 メモリ増大バグ調査・軽量化リファクタリング Phase 4）**: 長時間の編集セッションで
+> ヒープ使用量が際限なく増え続けるバグの調査を受け、3段階で対策した。
+>
+> 1. **Undo/Redo履歴の上限化**（`UndoablePieceTable`）: `undoStack`/`redoStack`が無制限に
+>    積み上がっていたため、Vimの`'undolevels'`（既定1000）に倣い`MAX_UNDO_HISTORY=1000`を
+>    導入した。上限を超えたら最古のスナップショットを`ArrayDeque#removeLast()`で1件破棄する。
+>    **挙動変更**: 1000回を超えて連続編集すると、それより前の状態へはUndoで戻れなくなる
+>    （Vim本体と同じ既定挙動）。ステータス通知は追加していない（Vim本体も無通知のため）。
+> 2. **`delete()`時のピース統合**（`PieceTable`）: `insert()`側には既にADDピースへの結合が
+>    あったが`delete()`側には無く、挿入と削除を繰り返す編集（打っては消す）のたびにピースが
+>    分裂したまま蓄積していた。`delete()`の結果ピース列に対し、同一ソース・オフセット連続な
+>    ピースを1本に統合する`appendMerged()`/`piecesAreAdjacent()`を追加。insert側の結合
+>    （まだ確定していないaddBuffer末尾への追記）とは目的が異なるため実装は共有していないが、
+>    隣接判定条件（同一ソース・オフセット連続）は共通化した。
+> 3. **`addBuffer`のコンパクション**（`PieceTable#compactAddBuffer` /
+>    `UndoablePieceTable#maybeCompactAddBuffer`）: `addBuffer`は追記専用で、削除済みの
+>    文字列も含め永久に保持され続けていた。500編集ごと（`COMPACTION_INTERVAL`）に、
+>    現在の`pieces`とUndo/Redo両スタックの全スナップショットが参照するADD範囲の和集合を
+>    計算し、その範囲だけを新しい`StringBuilder`へ詰め直す。**Undo履歴が参照している範囲は
+>    正しさを最優先して絶対に捨てない**——「現在参照されていない」ではなく「pieces + 全
+>    スナップショットのどこからも参照されていない」を生存条件にすることで、Undo/Redoの
+>    正しさを一切犠牲にしていない（PieceTable自身はUndo/Redoスタックを持たないため、
+>    呼び出し側が保持するスナップショット列を引数で受け取り、書き換えた結果を返す設計に
+>    した。カプセル化を保ちつつ、addBufferの座標系を書き換える処理を1箇所に閉じ込めている）。
+>    実測: 「入力してはUndo、別の内容を入力し直す」を5000回繰り返すワークロード
+>    （典型的な試行錯誤編集）で、コンパクション無しでは`addBuffer`が約229,000文字まで
+>    膨張したのに対し、コンパクションありでは現在の文書長と同じ5000文字のまま安定した。
+>    40,000回のランダムinsert/delete/undo/redo操作＋定期的な強制コンパクションを
+>    `String`ベースの参照モデルと突き合わせるfuzzテスト（`CompactionFuzzTest`、テスト
+>    ハーネス群には未追加のスクラッチ検証用）でも不一致は0件だった。
 
 ---
 

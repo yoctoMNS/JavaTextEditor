@@ -115,7 +115,53 @@ public class PieceTableTest {
         t17.redo();
         pass += check("結合後redo", "ab", t17.getText());
 
-        int total = 26;
+        // Test 18: delete()のピース統合(Phase 2) - 挿入で分割されたピースが
+        // 削除で元通り連続範囲に戻ったら1本に統合される(典型的な「打っては消す」パターン)
+        PieceTable t18 = new PieceTable("ABCD");
+        t18.insert(2, "X");     // [ORIGINAL(0,2), ADD(0,1), ORIGINAL(2,2)] の3ピース
+        t18.delete(2, 1);       // Xを削除 -> ORIGINAL側の前後が再び連続するので1本に統合される
+        pass += check("挿入分割後の削除で再統合: テキスト", "ABCD", t18.getText());
+        pass += check("挿入分割後の削除で再統合: ピース数1", "1", String.valueOf(t18.getPieces().size()));
+
+        // Test 19: 「1文字挿入->1文字削除」を1000回繰り返してもピース数がほぼ一定範囲に収まる
+        // (統合が無いと1000回の反復でピースが際限なく増え続ける)
+        PieceTable t19 = new PieceTable("hello world");
+        for (int i = 0; i < 1000; i++) {
+            t19.insert(5, "Z");
+            t19.delete(5, 1);
+        }
+        pass += check("挿入/削除1000回反復後のテキスト整合", "hello world", t19.getText());
+        boolean pieceCountBounded = t19.getPieces().size() <= 5;
+        System.out.println((pieceCountBounded ? "[OK] " : "[FAIL] ")
+            + "挿入/削除1000回反復後もピース数が小さいまま(実測=" + t19.getPieces().size() + ")");
+        pass += pieceCountBounded ? 1 : 0;
+
+        // Test 20: 統合の境界条件 - 文書先頭・末尾での削除後の統合
+        PieceTable t20 = new PieceTable("0123456789");
+        t20.insert(0, "X");     // [ADD(0,1), ORIGINAL(0,10)]
+        t20.delete(0, 1);       // X削除 -> ORIGINALの1ピースのみに戻る
+        pass += check("先頭挿入分割後の削除: テキスト", "0123456789", t20.getText());
+        pass += check("先頭挿入分割後の削除: ピース数1", "1", String.valueOf(t20.getPieces().size()));
+
+        PieceTable t21 = new PieceTable("0123456789");
+        t21.insert(10, "X");    // [ORIGINAL(0,10), ADD(0,1)]
+        t21.delete(10, 1);      // X削除 -> ORIGINALの1ピースのみに戻る
+        pass += check("末尾挿入分割後の削除: テキスト", "0123456789", t21.getText());
+        pass += check("末尾挿入分割後の削除: ピース数1", "1", String.valueOf(t21.getPieces().size()));
+
+        // Test 22: 複数ピースにまたがる削除でも前後が同一ソース連続なら統合される
+        PieceTable t22 = new PieceTable("AC");
+        t22.insert(1, "BXY");   // [ORIGINAL(0,1), ADD(0,3), ORIGINAL(1,1)]
+        t22.delete(2, 2);       // "XY"の2文字を削除(ADDピースの後半+ORIGINAL側の"C"の前まで)
+        pass += check("複数ピースまたぎ削除後のテキスト", "ABC", t22.getText());
+
+        // Test 23: 異なるソース同士は誤って統合されない(正しさ優先)
+        PieceTable t23 = new PieceTable("AB");
+        t23.insert(1, "X");     // [ORIGINAL(0,1), ADD(0,1), ORIGINAL(1,1)]
+        // 何も削除せず、ORIGINAL(0,1)とADD(0,1)が隣接していても異なるソースなので統合されないこと
+        pass += check("異なるソース隣接は統合されない: ピース数3", "3", String.valueOf(t23.getPieces().size()));
+
+        int total = 36;
         int fail = total - pass;
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + fail + ")");

@@ -14,6 +14,8 @@ public class UndoablePieceTableTest {
         testUndoSequential();
         testRedoInvalidation();
         testCanUndoCanRedo();
+        testUndoHistoryCap();
+        testAddBufferCompaction();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -131,6 +133,97 @@ public class UndoablePieceTableTest {
 
         t.undo();
         check("undo 後に canRedo()==true", t.canRedo());
+    }
+
+    // -------------------------------------------------------------------------
+    // undo履歴の上限(MAX_UNDO_HISTORY=1000)
+    // -------------------------------------------------------------------------
+
+    static void testUndoHistoryCap() {
+        System.out.println("[undo履歴の上限]");
+
+        UndoablePieceTable t1 = new UndoablePieceTable("");
+        for (int i = 0; i < 1010; i++) {
+            t1.insert(t1.length(), "a");
+        }
+        check("上限1000+10回編集してもundoStackが1000件を超えない",
+              t1.undoStackSizeForTest() == 1000);
+
+        UndoablePieceTable t2 = new UndoablePieceTable("");
+        for (int i = 0; i < 1010; i++) {
+            t2.insert(t2.length(), String.valueOf(i % 10));
+        }
+        String beforeUndo = t2.getText();
+        check("上限到達後もundo()で直前の編集は正しく取り消される", () -> {
+            t2.undo();
+            return t2.getText().equals(beforeUndo.substring(0, beforeUndo.length() - 1));
+        });
+
+        UndoablePieceTable t3 = new UndoablePieceTable("");
+        for (int i = 0; i < 1010; i++) {
+            t3.insert(t3.length(), "x");
+        }
+        int undoCount = 0;
+        while (t3.canUndo()) {
+            t3.undo();
+            undoCount++;
+        }
+        check("undo可能な回数はちょうど上限の1000回", undoCount == 1000);
+        check("上限を超えて破棄された最古10文字はundoで復元できない",
+              t3.getText().equals("xxxxxxxxxx"));
+    }
+
+    // -------------------------------------------------------------------------
+    // addBufferのコンパクション(Phase 4)
+    // -------------------------------------------------------------------------
+
+    static void testAddBufferCompaction() {
+        System.out.println("[addBufferのコンパクション]");
+
+        // ケース1: undo()で捨てた側(redoStack)がその後の新しい編集で完全に破棄され、
+        // 誰からも参照されなくなった範囲はコンパクションで実際に捨てられる。
+        UndoablePieceTable t1 = new UndoablePieceTable("");
+        t1.insert(0, "abc");
+        t1.undo();          // "abc"を指すPieceはredoStackのみが保持する状態になる
+        t1.insert(0, "xyz"); // 新しい編集でredoStackがclear()され、"abc"領域は誰からも不要になる
+        int beforeLen = t1.addBufferLengthForTest();
+        t1.compactNowForTest();
+        int afterLen = t1.addBufferLengthForTest();
+        check("誰からも参照されなくなった範囲はコンパクションで縮む",
+              afterLen < beforeLen);
+        check("コンパクション後もテキストは正しい", t1.getText().equals("xyz"));
+
+        // ケース2: コンパクション後もUndo/Redoの座標書き換えが正しく行われている
+        // (currentPiecesだけでなくundoStack/redoStack双方の座標を検証する)。
+        UndoablePieceTable t2 = new UndoablePieceTable("");
+        t2.insert(0, "aaa");
+        t2.insert(3, "bbb");
+        t2.insert(6, "ccc");
+        t2.undo(); // "aaabbb"(redoStackに"ccc"を指すスナップショットが1件残る)
+        t2.compactNowForTest();
+        check("コンパクション後も現在のテキストが正しい", t2.getText().equals("aaabbb"));
+        check("コンパクション後もundoで一つ前の状態に戻れる", () -> {
+            t2.undo();
+            return t2.getText().equals("aaa");
+        });
+        check("コンパクション後もredoで最新の状態まで戻れる", () -> {
+            t2.redo();
+            t2.redo();
+            return t2.getText().equals("aaabbbccc");
+        });
+
+        // ケース3: delete()を経由したケース。「誰かのundo履歴がまだ参照している範囲」は
+        // コンパクションでも消えず、かつ座標書き換え後もundoが正しく機能すること
+        // (現在のpiecesではなく過去のスナップショットだけが参照するADDピースの検証)。
+        UndoablePieceTable t3 = new UndoablePieceTable("0123456789");
+        t3.insert(5, "XXXXX");   // "01234XXXXX56789"
+        t3.delete(5, 5);         // Xを削除 -> "0123456789"(Phase 2の統合で1ピースに戻る)
+        t3.compactNowForTest();  // 直前のdeleteをundoするスナップショットがXXXXXを参照している
+        check("delete直後のコンパクション後もテキストは正しい", t3.getText().equals("0123456789"));
+        check("コンパクション後もdeleteをundoしてXが復元できる", () -> {
+            t3.undo();
+            return t3.getText().equals("01234XXXXX56789");
+        });
     }
 
     // -------------------------------------------------------------------------
