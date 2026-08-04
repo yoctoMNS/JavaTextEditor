@@ -1,6 +1,7 @@
 package dev.javatexteditor;
 
 import dev.javatexteditor.app.EditorApplication;
+import dev.javatexteditor.app.SingleInstanceGuard;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Set;
@@ -36,6 +37,18 @@ public class Main {
     }
 
     public static void main(String[] args) {
+        // EditorApplication.launch() が内部で構築する WorkingDirectoryManager と
+        // 同じ hint 解決規則（第1引数の親ディレクトリ、無ければ null → home/user.dir）を
+        // 使う必要があるため、ここでも同じ1行を計算する（launch() 側の初期化順序は
+        // 変更しないため、事前に projectRoot だけを別途求める）。
+        Path initialHint = (args.length > 0)
+            ? Path.of(args[0]).toAbsolutePath().getParent()
+            : null;
+        Path projectRoot = new WorkingDirectoryManager(initialHint).getWorkingDirectory();
+        if (!SingleInstanceGuard.tryAcquire(projectRoot)) {
+            System.err.println("既に同じプロジェクトのエディタが起動中です: " + projectRoot);
+            return;
+        }
         EditorApplication.launch(args);
     }
 }

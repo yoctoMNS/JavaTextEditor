@@ -144,13 +144,15 @@ public final class JavaBuildRunner {
 
     /**
      * bin/（常にデフォルトで含まれる）＋ユーザー指定の追加クラスパスで別プロセスとして java を起動する。
-     * 実行中プロセスがまだ生きていれば destroy() してから起動し直す（多重実行を避けるため）。
+     * 実行中プロセスがまだ生きていれば終了させてから起動し直す（多重実行を避けるため）。
+     * この「終了→起動→記録」は {@link RunningProcessHolder#terminateAndStart} で原子的に行う
+     * （連打・マクロ連打時に孤児プロセスが残らないようにするための排他制御。詳細は
+     * {@link RunningProcessHolder} のJavadoc参照）。
      * 標準出力/標準エラーは別々のスレッドで読み取り、*run* 疑似バッファへ1行ずつリアルタイムに
      * 追記する（標準エラー由来の行は赤字表示。EditorCanvas.setErrorLines参照）。
      */
     private void runJavaClass(ModalEditor editor, Path projectRoot, String fqcn,
             List<Path> extraClasspath) {
-        running.terminateIfAlive();
         Path binDir = builder.binDirFor(projectRoot);
         StringBuilder classpath = new StringBuilder(binDir.toString());
         for (Path p : extraClasspath) {
@@ -162,10 +164,11 @@ public final class JavaBuildRunner {
         Thread.ofVirtual().start(() -> {
             int exitCode;
             try {
-                ProcessBuilder pb = new ProcessBuilder("java", "-cp", classpath.toString(), fqcn);
-                pb.directory(projectRoot.toFile());
-                Process process = pb.start();
-                running.set(process);
+                Process process = running.terminateAndStart(() -> {
+                    ProcessBuilder pb = new ProcessBuilder("java", "-cp", classpath.toString(), fqcn);
+                    pb.directory(projectRoot.toFile());
+                    return pb.start();
+                });
                 Thread stdoutReader = ProcessOutputPump.start(process.getInputStream(), editor, false);
                 Thread stderrReader = ProcessOutputPump.start(process.getErrorStream(), editor, true);
                 exitCode = process.waitFor();
