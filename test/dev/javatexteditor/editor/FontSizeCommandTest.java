@@ -27,7 +27,7 @@ public class FontSizeCommandTest {
         testNoCanvasShowsError();
         testCommandReturnsToNormalMode();
         testPlexMonoUsesOwnAbsoluteTable();
-        testPlexMonoFsDoesNotAffectMiscFixedStash();
+        testFontSwitchAfterFsKeepsCurrentSize();
 
         int fail = total - pass;
         System.out.println("---");
@@ -128,7 +128,13 @@ public class FontSizeCommandTest {
         check(":font 1中の:fs 9は高さ150になる (15*10)", 150, canvas.getCellH());
     }
 
-    static void testPlexMonoFsDoesNotAffectMiscFixedStash() {
+    /**
+     * :font 1 で :fs 9 を実行した後 :font 0 に戻しても、サイズはリセットされず :fs 9 の
+     * 結果のまま引き継がれることを検証する（バグ④修正、フォント別セルサイズ退避機構の撤回。
+     * 旧テスト名は testPlexMonoFsDoesNotAffectMiscFixedStash で、逆に「影響しないこと」を
+     * 検証していたが、仕様変更によりアサーションを反転した。decision-log.md参照）。
+     */
+    static void testFontSwitchAfterFsKeepsCurrentSize() {
         EditorCanvas canvas = new EditorCanvas();
         ModalEditor ed = new ModalEditor("abc", canvas);
 
@@ -139,8 +145,8 @@ public class FontSizeCommandTest {
         check(":font 1で:fs 9を実行した直後は高さ150になる", 150, canvas.getCellH());
 
         canvas.setFontChoice(FontChoice.MISC_FIXED);
-        check("Plex Monoの:fsはMiscFixedの既定サイズ(幅9)に影響しない", 9, canvas.getCellW());
-        check("Plex Monoの:fsはMiscFixedの既定サイズ(高さ15)に影響しない", 15, canvas.getCellH());
+        check(":font 0へ戻してもPlex Monoで設定した幅(70)がそのまま引き継がれる", 70, canvas.getCellW());
+        check(":font 0へ戻してもPlex Monoで設定した高さ(150)がそのまま引き継がれる", 150, canvas.getCellH());
     }
 
     static void check(String name, Object expected, Object actual) {

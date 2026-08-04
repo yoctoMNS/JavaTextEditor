@@ -2,14 +2,17 @@ package dev.javatexteditor.ui;
 
 /**
  * :font 0 (MiscFixed) / :font 1 (IBM Plex Mono) / :font 2 (JetBrains Mono) /
- * :font 3 (Comic Mono) 切替時のセルサイズ独立性の回帰テスト（mainメソッド形式・JUnit不使用）。
+ * :font 3 (Comic Mono) 切替時のセルサイズ引き継ぎの回帰テスト（mainメソッド形式・JUnit不使用）。
  *
- * 従来 EditorCanvas.cellW/cellH は fontChoice に関わらず単一のグローバル状態を
- * 共有しており、MiscFixed(9x15)で表示中に:font 1へ切り替えるとPlex Monoが
- * MiscFixedのセルサイズをそのまま引き継いでしまうバグがあった（本来は
- * IbmPlexMonoFont.BASE_CELL_W/H=7x15 に復元されるべき）。この修正で
- * EditorCanvasにフォントごとの独立したセルサイズ退避（miscCellW/H・plexCellW/H・
- * jetbrainsCellW/H・comicCellW/H）を追加した。詳細はfont-and-statusline-animationスキル参照。
+ * <p>2026-08-04より前は {@code EditorCanvas} がフォントごとに独立したセルサイズ退避
+ * （miscCellW/H・plexCellW/H・jetbrainsCellW/H・comicCellW/H）を持ち、フォント切替のたびに
+ * 「切替先フォントの最後に使ったサイズ（未使用ならそのフォントの既定値）」へ cellW/cellH を
+ * 復元していた。この仕様は「フォントファミリーの変更だけを行ったのに、意図せずフォントサイズ
+ * まで変わってしまう」という不具合として報告され、撤回した（経緯は decision-log.md
+ * 「EditorCanvas.setFontChoice() のフォント別セルサイズ退避機構を撤回」節参照）。
+ *
+ * 本テストはクラス名を維持しつつ、新仕様（フォント変更はサイズに一切影響せず、常に切替直前の
+ * cellW/cellH をそのまま引き継ぐ）を検証する内容に全面的に書き換えたもの。
  */
 public class FontCellSizeIndependenceTest {
     private static int pass = 0;
@@ -17,13 +20,13 @@ public class FontCellSizeIndependenceTest {
 
     public static void main(String[] args) {
         testDefaultIsMiscFixed();
-        testSwitchToPlexMonoWithoutResizeUsesPlexDefault();
-        testSwitchBackToMiscFixedRestoresMiscDefault();
-        testResizingOneFontDoesNotAffectTheOther();
-        testRoundTripPreservesEachFontsCustomSize();
-        testSwitchToJetBrainsMonoWithoutResizeUsesItsDefault();
-        testSwitchToComicMonoWithoutResizeUsesItsDefault();
-        testAllFourFontsKeepIndependentCustomSizes();
+        testSwitchToPlexMonoKeepsCurrentSize();
+        testSwitchBackToMiscFixedKeepsCurrentSize();
+        testResizingAfterSwitchDoesNotAffectOtherFontsPastSize();
+        testRoundTripAlwaysKeepsLastSize();
+        testSwitchToJetBrainsMonoKeepsCurrentSize();
+        testSwitchToComicMonoKeepsCurrentSize();
+        testAllFourFontsChainKeepsSameSizeThroughout();
 
         int fail = total - pass;
         System.out.println("---");
@@ -37,102 +40,76 @@ public class FontCellSizeIndependenceTest {
         check("起動直後は既定でMiscFixedの9x15高さ", MiscFixedBold9x15.BASE_CELL_H, canvas.getCellH());
     }
 
-    static void testSwitchToPlexMonoWithoutResizeUsesPlexDefault() {
-        EditorCanvas canvas = new EditorCanvas();
-        // Ctrl+Shift+矢印での変更は一切行わない。
-        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        check(":font 1直後はMiscFixedの幅を引き継がずPlex Mono本来の既定幅になる",
-            IbmPlexMonoFont.BASE_CELL_W, canvas.getCellW());
-        check(":font 1直後はMiscFixedの高さを引き継がずPlex Mono本来の既定高さになる",
-            IbmPlexMonoFont.BASE_CELL_H, canvas.getCellH());
-    }
-
-    static void testSwitchBackToMiscFixedRestoresMiscDefault() {
+    /** フォント変更のみを行った場合、サイズは変更前の値のまま（依頼された期待動作そのもの）。 */
+    static void testSwitchToPlexMonoKeepsCurrentSize() {
         EditorCanvas canvas = new EditorCanvas();
         canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        canvas.setFontChoice(FontChoice.MISC_FIXED);
-        check(":font 0へ戻すとMiscFixedの既定幅に復元される",
+        check(":font 1直後もMiscFixedのデフォルト幅のまま変化しない",
             MiscFixedBold9x15.BASE_CELL_W, canvas.getCellW());
-        check(":font 0へ戻すとMiscFixedの既定高さに復元される",
+        check(":font 1直後もMiscFixedのデフォルト高さのまま変化しない",
             MiscFixedBold9x15.BASE_CELL_H, canvas.getCellH());
     }
 
-    static void testResizingOneFontDoesNotAffectTheOther() {
+    static void testSwitchBackToMiscFixedKeepsCurrentSize() {
         EditorCanvas canvas = new EditorCanvas();
-        // MiscFixedのまま大きくリサイズする。
-        canvas.setInitialCellSize(45, 75);
-        // Plex Monoへ切り替えても、一度もリサイズしていないPlex Mono側は本来の既定値のまま。
+        canvas.setInitialCellSize(45, 75); // MiscFixedのままリサイズ
         canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        check("MiscFixedのリサイズ後にPlex Monoへ切り替えても幅はPlex Mono既定値",
-            IbmPlexMonoFont.BASE_CELL_W, canvas.getCellW());
-        check("MiscFixedのリサイズ後にPlex Monoへ切り替えても高さはPlex Mono既定値",
-            IbmPlexMonoFont.BASE_CELL_H, canvas.getCellH());
+        canvas.setFontChoice(FontChoice.MISC_FIXED);
+        check(":font 1 -> :font 0 と往復してもリサイズ後の幅がそのまま引き継がれる", 45, canvas.getCellW());
+        check(":font 1 -> :font 0 と往復してもリサイズ後の高さがそのまま引き継がれる", 75, canvas.getCellH());
+    }
 
-        // 逆方向: Plex Monoをリサイズしても、MiscFixed側の状態は変化しない。
+    /** 手動リサイズ（Ctrl+Shift+矢印 = adjustCellWidth/Height）自体の挙動は変更していないことの確認。 */
+    static void testResizingAfterSwitchDoesNotAffectOtherFontsPastSize() {
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setInitialCellSize(20, 30);
+        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        canvas.adjustCellWidth(5);
+        canvas.adjustCellHeight(10);
+        check("Plex Mono切替後に手動リサイズすると幅に反映される", 25, canvas.getCellW());
+        check("Plex Mono切替後に手動リサイズすると高さに反映される", 40, canvas.getCellH());
+    }
+
+    /** :font 0 -> :font 1 -> :font 0 の往復で、常に「直前のサイズ」が引き継がれ続けることの確認。 */
+    static void testRoundTripAlwaysKeepsLastSize() {
+        EditorCanvas canvas = new EditorCanvas();
+        canvas.setInitialCellSize(18, 30);
+        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
+        check(":font 0 -> :font 1 でサイズが変化しない", 18, canvas.getCellW());
+        check(":font 0 -> :font 1 でサイズが変化しない（高さ）", 30, canvas.getCellH());
+
+        canvas.setInitialCellSize(28, 60);
+        canvas.setFontChoice(FontChoice.MISC_FIXED);
+        check(":font 1でリサイズ後 :font 0 へ戻ってもそのサイズが引き継がれる", 28, canvas.getCellW());
+        check(":font 1でリサイズ後 :font 0 へ戻ってもそのサイズが引き継がれる（高さ）", 60, canvas.getCellH());
+    }
+
+    static void testSwitchToJetBrainsMonoKeepsCurrentSize() {
+        EditorCanvas canvas = new EditorCanvas();
         canvas.setInitialCellSize(21, 45);
-        canvas.setFontChoice(FontChoice.MISC_FIXED);
-        check("Plex Monoのリサイズ後にMiscFixedへ戻すと幅は直前のMiscFixedリサイズ値のまま", 45, canvas.getCellW());
-        check("Plex Monoのリサイズ後にMiscFixedへ戻すと高さは直前のMiscFixedリサイズ値のまま", 75, canvas.getCellH());
-    }
-
-    static void testRoundTripPreservesEachFontsCustomSize() {
-        EditorCanvas canvas = new EditorCanvas();
-        canvas.setInitialCellSize(18, 30); // MiscFixed側をカスタムサイズに
-        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        canvas.setInitialCellSize(28, 60); // Plex Mono側を別のカスタムサイズに
-
-        canvas.setFontChoice(FontChoice.MISC_FIXED);
-        check(":font 0 -> :font 1 -> :font 0 でMiscFixedのカスタム幅が保持される", 18, canvas.getCellW());
-        check(":font 0 -> :font 1 -> :font 0 でMiscFixedのカスタム高さが保持される", 30, canvas.getCellH());
-
-        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        check(":font 0 -> :font 1 でPlex Monoのカスタム幅が保持される", 28, canvas.getCellW());
-        check(":font 0 -> :font 1 でPlex Monoのカスタム高さが保持される", 60, canvas.getCellH());
-    }
-
-    static void testSwitchToJetBrainsMonoWithoutResizeUsesItsDefault() {
-        EditorCanvas canvas = new EditorCanvas();
         canvas.setFontChoice(FontChoice.JETBRAINS_MONO);
-        check(":font 2直後はJetBrains Mono本来の既定幅になる",
-            JetBrainsMonoFont.BASE_CELL_W, canvas.getCellW());
-        check(":font 2直後はJetBrains Mono本来の既定高さになる",
-            JetBrainsMonoFont.BASE_CELL_H, canvas.getCellH());
+        check(":font 2直後もサイズが変化しない", 21, canvas.getCellW());
+        check(":font 2直後もサイズが変化しない（高さ）", 45, canvas.getCellH());
     }
 
-    static void testSwitchToComicMonoWithoutResizeUsesItsDefault() {
+    static void testSwitchToComicMonoKeepsCurrentSize() {
         EditorCanvas canvas = new EditorCanvas();
+        canvas.setInitialCellSize(24, 40);
         canvas.setFontChoice(FontChoice.COMIC_MONO);
-        check(":font 3直後はComic Mono本来の既定幅になる",
-            ComicMonoFont.BASE_CELL_W, canvas.getCellW());
-        check(":font 3直後はComic Mono本来の既定高さになる",
-            ComicMonoFont.BASE_CELL_H, canvas.getCellH());
+        check(":font 3直後もサイズが変化しない", 24, canvas.getCellW());
+        check(":font 3直後もサイズが変化しない（高さ）", 40, canvas.getCellH());
     }
 
-    static void testAllFourFontsKeepIndependentCustomSizes() {
+    /** 4フォントを連続で切り替えても、一度も setInitialCellSize/adjustCell* を呼ばなければサイズ不変。 */
+    static void testAllFourFontsChainKeepsSameSizeThroughout() {
         EditorCanvas canvas = new EditorCanvas();
-        canvas.setInitialCellSize(18, 30); // MiscFixed
+        canvas.setInitialCellSize(18, 30);
         canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        canvas.setInitialCellSize(28, 60); // IBM Plex Mono
         canvas.setFontChoice(FontChoice.JETBRAINS_MONO);
-        canvas.setInitialCellSize(35, 75); // JetBrains Mono
         canvas.setFontChoice(FontChoice.COMIC_MONO);
-        canvas.setInitialCellSize(42, 90); // Comic Mono
-
         canvas.setFontChoice(FontChoice.MISC_FIXED);
-        check("4フォント間切替後もMiscFixedのカスタム幅が保持される", 18, canvas.getCellW());
-        check("4フォント間切替後もMiscFixedのカスタム高さが保持される", 30, canvas.getCellH());
-
-        canvas.setFontChoice(FontChoice.IBM_PLEX_MONO);
-        check("4フォント間切替後もIBM Plex Monoのカスタム幅が保持される", 28, canvas.getCellW());
-        check("4フォント間切替後もIBM Plex Monoのカスタム高さが保持される", 60, canvas.getCellH());
-
-        canvas.setFontChoice(FontChoice.JETBRAINS_MONO);
-        check("4フォント間切替後もJetBrains Monoのカスタム幅が保持される", 35, canvas.getCellW());
-        check("4フォント間切替後もJetBrains Monoのカスタム高さが保持される", 75, canvas.getCellH());
-
-        canvas.setFontChoice(FontChoice.COMIC_MONO);
-        check("4フォント間切替後もComic Monoのカスタム幅が保持される", 42, canvas.getCellW());
-        check("4フォント間切替後もComic Monoのカスタム高さが保持される", 90, canvas.getCellH());
+        check("4フォントを連続で切り替えても幅は最初の値のまま", 18, canvas.getCellW());
+        check("4フォントを連続で切り替えても高さは最初の値のまま", 30, canvas.getCellH());
     }
 
     static void check(String name, Object expected, Object actual) {

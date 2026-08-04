@@ -112,20 +112,12 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private Set<Integer> errorLines = Set.of();
 
     // 半角ASCIIフォントのセルサイズ（Ctrl+Shift+矢印で変更可能）。
-    // cellW/cellH は「今アクティブなフォントの現在サイズ」を保持する実体で、
-    // フォントごとの独立した状態は miscCellW/H・plexCellW/H・jetbrainsCellW/H・
-    // comicCellW/H に退避する（setFontChoice()参照。1つのフォントをリサイズしても
-    // 他のフォントには一切影響しない）。
+    // cellW/cellH は「今アクティブなフォントの現在サイズ」を保持する唯一の実体。
+    // 2026-08-04までは setFontChoice() でフォントごとに独立したサイズを退避・復元していたが、
+    // 「フォントファミリーの変更はサイズに影響しない（常に直前のサイズを引き継ぐ）」という
+    // 仕様に変更したため退避機構は廃止した（経緯は decision-log.md 参照）。
     private int cellW = MiscFixedBold9x15.BASE_CELL_W;
     private int cellH = MiscFixedBold9x15.BASE_CELL_H;
-    private int miscCellW = MiscFixedBold9x15.BASE_CELL_W;
-    private int miscCellH = MiscFixedBold9x15.BASE_CELL_H;
-    private int plexCellW = IbmPlexMonoFont.BASE_CELL_W;
-    private int plexCellH = IbmPlexMonoFont.BASE_CELL_H;
-    private int jetbrainsCellW = JetBrainsMonoFont.BASE_CELL_W;
-    private int jetbrainsCellH = JetBrainsMonoFont.BASE_CELL_H;
-    private int comicCellW = ComicMonoFont.BASE_CELL_W;
-    private int comicCellH = ComicMonoFont.BASE_CELL_H;
 
     // Ctrl+Shift+矢印でセルサイズを変更した直後、現在の幅×高さ(px)を3秒間だけ
     // 画面右上に表示して自動的に消えるオーバーレイ。sizeOverlayHideTimerは
@@ -529,27 +521,6 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
     public Theme getTheme() { return theme; }
 
-    /** フォントごとに退避したセルサイズ(w,h)の組。stashedCellSize()/setFontChoice()参照。 */
-    private record CellSize(int w, int h) {}
-
-    private CellSize stashedCellSize(FontChoice fc) {
-        return switch (fc) {
-            case MISC_FIXED     -> new CellSize(miscCellW, miscCellH);
-            case IBM_PLEX_MONO  -> new CellSize(plexCellW, plexCellH);
-            case JETBRAINS_MONO -> new CellSize(jetbrainsCellW, jetbrainsCellH);
-            case COMIC_MONO     -> new CellSize(comicCellW, comicCellH);
-        };
-    }
-
-    private void setStashedCellSize(FontChoice fc, int w, int h) {
-        switch (fc) {
-            case MISC_FIXED     -> { miscCellW = w; miscCellH = h; }
-            case IBM_PLEX_MONO  -> { plexCellW = w; plexCellH = h; }
-            case JETBRAINS_MONO -> { jetbrainsCellW = w; jetbrainsCellH = h; }
-            case COMIC_MONO     -> { comicCellW = w; comicCellH = h; }
-        }
-    }
-
     private static MonoFont monoFontFor(FontChoice fc) {
         return switch (fc) {
             case MISC_FIXED     -> MiscFixedBold9x15.INSTANCE;
@@ -562,21 +533,17 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     /**
      * 半角ASCIIフォントを切り替える（:font コマンド）。両ペインから独立に設定可能。
      *
-     * <p>切替元フォントの現在のセルサイズを miscCellW/H・plexCellW/H・jetbrainsCellW/H・
-     * comicCellW/H へ退避し、切替先フォントの退避済みサイズ（Ctrl+Shift+矢印で一度も
-     * 変更していなければそのフォントの既定値のまま）を cellW/cellH へ復元する。これにより
-     * 1つのフォントのセルサイズを他のフォントが引き継ぐことがない。
+     * <p>フォントの種類（ビットマップ実装 {@link #bitmapFont}）だけを差し替え、
+     * {@link #cellW}/{@link #cellH}（フォントサイズ）には一切触れない。2026-08-04より前は
+     * フォントごとに最後に使ったサイズを独立して覚えておく退避・復元機構を持っていたが、
+     * 「フォントファミリーの変更はサイズに影響しない（切替直前のサイズをそのまま引き継ぐ）」
+     * という仕様に変更したため撤回した（経緯は decision-log.md
+     * 「EditorCanvas.setFontChoice() のフォント別セルサイズ退避機構を撤回」節参照）。
      */
     public void setFontChoice(FontChoice fontChoice) {
         if (this.fontChoice == fontChoice) return;
-        setStashedCellSize(this.fontChoice, cellW, cellH);
         this.fontChoice = fontChoice;
         this.bitmapFont = monoFontFor(fontChoice);
-        CellSize restored = stashedCellSize(fontChoice);
-        cellW = restored.w();
-        cellH = restored.h();
-        cachedCharWidth = cellW;
-        cachedLineHeight = cellH;
         invalidateGlyphCache();
         requestRepaint();
     }
@@ -705,7 +672,6 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     public void adjustCellWidth(int delta) {
         cellW = Math.max(5, Math.min(90, cellW + delta));
-        stashCurrentCellSize();
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         showSizeOverlay();
@@ -718,16 +684,10 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     public void adjustCellHeight(int delta) {
         cellH = Math.max(8, Math.min(150, cellH + delta));
-        stashCurrentCellSize();
         invalidateGlyphCache();
         cachedLineHeight = cellH;
         showSizeOverlay();
         requestRepaint();
-    }
-
-    /** cellW/cellH（現在アクティブなフォントの現在サイズ）を、対応する退避フィールドへ書き戻す。 */
-    private void stashCurrentCellSize() {
-        setStashedCellSize(fontChoice, cellW, cellH);
     }
 
     /**
@@ -755,7 +715,6 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     public void setInitialCellSize(int w, int h) {
         cellW = Math.max(5, Math.min(90, w));
         cellH = Math.max(8, Math.min(150, h));
-        stashCurrentCellSize();
         invalidateGlyphCache();
         cachedCharWidth = cellW;
         cachedLineHeight = cellH;

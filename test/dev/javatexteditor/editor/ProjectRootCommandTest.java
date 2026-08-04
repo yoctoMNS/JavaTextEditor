@@ -1,5 +1,6 @@
 package dev.javatexteditor.editor;
 
+import dev.javatexteditor.ProjectRootManager;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.List;
@@ -24,6 +25,9 @@ public class ProjectRootCommandTest {
         testClasspathResolvesAgainstBuildRootAfterCd();
         testClasspathFallsBackToCdWhenNoPr();
         testAbsoluteClasspathUnaffected();
+        testPrSyncsAcrossPanesViaProjectRootManager();
+        testPrOverwriteAlsoSyncsAcrossPanes();
+        testPaneWithoutCallbackFallsBackToLocalField();
 
         System.out.println("\n=== ProjectRootCommand: " + passed + "/" + (passed + failed) + " PASS ===");
         if (failed > 0) System.exit(1);
@@ -119,6 +123,86 @@ public class ProjectRootCommandTest {
         assertTrue("絶対パスはルートに関係なくそのまま",
                 captured.size() == 1 && captured.get(0).equals(abs));
         passed("testAbsoluteClasspathUnaffected");
+    }
+
+    // =========================================================================
+    // バグ②修正: ProjectRootManager による全ペイン共有の検証
+    // =========================================================================
+    //
+    // PaneManager.createLeaf() が実際に行う配線（ProjectRootManager.getProjectRootOverride() で
+    // 初期値を反映し、setChangeProjectRootCallback() で :pr 実行時の通知先を配線する）を、
+    // JFrame/Swingなしで2つの ModalEditor（=2ペイン相当）に対して再現する。
+
+    /** wire() 済みの複数 ModalEditor を「複数ペイン」に見立て、PaneManager と同じ配線をする。 */
+    private static void wireAsPane(ModalEditor editor, ProjectRootManager manager) {
+        editor.setProjectRootOverride(manager.getProjectRootOverride());
+        editor.setChangeProjectRootCallback(manager::setProjectRootOverride);
+    }
+
+    static void testPrSyncsAcrossPanesViaProjectRootManager() {
+        ProjectRootManager manager = new ProjectRootManager();
+        ModalEditor paneA = new ModalEditor("abc");
+        ModalEditor paneB = new ModalEditor("def");
+        wireAsPane(paneA, manager);
+        wireAsPane(paneB, manager);
+
+        // PaneManager.createLeaf() が新規ペイン作成時に行うのと同じ「後から追加されたペインへの
+        // 反映」を模して、ここでは EditorApplication.launch() の addChangeListener 相当を
+        // 手動で登録する（実プロダクションコードでは PaneManager.allLeaves() を毎回評価するため
+        // 後から作られたペインも自動的に含まれる。詳細は EditorApplication.java 参照）。
+        java.util.List<ModalEditor> panes = java.util.List.of(paneA, paneB);
+        manager.addChangeListener(root -> {
+            for (ModalEditor e : panes) e.setProjectRootOverride(root);
+        });
+
+        Path root = tmp().resolve("sharedRoot");
+        paneA.setProjectRoot(root);
+        assertTrue("両ペインとも :pr 前は override 未設定", paneA.getProjectRootOverride() == null
+                && paneB.getProjectRootOverride() == null);
+
+        sendCommand(paneA, "pr"); // ペインAで :pr を実行
+
+        assertTrue("ペインA自身の override が更新される", root.equals(paneA.getProjectRootOverride()));
+        assertTrue("ペインBの override も同じ値に同期される（バグ②修正の主目的）",
+                root.equals(paneB.getProjectRootOverride()));
+        passed("testPrSyncsAcrossPanesViaProjectRootManager");
+    }
+
+    static void testPrOverwriteAlsoSyncsAcrossPanes() {
+        ProjectRootManager manager = new ProjectRootManager();
+        ModalEditor paneA = new ModalEditor("abc");
+        ModalEditor paneB = new ModalEditor("def");
+        wireAsPane(paneA, manager);
+        wireAsPane(paneB, manager);
+        java.util.List<ModalEditor> panes = java.util.List.of(paneA, paneB);
+        manager.addChangeListener(root -> {
+            for (ModalEditor e : panes) e.setProjectRootOverride(root);
+        });
+
+        Path first = tmp().resolve("first");
+        paneA.setProjectRoot(first);
+        sendCommand(paneA, "pr");
+        assertTrue("1回目の :pr でペインBにも first が反映される", first.equals(paneB.getProjectRootOverride()));
+
+        // 別のペイン（B）から :pr を実行しても同様に全ペインへ反映されること
+        Path second = tmp().resolve("second");
+        paneB.setProjectRoot(second);
+        sendCommand(paneB, "pr");
+        assertTrue("ペインBからの :pr でペインAも second に上書きされる",
+                second.equals(paneA.getProjectRootOverride()));
+        assertTrue("ペインB自身も second になる", second.equals(paneB.getProjectRootOverride()));
+        passed("testPrOverwriteAlsoSyncsAcrossPanes");
+    }
+
+    /** PaneManager配線の無い単体テスト等（callback未設定）では、従来どおり自ペインのみに書き込まれる。 */
+    static void testPaneWithoutCallbackFallsBackToLocalField() {
+        ModalEditor ed = new ModalEditor("abc");
+        Path root = tmp().resolve("standalone");
+        ed.setProjectRoot(root);
+        sendCommand(ed, "pr");
+        assertTrue("コールバック未配線でも :pr は従来どおり自ペインに反映される",
+                root.equals(ed.getProjectRootOverride()));
+        passed("testPaneWithoutCallbackFallsBackToLocalField");
     }
 
     // =========================================================================

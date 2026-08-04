@@ -175,6 +175,16 @@
 - **`Main.java`側の変更点**: F10/F11/F12のビルド/実行に関わる`editor.getProjectRoot()`呼び出し4箇所（`triggerRun`のbin判定・`triggerCompileAndRun`・`doCompile`・`setOnRunMainClassSelected`のmainクラス選択後実行）を`editor.getBuildRoot()`へ置換した。`bin/`は`ProjectBuilder.binDirFor()`が渡されたルートから`src`を持つ祖先を辿るため、`:pr`ルートが`src`を持てば従来どおり正しく解決される。**インラインのコンパイル診断（ガター表示、`analyzeWithProject`）は`WD_MANAGER.getWorkingDirectory()`基準のまま変更していない**（F10/F11/F12とは別機能でありユーザー指定スコープ外）。
 - **テスト**: `test/dev/javatexteditor/editor/ProjectRootCommandTest.java`（新設・7テスト）。`:pr`が現在ディレクトリを記憶・上書き・`:pr?`の未設定/設定表示・`getBuildRoot()`のフォールバックと`:cd`非追従・そして中核として「`:pr`固定後に`:cd`でサブディレクトリへ移動しても追加クラスパスの相対パスが`:pr`ルート基準で解決される」ことを検証。`ClasspathInputTest`(12)・`BuildOutputCommandTest`(14)・`MainCommandTest`(7)ほか既存テストは無修正で全PASS（回帰なし。既知の`ScrollTest`2件FAILのみベースラインどおり）。
 
+### 追記（2026-08-04）: `:pr`を全ペイン共有に変更（バグ修正）
+
+- **症状**: 複数ペイン（`:split`/`:vsplit`）を開いている状態で、あるペインで`:pr`を実行しても他ペインの`projectRootOverride`には反映されず、F10/F11/F12（`getBuildRoot()`）の基準がペインごとにバラバラになる不具合が報告された。原因は上記の実装が`projectRootOverride`を`ModalEditor`インスタンスごとのフィールドとしてのみ持ち、`:cd`の作業ディレクトリ（`getProjectRoot()`）のように中央管理・変更通知の仕組みを持っていなかったこと（`WorkingDirectoryManager`との非対称性）。当初の設計判断（本節冒頭）は「`:cd`とは独立した第2のルート」であることのみを議論しており、複数ペイン時の共有可否は検討されていなかった。
+- **判断**: `:cd`の作業ディレクトリと同様に**プロジェクトルート（`:pr`固定値）もエディタ全体で単一の値とし、どのペインから変更しても全ペインへ即座に反映する**方針とした。「`:pr`はセッション中のみ保持する一時固定値」という性質自体は変更しない（永続化はしない）。
+- **実装**: `WorkingDirectoryManager`と同じ「中央管理インスタンス＋変更リスナー」方式を、新設の`dev.javatexteditor.ProjectRootManager`（`getProjectRootOverride()`/`setProjectRootOverride(Path)`/`addChangeListener(Consumer<Path>)`）として追加した。既存の`WorkingDirectoryManager`を拡張せず別クラスにしたのは、`:cd`側はディレクトリ存在確認等のバリデーションを持つのに対し、`:pr`側は常にバリデーション済みの`getProjectRoot()`の値をそのまま記憶するだけで責務が異なるため（`WorkingDirectoryManager`のJavadoc契約を変えたくなかった）。
+  - `EditorApplication.launch()`で`WD_MANAGER`と同様に`PROJECT_ROOT_MANAGER`を生成し、`PaneManager`のコンストラクタへ追加引数として渡す。`WD_MANAGER.addChangeListener(...)`の直後に`PROJECT_ROOT_MANAGER.addChangeListener(root -> { for (leaf : panes.allLeaves()) leaf.editor().setProjectRootOverride(root); })`を登録し、`:cd`と全く同じ「通知時点で存在する全ペインへ反映する」方式にした（分割で後から増えたペインも`panes.allLeaves()`が動的に拾うため自動的に対象になる）。
+  - `PaneManager.createLeaf()`に`:cd`の`wdManager`ブロックと対になる`projectRootManager`ブロックを追加し、新規ペイン作成時に`editor.setProjectRootOverride(projectRootManager.getProjectRootOverride())`で現在値を初期反映、`editor.setChangeProjectRootCallback(projectRootManager::setProjectRootOverride)`で`:pr`実行時の通知先を配線する。
+  - `ModalEditor.pinProjectRoot()`は`changeProjectRootCallback`が配線されていればそれを呼ぶ（＝中央管理へ送り、その通知が全ペイン分の`setProjectRootOverride()`を呼び戻すことで自分自身にも反映される、`:cd`の`applyChangeDirectory()`と同じ経路）。コールバック未配線（`PaneManager`を経由しない単体テスト等）ではフォールバックとして従来どおり自ペインのフィールドへ直接書き込み、既存の`ProjectRootCommandTest`は無修正で全PASSした。
+- **テスト**: `ProjectRootCommandTest`に3テスト追加（`testPrSyncsAcrossPanesViaProjectRootManager`/`testPrOverwriteAlsoSyncsAcrossPanes`/`testPaneWithoutCallbackFallsBackToLocalField`、計10テスト）。`PaneManager`は`JFrame`を要求するため、`ProjectRootManager`と複数の`ModalEditor`を`PaneManager.createLeaf()`と同じ配線で手動接続する形で、JFrame/Swingなしに複数ペイン間の同期を検証している。
+
 ## `SystemStatsMonitor`（ステータス行のCPU/GPU表示）の設計決定事項
 
 - **CPU項目は「温度」と「使用率(%)」の間で2度差し戻しがあった末、最終的に「使用率(%)」で確定した**。経緯: ①最初に温度→使用率に変更 → ②「Linux/Windows/Macいずれでも温度を表示できるようにしてほしい」という差し戻しでOS別3分岐の温度取得（Linux=`/sys/class/thermal`、Windows=WMI経由PowerShell、macOS=`osx-cpu-temp`）を実装 → ③「Windows11でCPU温度がN/Aになる」という報告に対し、native実装（C/C++・JNI）での解決を提案されたが、CLAUDE.md本文の「依存ライブラリ一切使用しない・javac直接呼び出し」という根本方針と矛盾するためユーザーに確認 → ④ユーザーが方針転換し「CPU/GPUとも温度ではなく使用率にし、N/Aになる場合はそもそも表示しない」との指示で最終確定。今後この項目を再び温度表示に戻す提案をする場合、上記②のOS別3分岐実装（Windows WMI/`MSAcpi_ThermalZoneTemperature`が多くの機種で非対応・macOSの`osx-cpu-temp`が未導入だと動かない、という既知の制約）を再発明しないよう、まずこの節を参照すること。
@@ -1801,3 +1811,73 @@ y/n で尋ね、y なら新規作成・n なら何もしない」という要望
   編集（insert）後の整合性を検証。既存の全テストスイートを再実行し、`ScrollTest`(18/20)・
   `ModalEditorTest`(286/287)・`FilerTest`(122/123)の既存ベースラインFAILがこの変更の前後で
   変わらないことを確認済み。
+
+## `EditorCanvas.setFontChoice()` のフォント別セルサイズ退避機構を撤回（バグ修正・2026-08-04）
+
+- **経緯**: 「フォントファミリーを変更しただけなのに、変更していないはずのフォントサイズまで
+  リセットされる」という不具合報告を受けた。原因調査の結果、`setFontChoice()`は
+  2026-07-29「`:font 1`(Plex Mono)がMiscFixedのセルサイズをそのまま引き継いでいた問題」節の
+  修正で導入した**意図的な仕様**（フォントごとに最後に使ったサイズを独立して覚えておき、
+  切替のたびにそのフォント専用の退避値へ`cellW`/`cellH`を復元する）であることが判明した。
+  この仕様と今回の要望（「フォント変更はサイズに影響しない・常に直前のサイズを引き継ぐ」）は
+  正反対であり、単純なバグ修正ではなく**既存の設計判断を撤回する変更**であるためユーザーに
+  確認のうえで実施した。
+- **判断**: 「フォントごとの独立記憶」を撤回し、「`cellW`/`cellH`は常に1つだけの値を持ち、
+  `:font`はフォント種別（ビットマップ実装）だけを差し替えてサイズには一切触れない」という
+  単純な仕様に戻した。Ctrl+Shift+矢印（`adjustCellWidth`/`adjustCellHeight`）・起動時初期化
+  （`setInitialCellSize`）による手動リサイズ操作そのものは変更していない（サイズを変更したら
+  次にどのフォントへ切り替えてもそのサイズがそのまま使われる、という単純な直列的挙動になる）。
+- **実装**: `EditorCanvas`から`miscCellW/H`・`plexCellW/H`・`jetbrainsCellW/H`・`comicCellW/H`
+  の4フォント分＝8フィールドと、`CellSize`レコード・`stashedCellSize()`・
+  `setStashedCellSize()`・`stashCurrentCellSize()`を削除した。`setFontChoice()`は
+  `this.fontChoice`と`bitmapFont`（`monoFontFor()`）を差し替えグリフキャッシュを破棄するだけに
+  縮小し、`cellW`/`cellH`への代入を削除した。`adjustCellWidth()`/`adjustCellHeight()`/
+  `setInitialCellSize()`からは`stashCurrentCellSize()`呼び出しを削除した（それ以外の処理＝
+  範囲クランプ・グリフキャッシュ破棄・`cachedCharWidth`/`cachedLineHeight`更新は変更していない）。
+- **バグ③（分割で新規ペインを開いた際にフォントサイズが引き継がれない）への副次効果**:
+  `PaneManager.createLeaf()`は分割元ペインの`cellW`/`cellH`を`canvas.setInitialCellSize()`で
+  新規`EditorCanvas`へ渡した直後に`canvas.setFontChoice()`を呼んでいたが、旧`setFontChoice()`は
+  「切替先フォント（このcanvasでは未使用＝各フォントのビルトインデフォルト値）」で`cellW`/`cellH`を
+  上書きしてしまうため、分割元がMiscFixed以外のフォントを使っていた場合に継承したはずのサイズが
+  消えていた（`PaneManager.java`側は変更していない）。本修正で`setFontChoice()`が`cellW`/`cellH`に
+  一切触れなくなったことで、この上書きも同時に解消された。`PaneManager.createLeaf()`の呼び出し順序
+  自体は変更不要だった。
+- **代替案として検討したが不採用にしたもの**: `PaneManager.createLeaf()`側で`setFontChoice()`を
+  `setInitialCellSize()`より先に呼ぶよう順序を入れ替える案（`setFontChoice()`の仕様自体は残す）も
+  検討したが、`EditorCanvas.setFontChoice()`自体の仕様（バグ④）を撤回する方針が確定した時点で
+  この副作用も自動的に解消されるため、`PaneManager`側への追加変更は不要と判断し行わなかった。
+- **テスト**: `test/dev/javatexteditor/ui/FontCellSizeIndependenceTest.java`を全面的に
+  書き換えた（クラス名は維持、テスト内容を「フォントごとに独立したサイズを保持すること」から
+  「フォント変更はサイズに影響せず常に直前のサイズを引き継ぐこと」の検証に反転、8テスト）。
+  `test/dev/javatexteditor/editor/FontSizeCommandTest.java`の
+  `testPlexMonoFsDoesNotAffectMiscFixedStash`（Plex Monoで`:fs 9`実行後MiscFixedに戻すと
+  MiscFixedの既定値に戻ることを検証していた）を`testFontSwitchAfterFsKeepsCurrentSize`
+  （逆に、Plex Monoで`:fs 9`実行後MiscFixedへ戻ってもそのサイズが引き継がれることを検証）へ
+  差し替えた（アサーション反転、期待値以外は変更なし）。`:fs`コマンド自体
+  （`fontBaseCellW/H(FontChoice)`によるフォント別の絶対値テーブル）はこの退避機構と無関係のため
+  無修正。全体テストスイートは既知のベースラインFAIL（`ScrollTest`2件・`ModalEditorTest`1件・
+  `FilerTest`1件、計3クラス・115クラスPASS）のみで回帰なし。
+
+## import削除経路（`:oi`/`:remove-import`）にカーソル・診断位置補正が抜けていた不具合の修正（2026-08-04）
+
+- **症状**: import文の自動挿入（コード補完・auto-import）ではカーソル位置・スクロール位置・
+  波下線（診断）表示が正しく追従するのに対し、import文の**削除**（`SPC i o`/`:oi`/
+  `:organize-imports`による未使用import一括削除、`:remove-import <fqn>`による個別削除）では
+  カーソルが古い行番号のまま取り残され、削除で減った行数分だけ内容とカーソル表示・
+  スクロール位置がずれる不具合が報告された。
+- **原因**: 2026-08-02「auto-import挿入直後のカーソル位置ズレ修正」で新設した
+  `shiftCursorAfterImportEdit()`/`shiftDiagnosticsAfterImportEdit()`は、挿入系3経路
+  （`applyImportKeepingCursor()`/`handleAutoImport()`/`exitImportSelect()`）にのみ組み込まれ、
+  削除系3経路（`organizeImportsRemoveUnused()`/`organizeImports()`/`executeRemoveImport()`）へは
+  同じ補正の追加が漏れていた。挿入・削除は対称な操作であるにもかかわらず片側だけ直っていた、
+  という単純な修正漏れであり、設計判断の変更ではない。
+- **修正**: 上記3つの削除系メソッドそれぞれで、`autoImportHandler.removeUnusedImports()`/
+  `removeImport()`呼び出しの前後で`before`（削除前テキスト）・`caretBefore`（削除前カーソル
+  絶対オフセット）・`after`（削除後テキスト）を取得し、実際に何か削除された場合のみ
+  `shiftCursorAfterImportEdit(before, after, caretBefore)`と
+  `shiftDiagnosticsAfterImportEdit(before, after)`を呼ぶようにした（挿入系と全く同じ関数を
+  再利用。`delta`が負（行数減少）でも同じロジックがそのまま成立する）。
+- **テスト**: `test/dev/javatexteditor/editor/AutoImportCursorPositionTest.java`に
+  `testOrganizeImportsRemoveUnusedKeepsCursorOnSameLine`・`testRemoveImportCommandKeepsCursorOnSameLine`
+  を追加（計6テスト）。未使用import（削除される）より下の行にカーソルを置いた状態で削除を実行し、
+  カーソルが削除後も同じ内容の行（列も含む）を指し続けることを検証。

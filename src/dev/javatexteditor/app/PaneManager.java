@@ -2,6 +2,7 @@ package dev.javatexteditor.app;
 
 import dev.javatexteditor.BufferRegistry;
 import dev.javatexteditor.PaneTree;
+import dev.javatexteditor.ProjectRootManager;
 import dev.javatexteditor.WorkingDirectoryManager;
 import dev.javatexteditor.editor.ModalEditor;
 import dev.javatexteditor.ui.EditorCanvas;
@@ -65,6 +66,7 @@ public final class PaneManager implements EditorHost {
     private final BufferRegistry bufferRegistry;
     private final JavaBuildRunner javaBuildRunner;
     private final WorkingDirectoryManager wdManager;
+    private final ProjectRootManager projectRootManager;
     private final int initialCellW;
     private final int initialCellH;
 
@@ -85,20 +87,22 @@ public final class PaneManager implements EditorHost {
      * @param bufferRegistry   SPC+b で表示される開いたバッファの一覧
      * @param javaBuildRunner  F11 で複数 main クラスが見つかった際の実行コールバック用
      * @param wdManager        作業ディレクトリの中央管理
+     * @param projectRootManager  :pr で固定するプロジェクトルートの中央管理（全ペイン共有）
      */
     public PaneManager(JFrame frame, String initialText, String initialPath,
                         int initialCellW, int initialCellH,
                         LiveDiagnostics liveDiagnostics, AnalysisServices services,
                         BufferRegistry bufferRegistry, JavaBuildRunner javaBuildRunner,
-                        WorkingDirectoryManager wdManager) {
-        this.frame           = frame;
-        this.liveDiagnostics = liveDiagnostics;
-        this.services        = services;
-        this.bufferRegistry  = bufferRegistry;
-        this.javaBuildRunner = javaBuildRunner;
-        this.wdManager       = wdManager;
-        this.initialCellW    = initialCellW;
-        this.initialCellH    = initialCellH;
+                        WorkingDirectoryManager wdManager, ProjectRootManager projectRootManager) {
+        this.frame              = frame;
+        this.liveDiagnostics    = liveDiagnostics;
+        this.services           = services;
+        this.bufferRegistry     = bufferRegistry;
+        this.javaBuildRunner    = javaBuildRunner;
+        this.wdManager          = wdManager;
+        this.projectRootManager = projectRootManager;
+        this.initialCellW       = initialCellW;
+        this.initialCellH       = initialCellH;
 
         PaneTree.Leaf firstLeaf = createLeaf(initialText, initialPath);
         this.root   = firstLeaf;
@@ -355,6 +359,12 @@ public final class PaneManager implements EditorHost {
             Path wd = wdManager.getWorkingDirectory();
             editor.setProjectRoot(wd);
             editor.setChangeWorkingDirectoryCallback(p -> wdManager.setWorkingDirectory(p));
+        }
+        // :pr で固定するプロジェクトルートを反映（:cd の作業ディレクトリと同じ「中央管理へ
+        // 変更を委譲し、通知で全ペインへ反映する」方式。バグ修正の経緯は decision-log.md 参照）。
+        if (projectRootManager != null) {
+            editor.setProjectRootOverride(projectRootManager.getProjectRootOverride());
+            editor.setChangeProjectRootCallback(projectRootManager::setProjectRootOverride);
         }
         return new PaneTree.Leaf(canvas, editor);
     }
