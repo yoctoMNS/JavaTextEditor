@@ -30,9 +30,20 @@ import javax.swing.SwingUtilities;
  */
 public final class JavaBuildRunner {
 
+    /**
+     * 自プロジェクトの実行がブロックされたときにステータスバーへ出すメッセージ。
+     * 既存のブロック系メッセージ（例: "run: no .class files in bin/. Compile with F10 first"）と
+     * 文体・言語（英語）を揃える。
+     */
+    static final String SELF_EXECUTION_BLOCKED_MESSAGE =
+        "run: blocked - self-execution of this editor's own project is disabled by default "
+        + "(enable via :set allowselfexecution)";
+
     private final ProjectBuilder builder;
     private final MainClassFinder mainClassFinder;
     private final RunningProcessHolder running;
+    private final SelfProjectDetector selfProjectDetector;
+    private final SelfExecutionPolicy selfExecutionPolicy;
 
     /**
      * main クラスが複数見つかり telescope-picker で選択待ちになる場合に、
@@ -46,10 +57,13 @@ public final class JavaBuildRunner {
     private List<Path> pendingRunExtraClasspath = List.of();
 
     public JavaBuildRunner(ProjectBuilder builder, MainClassFinder mainClassFinder,
-            RunningProcessHolder running) {
+            RunningProcessHolder running, SelfProjectDetector selfProjectDetector,
+            SelfExecutionPolicy selfExecutionPolicy) {
         this.builder = builder;
         this.mainClassFinder = mainClassFinder;
         this.running = running;
+        this.selfProjectDetector = selfProjectDetector;
+        this.selfExecutionPolicy = selfExecutionPolicy;
     }
 
     /**
@@ -150,9 +164,21 @@ public final class JavaBuildRunner {
      * {@link RunningProcessHolder} のJavadoc参照）。
      * 標準出力/標準エラーは別々のスレッドで読み取り、*run* 疑似バッファへ1行ずつリアルタイムに
      * 追記する（標準エラー由来の行は赤字表示。EditorCanvas.setErrorLines参照）。
+     *
+     * <p><b>自プロジェクト実行のブロック（2026-08）</b>: {@code projectRoot} がエディタ自身の
+     * プロジェクトと判定され（{@link SelfProjectDetector}）、かつ {@code :set allowselfexecution}
+     * で明示的に許可されていなければ（{@link SelfExecutionPolicy}）、ここで即 return し、
+     * {@link #running}・{@code ProcessBuilder}のいずれにも一切到達しない。
+     * {@link #resolveAndRunMainClass}（単一候補時）と {@link #runSelectedMainClass}
+     * （telescope-picker選択時）の両方がこのメソッドに合流するため、ここ1箇所でのチェックで
+     * F11/F12のどちらの経路・どちらの候補選択方法でも漏れなくブロックできる。
      */
     private void runJavaClass(ModalEditor editor, Path projectRoot, String fqcn,
             List<Path> extraClasspath) {
+        if (selfProjectDetector.isOwnProject(projectRoot) && !selfExecutionPolicy.isAllowed()) {
+            editor.setStatusMessage(SELF_EXECUTION_BLOCKED_MESSAGE);
+            return;
+        }
         Path binDir = builder.binDirFor(projectRoot);
         StringBuilder classpath = new StringBuilder(binDir.toString());
         for (Path p : extraClasspath) {

@@ -100,10 +100,18 @@ public final class EditorApplication {
     // F11/F12 で起動した直近の子プロセス。もう一度実行されたら前回分を destroy() してから起動し直す。
     // Java版・C版が1つを共有する（言語をまたいだ多重実行防止。RunningProcessHolder の Javadoc 参照）。
     private static final RunningProcessHolder RUNNING_PROCESS = new RunningProcessHolder();
+    // F11/F12がエディタ自身のプロジェクトを実行しようとした場合の多重プロセス増殖防止（2026-08）。
+    // SELF_PROJECT_DETECTOR は起動中クラスの格納元から自分自身のプロジェクトルートを1度だけ求める
+    // （SelfProjectDetector のJavadoc参照）。SELF_EXECUTION_POLICY は :set allowselfexecution による
+    // セッション内一時許可の保持先で、PaneManager にも渡して ModalEditor からの書き込みを配線する。
+    private static final SelfProjectDetector SELF_PROJECT_DETECTOR =
+        new SelfProjectDetector(Main.class);
+    private static final TransientSelfExecutionPolicy SELF_EXECUTION_POLICY =
+        new TransientSelfExecutionPolicy();
     private static final JavaBuildRunner JAVA_BUILD_RUNNER = new JavaBuildRunner(
         new dev.javatexteditor.projectbuild.ProjectBuilder(),
         new dev.javatexteditor.projectbuild.MainClassFinder(),
-        RUNNING_PROCESS);
+        RUNNING_PROCESS, SELF_PROJECT_DETECTOR, SELF_EXECUTION_POLICY);
     // C版のプロジェクトビルダ（gcc/clang/cc を外部起動。詳細は CProjectBuilder 参照）。
     private static final CBuildRunner C_BUILD_RUNNER = new CBuildRunner(
         new dev.javatexteditor.projectbuild.CProjectBuilder(),
@@ -164,7 +172,7 @@ public final class EditorApplication {
 
             PaneManager panes = new PaneManager(frame, text, path, initialCellW, initialCellH,
                 LIVE_DIAGNOSTICS, SERVICES, BUFFER_REGISTRY, JAVA_BUILD_RUNNER, WD_MANAGER,
-                PROJECT_ROOT_MANAGER);
+                PROJECT_ROOT_MANAGER, SELF_EXECUTION_POLICY);
             if (splash) panes.active().canvas().setShowSplash(true);
             // 初期ファイルをバッファレジストリに登録
             if (path != null) {
