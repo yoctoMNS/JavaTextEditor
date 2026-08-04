@@ -13,4 +13,13 @@ set -e
 # いずれも既に設定済みの値があれば上書きしない。
 export IBUS_ENABLE_SYNC_MODE="${IBUS_ENABLE_SYNC_MODE:-1}"
 export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
-java -cp build dev.javatexteditor.Main
+# アイドル時のRSSをOSへ返却するための最小限のGCチューニング（設計判断は
+# docs/decision-log.md「起動時JVMメモリ/GCチューニングの設計決定事項」参照）。
+# 前回導入した-Xmx/ParallelGCThreads/ConcGCThreads/CICompilerCountの明示的な固定値は
+# 操作時のカクつきを招いたため撤回した（GCスレッド数をコア数の少ない値へ固定すると、
+# 実際にGCが走った際のポーズ時間がハードウェアのコア数なりに短くならず伸びるため）。
+# G1PeriodicGCIntervalは新たなアロケーションが無く実質アイドルな期間にのみGCを走らせる
+# （JEP 346）ため、対話操作中の応答性には影響しない。
+# 既にJAVA_OPTSが設定されていれば上書きしない。
+export JAVA_OPTS="${JAVA_OPTS:--XX:G1PeriodicGCInterval=60000}"
+java $JAVA_OPTS -cp build dev.javatexteditor.Main
