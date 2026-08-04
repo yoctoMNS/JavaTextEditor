@@ -67,6 +67,7 @@ public final class PaneManager implements EditorHost {
     private final JavaBuildRunner javaBuildRunner;
     private final WorkingDirectoryManager wdManager;
     private final ProjectRootManager projectRootManager;
+    private final TransientSelfExecutionPolicy selfExecutionPolicy;
     private final int initialCellW;
     private final int initialCellH;
 
@@ -88,12 +89,14 @@ public final class PaneManager implements EditorHost {
      * @param javaBuildRunner  F11 で複数 main クラスが見つかった際の実行コールバック用
      * @param wdManager        作業ディレクトリの中央管理
      * @param projectRootManager  :pr で固定するプロジェクトルートの中央管理（全ペイン共有）
+     * @param selfExecutionPolicy  :set allowselfexecution の許可状態の保持先（全ペイン共有）
      */
     public PaneManager(JFrame frame, String initialText, String initialPath,
                         int initialCellW, int initialCellH,
                         LiveDiagnostics liveDiagnostics, AnalysisServices services,
                         BufferRegistry bufferRegistry, JavaBuildRunner javaBuildRunner,
-                        WorkingDirectoryManager wdManager, ProjectRootManager projectRootManager) {
+                        WorkingDirectoryManager wdManager, ProjectRootManager projectRootManager,
+                        TransientSelfExecutionPolicy selfExecutionPolicy) {
         this.frame              = frame;
         this.liveDiagnostics    = liveDiagnostics;
         this.services           = services;
@@ -101,6 +104,7 @@ public final class PaneManager implements EditorHost {
         this.javaBuildRunner    = javaBuildRunner;
         this.wdManager          = wdManager;
         this.projectRootManager = projectRootManager;
+        this.selfExecutionPolicy = selfExecutionPolicy;
         this.initialCellW       = initialCellW;
         this.initialCellH       = initialCellH;
 
@@ -354,6 +358,11 @@ public final class PaneManager implements EditorHost {
         editor.setOnBufferDelete(bufferRegistry::unregister);
         editor.setOnRunMainClassSelected(
             fqcn -> javaBuildRunner.runSelectedMainClass(editor, editor.getBuildRoot(), fqcn));
+        // :set allowselfexecution の書き込み側。読み取り側（JavaBuildRunnerの実行ブロック判定）は
+        // SelfExecutionPolicyインタフェース越しにしかこれを知らない（SelfExecutionPolicyのJavadoc参照）。
+        if (selfExecutionPolicy != null) {
+            editor.setAllowSelfExecutionCallback(() -> selfExecutionPolicy.setAllowed(true));
+        }
         // 作業ディレクトリを反映
         if (wdManager != null) {
             Path wd = wdManager.getWorkingDirectory();

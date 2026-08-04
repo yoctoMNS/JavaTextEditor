@@ -297,6 +297,8 @@ public class ModalEditor {
     private enum TelescopePurpose { NAVIGATE, RUN_MAIN_CLASS }
     private TelescopePurpose telescopePurpose = TelescopePurpose.NAVIGATE;
     private Consumer<String> onRunMainClassSelected;
+    /** :set allowselfexecution の書き込み先（PaneManagerが配線。詳細はSelfExecutionPolicyのJavadoc参照）。 */
+    private Runnable allowSelfExecutionCallback;
     // telescope 疑似バッファ（\f/\g と同じ表示方式）の退避状態。
     // jdk-source の saved*/*cd候補* の cdSaved* と同じ「一時退避→キャンセル時に復元」パターンを踏襲するが、
     // 各セッションは独立したフィールド群を持つ（3系統の相互作用は未定義のまま。CLAUDE.md「既知の未接続・二重定義」参照）。
@@ -475,6 +477,11 @@ public class ModalEditor {
     /** F11: telescope の main クラス選択（Enter）を、ファイルを開く代わりに実行要求として受け取るコールバック。 */
     public void setOnRunMainClassSelected(Consumer<String> callback) {
         this.onRunMainClassSelected = callback;
+    }
+
+    /** :set allowselfexecution が呼ぶコールバックを差し替える。 */
+    public void setAllowSelfExecutionCallback(Runnable callback) {
+        this.allowSelfExecutionCallback = callback;
     }
 
     public void setExitCallback(Runnable callback) {
@@ -3111,6 +3118,9 @@ public class ModalEditor {
         r.on(() -> executeMain(""),                  "main");
         r.onPrefix("main ", this::executeMain);
 
+        // --- F10/F11/F12 の安全策 ---
+        r.on(this::allowSelfExecution,                "set allowselfexecution");
+
         return r;
     }
 
@@ -3156,6 +3166,19 @@ public class ModalEditor {
         }
         statusMessage = "project root: " + root;
         returnToFilerIfCommandFromFiler();
+    }
+
+    /**
+     * :set allowselfexecution — このプロセスが生きている間だけ、エディタ自身のプロジェクトに
+     * 対するF11/F12実行を許可する。永続化はしない（再起動すると既定の禁止に戻る。
+     * TransientSelfExecutionPolicyのJavadoc参照）。コールバック未配線の単体テスト等では
+     * 何もしない（ステータスメッセージだけは表示する）。
+     */
+    private void allowSelfExecution() {
+        if (allowSelfExecutionCallback != null) {
+            allowSelfExecutionCallback.run();
+        }
+        statusMessage = "self-execution of this editor's own project is now allowed for this session";
     }
 
     /** :pr? — 現在のプロジェクトルートを確認する（未設定なら :cd 追従中である旨を表示）。 */

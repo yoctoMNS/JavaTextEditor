@@ -78,9 +78,9 @@ public final class CBuildRunner {
     /**
      * F11（C）: コンパイル済みの実行ファイルを別プロセスとして起動し、標準出力/標準エラーを
      * *run* 疑似バッファへリアルタイム表示する（JavaBuildRunner の runJavaClass の C 版）。
+     * 「終了→起動→記録」の原子化については {@link RunningProcessHolder} のJavadoc参照。
      */
     private void runCExecutable(ModalEditor editor, Path projectRoot) {
-        running.terminateIfAlive();
         Path executable = builder.executableFor(projectRoot);
         String command = executable.toString();
         editor.beginRunOutput(command, executable.getFileName().toString());
@@ -88,10 +88,11 @@ public final class CBuildRunner {
         Thread.ofVirtual().start(() -> {
             int exitCode;
             try {
-                ProcessBuilder pb = new ProcessBuilder(executable.toString());
-                pb.directory(projectRoot.toFile());
-                Process process = pb.start();
-                running.set(process);
+                Process process = running.terminateAndStart(() -> {
+                    ProcessBuilder pb = new ProcessBuilder(executable.toString());
+                    pb.directory(projectRoot.toFile());
+                    return pb.start();
+                });
                 Thread stdoutReader = ProcessOutputPump.start(process.getInputStream(), editor, false);
                 Thread stderrReader = ProcessOutputPump.start(process.getErrorStream(), editor, true);
                 exitCode = process.waitFor();
