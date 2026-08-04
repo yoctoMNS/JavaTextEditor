@@ -316,6 +316,11 @@ public class PieceTable {
         return List.copyOf(pieces);
     }
 
+    /** テスト専用: addBufferのコンパクション(Phase 4)が実際に効いているかを確認するためのアクセサ。 */
+    int addBufferLengthForTest() {
+        return addBuffer.length();
+    }
+
     protected void restorePieces(List<Piece> snapshot) {
         pieces.clear();
         pieces.addAll(snapshot);
@@ -324,5 +329,111 @@ public class PieceTable {
         int sum = 0;
         for (Piece p : snapshot) sum += p.length();
         totalLength = sum;
+    }
+
+    /**
+     * addBufferのうち、現在のpiecesおよび呼び出し側が保持するUndo/Redoスナップショット群
+     * (snapshotLists)のいずれからも参照されていない範囲(＝削除済みで二度と使われない過去の
+     * 挿入文字列)を捨て、生きている範囲だけを新しいバッファへ詰め直す(軽量化リファクタリング
+     * Phase 4「addBufferのコンパクション」)。
+     *
+     * <p><b>なぜsnapshotListsを引数で受け取る設計にしたか</b>: addBufferへの参照はPieceTable
+     * 自身が持つ現在の{@code pieces}だけでなく、{@code UndoablePieceTable}がUndo/Redo用に
+     * 保持する過去のPieceリスト(スタック)からも行われている。現在のpiecesだけを基準に
+     * コンパクションすると、Undo履歴が参照している古い範囲を誤って捨ててしまい、Undoで
+     * 文字化けした/壊れたテキストが復元される致命的なバグになる。かといって
+     * {@code UndoablePieceTable}のスタックの中身(private)をこのクラスが直接覗くのも
+     * カプセル化違反になるため、「呼び出し側が渡したスナップショット群も一緒に書き換えて
+     * 返す」という形にし、スタックの持ち方の詳細はUndoablePieceTable側に閉じたままにした。
+     *
+     * <p>アルゴリズム: (1) 現在のpieces + snapshotListsの全ADDピースが指す範囲(区間)を集める、
+     * (2) それらをソートして重なり・隣接する区間を統合(区間統合の標準的手法)、(3) 統合後の
+     * 各区間の中身だけを新しいバッファへ順にコピーし、(4) 全てのADDピースを「どの統合区間の
+     * 中の何文字目か」から新しい座標へ書き換える。ORIGINAL/MAPPEDピースは元データを一切
+     * 書き換えないため対象外(座標も変わらない)。
+     *
+     * @param snapshotLists Undo/Redoスタックが保持するPieceスナップショットの列
+     *                       (各要素は不変の{@code List<Piece>})
+     * @return 引数と同じ順序・同じ要素数で、addBufferの新しい座標系に書き換えたスナップショット
+     */
+    protected List<List<Piece>> compactAddBuffer(List<List<Piece>> snapshotLists) {
+        List<int[]> ranges = new ArrayList<>();
+        collectAddRanges(pieces, ranges);
+        for (List<Piece> snap : snapshotLists) collectAddRanges(snap, ranges);
+
+        if (ranges.isEmpty()) {
+            // 現在のpieces・全スナップショットのいずれもADDバッファを参照していない
+            // (全てORIGINAL/MAPPEDのみ、またはaddBuffer自体が空) -> 丸ごと空にしてよい
+            if (!addBuffer.isEmpty()) addBuffer.setLength(0);
+            return snapshotLists;
+        }
+
+        ranges.sort((a, b) -> Integer.compare(a[0], b[0]));
+        List<int[]> merged = new ArrayList<>();
+        for (int[] r : ranges) {
+            if (!merged.isEmpty() && r[0] <= merged.get(merged.size() - 1)[1]) {
+                int[] last = merged.get(merged.size() - 1);
+                last[1] = Math.max(last[1], r[1]);
+            } else {
+                merged.add(r.clone());
+            }
+        }
+
+        // 統合後も結局バッファ全域が生きている(削除済み範囲が無い)場合は、コピーし直すだけ
+        // 無駄なので何もしない。
+        if (merged.size() == 1 && merged.get(0)[0] == 0 && merged.get(0)[1] == addBuffer.length()) {
+            return snapshotLists;
+        }
+
+        int[] mergedStarts = new int[merged.size()];
+        int[] newBases = new int[merged.size()];
+        StringBuilder newBuffer = new StringBuilder();
+        for (int i = 0; i < merged.size(); i++) {
+            int[] m = merged.get(i);
+            mergedStarts[i] = m[0];
+            newBases[i] = newBuffer.length();
+            newBuffer.append(addBuffer, m[0], m[1]);
+        }
+
+        remapAddPieces(pieces, mergedStarts, newBases);
+        List<List<Piece>> result = new ArrayList<>(snapshotLists.size());
+        for (List<Piece> snap : snapshotLists) {
+            List<Piece> copy = new ArrayList<>(snap);
+            remapAddPieces(copy, mergedStarts, newBases);
+            result.add(List.copyOf(copy));
+        }
+
+        // addBuffer は final フィールドのため、参照自体は差し替えずに中身だけを置き換える。
+        addBuffer.setLength(0);
+        addBuffer.append(newBuffer);
+
+        return result;
+    }
+
+    private static void collectAddRanges(List<Piece> list, List<int[]> out) {
+        for (Piece p : list) {
+            if (p.source() == Piece.Source.ADD) {
+                out.add(new int[]{p.start(), p.start() + p.length()});
+            }
+        }
+    }
+
+    /** 指定したoldStartを含む統合区間のインデックスを二分探索で求める。 */
+    private static int findMergedIndex(int[] mergedStarts, int oldStart) {
+        int idx = java.util.Arrays.binarySearch(mergedStarts, oldStart);
+        if (idx < 0) {
+            idx = -idx - 2; // 挿入位置の1つ前 = oldStart以下で最大のstartを持つ区間
+        }
+        return idx;
+    }
+
+    private static void remapAddPieces(List<Piece> list, int[] mergedStarts, int[] newBases) {
+        for (int i = 0; i < list.size(); i++) {
+            Piece p = list.get(i);
+            if (p.source() != Piece.Source.ADD) continue;
+            int idx = findMergedIndex(mergedStarts, p.start());
+            int newStart = newBases[idx] + (p.start() - mergedStarts[idx]);
+            list.set(i, new Piece(Piece.Source.ADD, newStart, p.length()));
+        }
     }
 }
