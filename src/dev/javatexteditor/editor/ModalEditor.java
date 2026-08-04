@@ -327,6 +327,7 @@ public class ModalEditor {
     /** *cd候補* 表示中に隠れている元の編集状態。 */
     private final PseudoBufferStash cdStash = new PseudoBufferStash();
     private String cdSavedCommandText = ""; // キャンセル時に COMMAND モードへ復元する入力途中の文字列
+    private String cdVerb = "cd"; // "cd" | "mkdir"（どちらもディレクトリのみを候補とするため機構を共用する）
     private Path cdConfirmTarget = null; // :cd 先が存在しない場合の y/n 確認プロンプト対象パス
     // FILER表示中に ':' でCOMMANDモードへ入った場合に true。バッファを操作しないコマンド
     // （:pr・:mkdir 等）はこのフラグを見て、実行後に enterFiler() でFILERへ戻る（同じディレクトリの
@@ -1923,7 +1924,9 @@ public class ModalEditor {
         } else if (keyCode == KeyEvent.VK_TAB) {
             String cmd = commandBuffer.toString();
             if (cmd.equals("cd") || cmd.startsWith("cd ")) {
-                handleCdTabCompletion();
+                handleCdTabCompletion("cd");
+            } else if (cmd.equals("mkdir") || cmd.startsWith("mkdir ")) {
+                handleCdTabCompletion("mkdir");
             } else if (cmd.equals("enew") || cmd.startsWith("enew ")) {
                 handleEditTabCompletion("enew");
             } else if (cmd.equals("e") || cmd.startsWith("e ")) {
@@ -1942,17 +1945,21 @@ public class ModalEditor {
     // -------------------------------------------------------------------------
 
     /**
-     * commandBuffer が "cd" / "cd " で始まる場合のみ有効。
+     * commandBuffer が "verb" / "verb " で始まる場合のみ有効（verb は "cd"/"mkdir"）。
+     * ディレクトリのみを候補にする（:mkdir も既存の親ディレクトリを辿って新規ディレクトリ名を
+     * 入力する用途のため、ファイルを含める :e/:w とは異なり :cd と同じ絞り込みでよい）。
      * 候補0件 → 何もしない、1件 → その場で補完、複数件 → *cd候補* 疑似バッファで選択させる。
+     * どの verb から呼ばれたかは cdVerb に覚えておき、補完確定時に同じコマンド名を使う。
      */
-    private void handleCdTabCompletion() {
+    private void handleCdTabCompletion(String verb) {
         String cmd = commandBuffer.toString();
         String pathStr;
-        if (cmd.equals("cd") || cmd.startsWith("cd ")) {
-            pathStr = cmd.length() > 2 ? cmd.substring(2).stripLeading() : "";
+        if (cmd.equals(verb) || cmd.startsWith(verb + " ")) {
+            pathStr = cmd.length() > verb.length() ? cmd.substring(verb.length()).stripLeading() : "";
         } else {
-            return; // cd 以外のコマンドでは補完しない
+            return;
         }
+        cdVerb = verb;
 
         String expanded = UserPathResolver.expandHome(pathStr);
         int sepIdx = Math.max(expanded.lastIndexOf('/'), expanded.lastIndexOf('\\'));
@@ -1993,10 +2000,10 @@ public class ModalEditor {
         openCdCandidateBuffer(cmd, parentPart, candidates);
     }
 
-    /** commandBuffer を "cd " + parentPart + name + "/" に置き換える（続けて補完できるよう末尾に区切り文字を付与）。 */
+    /** commandBuffer を "<cdVerb> " + parentPart + name + "/" に置き換える（続けて補完できるよう末尾に区切り文字を付与）。 */
     private void applyCdCandidate(String parentPart, String name) {
         commandBuffer.setLength(0);
-        commandBuffer.append("cd ").append(parentPart).append(name).append("/");
+        commandBuffer.append(cdVerb).append(' ').append(parentPart).append(name).append("/");
     }
 
     /** バッファを差し替える際に、旧バッファ由来の検索・結果リスト状態を破棄する。
@@ -2024,7 +2031,7 @@ public class ModalEditor {
         cdSelectionActive = true;
 
         StringBuilder sb = new StringBuilder();
-        sb.append("*cd-candidates* ").append(parentPart.isEmpty() ? "." : parentPart)
+        sb.append('*').append(cdVerb).append("-candidates* ").append(parentPart.isEmpty() ? "." : parentPart)
           .append(" — ").append(candidates.size()).append(" item(s)\n");
         for (String name : candidates) {
             sb.append(name).append("/\n");
@@ -2036,7 +2043,7 @@ public class ModalEditor {
         resetSearchAndResultState();
         commandBuffer.setLength(0);
         mode = Mode.NORMAL;
-        statusMessage = "cd candidates: " + candidates.size() + " item(s) — Enter to select, q to cancel";
+        statusMessage = cdVerb + " candidates: " + candidates.size() + " item(s) — Enter to select, q to cancel";
     }
 
     /** cd候補疑似バッファ内でカーソルがある行の候補を選択し、元のバッファへ戻って :cd 入力を継続する。 */
