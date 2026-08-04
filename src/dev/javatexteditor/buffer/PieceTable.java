@@ -147,7 +147,7 @@ public class PieceTable {
 
             boolean noOverlap = (pieceEnd <= offset) || (pieceStart >= deleteEnd);
             if (noOverlap) {
-                result.add(p);
+                appendMerged(result, p);
                 continue;
             }
             int keepBeforeLen = Math.max(0, offset - pieceStart);
@@ -155,16 +155,46 @@ public class PieceTable {
             int keepAfterLen = pieceEnd - keepAfterStart;
 
             if (keepBeforeLen > 0) {
-                result.add(new Piece(p.source(), p.start(), keepBeforeLen));
+                appendMerged(result, new Piece(p.source(), p.start(), keepBeforeLen));
             }
             if (keepAfterLen > 0) {
-                result.add(new Piece(p.source(), p.start() + (keepAfterStart - pieceStart), keepAfterLen));
+                appendMerged(result, new Piece(p.source(), p.start() + (keepAfterStart - pieceStart), keepAfterLen));
             }
             removed += p.length() - keepBeforeLen - Math.max(0, keepAfterLen);
         }
         pieces.clear();
         pieces.addAll(result);
         totalLength -= removed;
+    }
+
+    /**
+     * pieceをresultの末尾に追加する。末尾の既存ピースと結合可能(同一ソース・オフセットが
+     * 連続)なら1本のピースへ伸長し、そうでなければそのまま追加する。
+     *
+     * <p>insert()側の結合(117-127行目付近。既存ピースをaddBuffer末尾へ伸長する処理)とは
+     * 目的が異なるため実装は共有していない——insert側は「まだ確定していないaddBuffer末尾へ
+     * の追記」を扱うのに対し、こちらは「既に確定した2つのPieceが実は連続範囲を指している」
+     * ことを検出して1本にまとめるだけ。ただし「同一ソース・オフセット連続」という判定条件
+     * 自体(piecesAreAdjacent)は両者で意味が同じなので共通化している。
+     *
+     * <p>delete()にこの結合が無いと、挿入と削除を繰り返す典型的な編集(打っては消す)のたびに
+     * ピースが分裂したまま蓄積し、undoスナップショット(pieces全体のList.copyOf)のコストが
+     * 編集回数とともに増え続けてしまう(軽量性リファクタリング Phase 4)。
+     */
+    private static void appendMerged(List<Piece> result, Piece piece) {
+        if (!result.isEmpty()) {
+            Piece last = result.get(result.size() - 1);
+            if (piecesAreAdjacent(last, piece)) {
+                result.set(result.size() - 1, new Piece(last.source(), last.start(), last.length() + piece.length()));
+                return;
+            }
+        }
+        result.add(piece);
+    }
+
+    /** aの直後にbが連続しているか(同一ソース・a.start()+a.length()==b.start())。 */
+    private static boolean piecesAreAdjacent(Piece a, Piece b) {
+        return a.source() == b.source() && a.start() + a.length() == b.start();
     }
 
     public int length() {
