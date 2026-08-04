@@ -14,6 +14,7 @@ public class UndoablePieceTableTest {
         testUndoSequential();
         testRedoInvalidation();
         testCanUndoCanRedo();
+        testUndoHistoryCap();
 
         System.out.printf("%nPASS: %d / %d  (FAIL: %d)%n", pass, pass + fail, fail);
         if (fail > 0) System.exit(1);
@@ -131,6 +132,44 @@ public class UndoablePieceTableTest {
 
         t.undo();
         check("undo 後に canRedo()==true", t.canRedo());
+    }
+
+    // -------------------------------------------------------------------------
+    // undo履歴の上限(MAX_UNDO_HISTORY=1000)
+    // -------------------------------------------------------------------------
+
+    static void testUndoHistoryCap() {
+        System.out.println("[undo履歴の上限]");
+
+        UndoablePieceTable t1 = new UndoablePieceTable("");
+        for (int i = 0; i < 1010; i++) {
+            t1.insert(t1.length(), "a");
+        }
+        check("上限1000+10回編集してもundoStackが1000件を超えない",
+              t1.undoStackSizeForTest() == 1000);
+
+        UndoablePieceTable t2 = new UndoablePieceTable("");
+        for (int i = 0; i < 1010; i++) {
+            t2.insert(t2.length(), String.valueOf(i % 10));
+        }
+        String beforeUndo = t2.getText();
+        check("上限到達後もundo()で直前の編集は正しく取り消される", () -> {
+            t2.undo();
+            return t2.getText().equals(beforeUndo.substring(0, beforeUndo.length() - 1));
+        });
+
+        UndoablePieceTable t3 = new UndoablePieceTable("");
+        for (int i = 0; i < 1010; i++) {
+            t3.insert(t3.length(), "x");
+        }
+        int undoCount = 0;
+        while (t3.canUndo()) {
+            t3.undo();
+            undoCount++;
+        }
+        check("undo可能な回数はちょうど上限の1000回", undoCount == 1000);
+        check("上限を超えて破棄された最古10文字はundoで復元できない",
+              t3.getText().equals("xxxxxxxxxx"));
     }
 
     // -------------------------------------------------------------------------

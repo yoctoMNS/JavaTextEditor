@@ -6,6 +6,15 @@ import java.util.List;
 
 public class UndoablePieceTable extends PieceTable {
 
+    // Vimの 'undolevels'(既定1000)に倣った上限。旧実装は上限が無く、編集操作(insert/delete)の
+    // たびにスナップショットが積み上がり続け、長時間の編集セッションでヒープを圧迫していた
+    // (詳細はCLAUDE.mdのメモリ調査タスクの報告参照)。
+    private static final int MAX_UNDO_HISTORY = 1000;
+
+    // ArrayDequeを使う理由: 「最新を先頭(push/pop)」「上限超過時に最古(末尾)を1件破棄」の
+    // 両方が必要で、Dequeなら両端操作(push/pop/removeLast)をどちらもO(1)で行える。
+    // LinkedListでも同じことはできるが、要素ごとにノードを持たないArrayDequeの方が
+    // GC対象になる中間オブジェクトが少なく、この用途(単純な両端キュー)に軽量。
     private final Deque<List<Piece>> undoStack = new ArrayDeque<>();
     private final Deque<List<Piece>> redoStack = new ArrayDeque<>();
     // :wa/:qa（Vim互換の全保存・全終了）の判定に使う「最後の保存以降に変更があったか」フラグ。
@@ -27,8 +36,16 @@ public class UndoablePieceTable extends PieceTable {
     }
 
     private void snapshotBeforeEdit() {
-        undoStack.push(getPieces());
+        pushBounded(undoStack, getPieces());
         redoStack.clear();
+    }
+
+    /** スタックへ積んだ上で、上限を超えていれば最古(末尾)のスナップショットを1件破棄する。 */
+    private static void pushBounded(Deque<List<Piece>> stack, List<Piece> snapshot) {
+        stack.push(snapshot);
+        if (stack.size() > MAX_UNDO_HISTORY) {
+            stack.removeLast();
+        }
     }
 
     @Override
@@ -49,7 +66,7 @@ public class UndoablePieceTable extends PieceTable {
 
     public void undo() {
         if (undoStack.isEmpty()) return;
-        redoStack.push(getPieces());
+        pushBounded(redoStack, getPieces());
         restorePieces(undoStack.pop());
         modified = true;
         version++;
@@ -57,7 +74,7 @@ public class UndoablePieceTable extends PieceTable {
 
     public void redo() {
         if (redoStack.isEmpty()) return;
-        undoStack.push(getPieces());
+        pushBounded(undoStack, getPieces());
         restorePieces(redoStack.pop());
         modified = true;
         version++;
@@ -68,6 +85,9 @@ public class UndoablePieceTable extends PieceTable {
 
     public boolean canUndo() { return !undoStack.isEmpty(); }
     public boolean canRedo() { return !redoStack.isEmpty(); }
+
+    /** テスト専用: undo履歴の件数上限が守られているかを確認するためのアクセサ。 */
+    int undoStackSizeForTest() { return undoStack.size(); }
 
     /** :wa/:qa 用。最後の保存（{@link #markSaved()}）以降に編集操作が行われたか。 */
     public boolean isModified() { return modified; }
