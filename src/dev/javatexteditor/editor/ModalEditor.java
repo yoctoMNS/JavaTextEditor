@@ -319,6 +319,11 @@ public class ModalEditor {
     // 作業ディレクトリ変更コールバック（Main.java から WorkingDirectoryManager に委譲）
     // 成功時は null, 失敗時は日本語エラーメッセージを返す。
     private java.util.function.Function<Path, String> changeWdCallback = null;
+    // :pr で固定するプロジェクトルートの変更コールバック（PaneManager から ProjectRootManager に
+    // 委譲。:cd の changeWdCallback と同じ「中央管理へ変更を通知する」役割）。
+    // 未配線（PaneManager経由でない単体テスト等）の場合は pinProjectRoot() が自ペインの
+    // フィールドへ直接書き込むフォールバックで動作する。
+    private java.util.function.Consumer<Path> changeProjectRootCallback = null;
     // :cd タブ補完状態（候補が複数件のとき *cd候補* 疑似バッファを開いて選択させる。
     // jdk-source 疑似バッファ（saved*/inJdkSourceBuffer）と同じ「一時退避→復元」パターン）
     private List<String> cdCandidates = List.of(); // 候補ディレクトリ名（末尾 "/" は含まない）
@@ -3135,10 +3140,21 @@ public class ModalEditor {
     /**
      * :pr — その時点の :cd 現在ディレクトリを F10/F11/F12 用プロジェクトルートとして記憶する。
      * 別ディレクトリで再度 :pr を打てば上書きされる。セッション終了時に破棄（永続化しない）。
+     *
+     * <p>{@link #changeProjectRootCallback} が配線されていれば中央管理（{@code ProjectRootManager}）
+     * へ通知し、その通知が全ペインの {@link #setProjectRootOverride(Path)} を呼び戻すことで
+     * このペイン自身の {@link #projectRootOverride} も含めて全ペインへ反映される（`:cd` と同じ
+     * 「コールバックで中央へ送り、中央からの通知で自分にも戻ってくる」経路）。コールバック未配線の
+     * 単体テスト等では、フォールバックとして自ペインのフィールドへ直接書き込む。
      */
     private void pinProjectRoot() {
-        projectRootOverride = getProjectRoot();
-        statusMessage = "project root: " + projectRootOverride;
+        Path root = getProjectRoot();
+        if (changeProjectRootCallback != null) {
+            changeProjectRootCallback.accept(root);
+        } else {
+            projectRootOverride = root;
+        }
+        statusMessage = "project root: " + root;
         returnToFilerIfCommandFromFiler();
     }
 
@@ -6486,6 +6502,12 @@ public class ModalEditor {
     public void setChangeWorkingDirectoryCallback(java.util.function.Function<Path, String> cb) {
         this.changeWdCallback = cb;
     }
+    /** ProjectRootManager からの通知を受けて自ペインの :pr 固定値を更新する（:cd の setProjectRoot 相当）。 */
+    public void setProjectRootOverride(Path root) { this.projectRootOverride = root; }
+    /** :pr 実行時に中央管理（ProjectRootManager）へ通知するコールバックを配線する。 */
+    public void setChangeProjectRootCallback(java.util.function.Consumer<Path> cb) {
+        this.changeProjectRootCallback = cb;
+    }
     public Path getProjectRoot() {
         return (projectRoot != null) ? projectRoot : Path.of(System.getProperty("user.dir"));
     }
@@ -8062,11 +8084,16 @@ public class ModalEditor {
     /** Main.java の onOrganizeImports コールバックから EDT 上で呼ばれる：未使用 import 削除のみ。 */
     public void organizeImportsRemoveUnused() {
         if (autoImportHandler == null) return;
+        String before = buffer.getText();
+        int caretBefore = offsetOfCursor();
         List<String> removed = autoImportHandler.removeUnusedImports(buffer);
         if (removed.isEmpty()) {
             statusMessage = "Import cleanup complete (nothing removed)";
         } else {
             statusMessage = removed.size() + " import(s) removed";
+            String after = buffer.getText();
+            shiftCursorAfterImportEdit(before, after, caretBefore);
+            shiftDiagnosticsAfterImportEdit(before, after);
         }
         syncCanvas();
     }
@@ -8083,11 +8110,16 @@ public class ModalEditor {
             syncCanvas();
             return;
         }
+        String before = buffer.getText();
+        int caretBefore = offsetOfCursor();
         List<String> removed = autoImportHandler.removeUnusedImports(buffer);
         if (removed.isEmpty()) {
             statusMessage = "No unused imports";
         } else {
             statusMessage = removed.size() + " import(s) removed";
+            String after = buffer.getText();
+            shiftCursorAfterImportEdit(before, after, caretBefore);
+            shiftDiagnosticsAfterImportEdit(before, after);
         }
         syncCanvas();
     }
@@ -8104,9 +8136,16 @@ public class ModalEditor {
             syncCanvas();
             return;
         }
+        String before = buffer.getText();
+        int caretBefore = offsetOfCursor();
         boolean removed = autoImportHandler.removeImport(fqn, buffer);
         statusMessage = removed ? "import " + fqn + " removed"
                                 : "E: import " + fqn + " not found";
+        if (removed) {
+            String after = buffer.getText();
+            shiftCursorAfterImportEdit(before, after, caretBefore);
+            shiftDiagnosticsAfterImportEdit(before, after);
+        }
         syncCanvas();
     }
 

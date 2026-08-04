@@ -3,6 +3,7 @@ package dev.javatexteditor.app;
 import dev.javatexteditor.BufferRegistry;
 import dev.javatexteditor.Main;
 import dev.javatexteditor.PaneTree;
+import dev.javatexteditor.ProjectRootManager;
 import dev.javatexteditor.WorkingDirectoryManager;
 import dev.javatexteditor.analysis.CompileAnalyzer;
 import dev.javatexteditor.ui.DisplayMetrics;
@@ -74,6 +75,8 @@ public final class EditorApplication {
 
     // 作業ディレクトリの中央管理（launch() で初期化）
     private static WorkingDirectoryManager WD_MANAGER;
+    // :pr で固定するプロジェクトルートの中央管理（全ペイン共有。launch() で初期化）
+    private static ProjectRootManager PROJECT_ROOT_MANAGER;
 
     // 各ペインに配線する解析サービス一式。
     // ★この宣言はクラスロード時に評価され、その時点で JDK クラス索引の構築が始まる。
@@ -135,6 +138,7 @@ public final class EditorApplication {
             ? Path.of(initialPath).toAbsolutePath().getParent()
             : null;
         WD_MANAGER = new WorkingDirectoryManager(initialHint);
+        PROJECT_ROOT_MANAGER = new ProjectRootManager();
         Path projectRoot = WD_MANAGER.getWorkingDirectory();
 
         // 作業ディレクトリに依存する索引（補完・単語）の構築を開始する。
@@ -159,7 +163,8 @@ public final class EditorApplication {
             centerOnScreen(frame, targetScreen);
 
             PaneManager panes = new PaneManager(frame, text, path, initialCellW, initialCellH,
-                LIVE_DIAGNOSTICS, SERVICES, BUFFER_REGISTRY, JAVA_BUILD_RUNNER, WD_MANAGER);
+                LIVE_DIAGNOSTICS, SERVICES, BUFFER_REGISTRY, JAVA_BUILD_RUNNER, WD_MANAGER,
+                PROJECT_ROOT_MANAGER);
             if (splash) panes.active().canvas().setShowSplash(true);
             // 初期ファイルをバッファレジストリに登録
             if (path != null) {
@@ -173,6 +178,13 @@ public final class EditorApplication {
                     l.editor().setProjectRoot(wd);
                 }
                 frame.setTitle(buildTitle(wd));
+            });
+
+            // :pr で固定するプロジェクトルート変更時: 全エディタへ反映（バグ修正、decision-log.md参照）
+            PROJECT_ROOT_MANAGER.addChangeListener(root -> {
+                for (PaneTree.Leaf l : panes.allLeaves()) {
+                    l.editor().setProjectRootOverride(root);
+                }
             });
 
             frame.add(panes.active().canvas());

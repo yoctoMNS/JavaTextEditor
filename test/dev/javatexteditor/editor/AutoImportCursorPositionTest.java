@@ -23,6 +23,8 @@ public class AutoImportCursorPositionTest {
         testMultiLineInsertKeepsCursorOnSameLine();
         testMultiCandidateSelectionKeepsCursorOnSameLine();
         testCursorAboveInsertPointUnaffected();
+        testOrganizeImportsRemoveUnusedKeepsCursorOnSameLine();
+        testRemoveImportCommandKeepsCursorOnSameLine();
 
         System.out.println("\n=== AutoImportCursorPositionTest: " + passed + "/" + (passed + failed) + " PASS ===");
         if (failed > 0) System.exit(1);
@@ -142,5 +144,78 @@ public class AutoImportCursorPositionTest {
         check("import が挿入された", ed.getText().contains("import java.util.ArrayList;"));
         check("カーソル位置が変化していない (row=" + ed.getCursorRow() + " col=" + ed.getCursorCol() + ")",
               ed.getCursorRow() == 0 && ed.getCursorCol() == 0);
+    }
+
+    /**
+     * バグ①修正: SPC+i+o / :oi（organizeImportsRemoveUnused）で未使用 import を削除した際も、
+     * 挿入時と同じくカーソルが同じ内容の行に留まることを検証する。修正前は削除経路にだけ
+     * shiftCursorAfterImportEdit()/shiftDiagnosticsAfterImportEdit() が呼ばれておらず、
+     * カーソルが削除された行数分ずれたままになっていた。
+     */
+    static void testOrganizeImportsRemoveUnusedKeepsCursorOnSameLine() throws Exception {
+        System.out.println("--- 未使用importの削除（:oi）でもカーソルが同じ内容の位置に留まる ---");
+        // ArrayList は未使用（本文中で参照されていない）ため削除される。HashMap は使用中なので残る。
+        String src = "package p;\n\nimport java.util.ArrayList;\nimport java.util.HashMap;\n\n"
+            + "public class Foo {\n    HashMap m;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        ed.setAutoImportHandler(newHandler());
+
+        // カーソルを "HashMap m;" 行の末尾に置く。
+        int cursorRowBefore = -1;
+        String[] beforeLines = src.split("\n", -1);
+        for (int i = 0; i < beforeLines.length; i++) {
+            if (beforeLines[i].contains("HashMap m;")) { cursorRowBefore = i; break; }
+        }
+        ed.setCursor(cursorRowBefore, "    HashMap m;".length());
+
+        ed.organizeImportsRemoveUnused();
+
+        String after = ed.getText();
+        check("未使用のArrayList importが削除された", !after.contains("import java.util.ArrayList;"));
+        check("使用中のHashMap importは残る", after.contains("import java.util.HashMap;"));
+
+        String[] afterLines = after.split("\n", -1);
+        int actualLine = -1;
+        for (int i = 0; i < afterLines.length; i++) {
+            if (afterLines[i].contains("HashMap m;")) { actualLine = i; break; }
+        }
+        check("削除で行数が減った (before=" + cursorRowBefore + " after=" + actualLine + ")", actualLine < cursorRowBefore);
+        check("カーソル行が削除後の HashMap m; 行と一致する (expected=" + actualLine + " actual=" + ed.getCursorRow() + ")",
+              ed.getCursorRow() == actualLine);
+        check("カーソル列が変化していない", ed.getCursorCol() == "    HashMap m;".length());
+    }
+
+    /** バグ①修正: :remove-import <fqn> でも同様にカーソルが追従することを検証する。 */
+    static void testRemoveImportCommandKeepsCursorOnSameLine() throws Exception {
+        System.out.println("--- :remove-import でもカーソルが同じ内容の位置に留まる ---");
+        String src = "package p;\n\nimport java.util.ArrayList;\nimport java.util.HashMap;\n\n"
+            + "public class Foo {\n    HashMap m;\n}\n";
+        ModalEditor ed = new ModalEditor(src);
+        ed.setAutoImportHandler(newHandler());
+
+        int cursorRowBefore = -1;
+        String[] beforeLines = src.split("\n", -1);
+        for (int i = 0; i < beforeLines.length; i++) {
+            if (beforeLines[i].contains("HashMap m;")) { cursorRowBefore = i; break; }
+        }
+        ed.setCursor(cursorRowBefore, "    HashMap m;".length());
+
+        ed.processKey(java.awt.event.KeyEvent.VK_ESCAPE, java.awt.event.KeyEvent.CHAR_UNDEFINED, 0);
+        ed.processKey(java.awt.event.KeyEvent.VK_UNDEFINED, ':', 0);
+        for (char c : "remove-import java.util.ArrayList".toCharArray()) {
+            ed.processKey(java.awt.event.KeyEvent.VK_UNDEFINED, c, 0);
+        }
+        ed.processKey(java.awt.event.KeyEvent.VK_ENTER, java.awt.event.KeyEvent.CHAR_UNDEFINED, 0);
+
+        String after = ed.getText();
+        check("指定したimportが削除された", !after.contains("import java.util.ArrayList;"));
+
+        String[] afterLines = after.split("\n", -1);
+        int actualLine = -1;
+        for (int i = 0; i < afterLines.length; i++) {
+            if (afterLines[i].contains("HashMap m;")) { actualLine = i; break; }
+        }
+        check("カーソル行が削除後の HashMap m; 行と一致する (expected=" + actualLine + " actual=" + ed.getCursorRow() + ")",
+              ed.getCursorRow() == actualLine);
     }
 }
