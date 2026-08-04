@@ -193,7 +193,17 @@
 - **GPU使用率**は`nvidia-smi --query-gpu=utilization.gpu`から算出する（`readGpuUsagePercent()`）。`nvidia-smi`コマンド自体はNVIDIAドライバがLinux/Windows双方でインストール時にPATHへ追加するため、OS判定なしで共通に試すだけでよい。GPU非搭載機・非NVIDIA GPU環境（AMD/Intel統合GPU等）・macOS（NVIDIAドライバ非提供）ではコマンド起動自体が失敗し、値が取れない。
 - **取得できなかった項目は`N/A`と表示せず、ラベルから丸ごと省略する**（`refresh()`が`List<String> parts`に取得できた項目だけ追加し`String.join(" | ", parts)`で結合）。「ノートPCにGPUが無いのは想定内なので`N/A`は不要、そもそも表示しないでほしい」というユーザー要望に基づく。全項目が取得できない場合は`cachedLabel`が空文字列になり、`EditorCanvas`側の既存の`if (!statsLabel.isEmpty())`ガードでシステムステータス自体が非表示になる（この分岐自体は変更していない）。
 - **サブプロセス起動・待機・エンコーディング処理は`runCommand(String... command)`ヘルパーに集約している**（GPU使用率取得の`nvidia-smi`呼び出しのみで使用）。`native.encoding`での読み取りは`.claude/skills/windows-batch-and-subprocess/SKILL.md`のルール3準拠（Windows環境でのnvidia-smi出力の文字化け対策）。
-- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）はJDK標準APIで元からクロスプラットフォームに動作するため変更していない。2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。
+- **意図的に変更しなかった点**: メモリ使用率（`readMemoryUsagePercent()`）はJDK標準APIで元からクロスプラットフォームに動作するため変更していない。2秒間隔のバックグラウンド更新・EDT非ブロッキング読み取りの設計もそのまま維持した。（**2026-08-04追記**: この判断は後日不具合として撤回された。下記「メモリ使用率が実際のシステムモニタと一致しない不具合の修正」節を参照。）
+
+### メモリ使用率が実際のシステムモニタと一致しない不具合の修正（2026-08-04）
+
+- **不具合報告**: ステータスラインの`MEM %`が、`free`/`htop`/GNOME System Monitor等の実際のシステムモニタが示す使用率と一致しない。
+- **原因**: `readMemoryUsagePercent()`は`com.sun.management.OperatingSystemMXBean#getFreeMemorySize()`（Linuxでは`/proc/meminfo`の`MemFree`相当）を「空きメモリ」として`used = total - free`を計算していた。しかしLinuxはディスクキャッシュ・バッファに積極的に空きRAMを使うため、`MemFree`は再利用可能なキャッシュ分を「使用中」に含めてしまう。一方`free`/`htop`等の実際のシステムモニタは`MemAvailable`（キャッシュの回収可能分を空きとして差し戻した値）を基準に使用率を計算するため、ディスクキャッシュが積み上がった環境ほど両者の乖離が大きくなる（実機のアイドル環境で検証した時点でも旧実装5.2%・`free`基準3.6%の乖離があり、キャッシュがさらに積み上がる実運用ではこの差はより顕著になる）。
+- **修正方針**: Linux環境では`/proc/meminfo`を`java.nio.file.Files.readAllLines()`で直接読み、`MemTotal`と`MemAvailable`から`used = total - available`で使用率を算出する（`readMemoryUsagePercentFromMeminfo()`）。`MemAvailable`未対応の古いカーネル・procfsが読めないコンテナ環境・Linux以外のOSでは、従来の`OperatingSystemMXBean`ベースの計算（`readMemoryUsagePercentFromMxBean()`）にフォールバックする。
+  - 外部コマンド起動ではなく`/proc/meminfo`のプレーンなファイル読み取りのため、CLAUDE.mdの「依存ライブラリ一切不使用」方針とは衝突しない（`runCommand()`ヘルパー・`nvidia-smi`と同様の外部プロセス依存は増やしていない）。
+  - Windows/macOSは調査時点で未検証だが、`OperatingSystemMXBean#getFreeMemorySize()`がLinuxほど大きな乖離を起こす一般的な報告がないため、既存実装をフォールバックとしてそのまま残した（Linux固有の「ディスクキャッシュを空きに使う」設計に起因する問題のため）。将来Windows/macOSでも同様の乖離が報告された場合は、この節と`readMemoryUsagePercentFromMxBean()`を起点に調査すること。
+- **検証**: 実機の`/proc/meminfo`（`MemTotal`/`MemFree`/`MemAvailable`）と`free -m`の出力を比較し、修正後の`SystemStatsMonitor`のラベル出力（`MEM 4%`）が`free -m`の`used`列から算出した使用率（3.8%→四捨五入で4%）と一致することを確認した。
+- **テスト**: 既存の`SystemStatsMonitorTest`（`testMemoryUsageIsWithinValidRangeOrAbsent`等）はいずれも「値が0〜100の範囲に収まっているか」のみを検証する設計のため、修正後もそのままPASSする（新規テストは追加していない。CI/コンテナ環境では`/proc/meminfo`の内容が実環境と異なり得るため、具体的な数値の一致を自動テストで固定するのは避けた）。
 
 ## 検索・補完機能の大文字小文字区別に関する設計決定事項
 
