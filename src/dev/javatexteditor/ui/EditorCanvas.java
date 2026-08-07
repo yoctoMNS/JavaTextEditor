@@ -205,7 +205,16 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     private static Thread timerResolutionPinThread = null;
     private static int timerResolutionPinRefCount = 0;
 
+    // 上記のとおりこの対策が要るのは Windows だけ（Linux/macOS のタイマー分解能は元から十分細かい）。
+    // 以前は全プラットフォームで起動していたため、Linux では何の効果も無いまま
+    // 「毎秒1000回 Thread.sleep(1) で起きる」スレッドが常駐し、CPU を焼きながら
+    // アイドル時のゴミを出し続けていた（JFR のアロケーションプロファイルに
+    // Thread.beforeSleep が上位で現れる）。効果のあるプラットフォームでだけ起動する。
+    private static final boolean NEEDS_TIMER_RESOLUTION_PIN =
+        System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+
     private static void acquireTimerResolutionPin() {
+        if (!NEEDS_TIMER_RESOLUTION_PIN) return;
         synchronized (TIMER_RESOLUTION_PIN_LOCK) {
             if (timerResolutionPinRefCount++ == 0) {
                 timerResolutionPinThread = new Thread(() -> {
@@ -225,6 +234,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
     }
 
     private static void releaseTimerResolutionPin() {
+        if (!NEEDS_TIMER_RESOLUTION_PIN) return;
         synchronized (TIMER_RESOLUTION_PIN_LOCK) {
             if (--timerResolutionPinRefCount == 0 && timerResolutionPinThread != null) {
                 timerResolutionPinThread.interrupt();
@@ -727,10 +737,21 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         nonAsciiGlyphCache.clear();
     }
 
+    /**
+     * {@code computeIfAbsent} ではなく {@code get} → 必要なら {@code put} で書いてあるのは意図的である
+     * （2026-08 メモリ肥大化の修正）。{@code computeIfAbsent} に渡すラムダは呼び出し元の局所変数を
+     * 捕捉するため、キャッシュヒット時でも呼び出しのたびにラムダのインスタンスが1つ生成される。
+     * ここはステータスラインの1文字ごと・30fps のアニメーションのたびに通る経路なので、
+     * JFR のアロケーションプロファイルでアイドル時の上位に現れていた。
+     */
     private BufferedImage getUiGlyph(int codePoint, int cw, int ch, Color color) {
         UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
-        return uiGlyphCache.computeIfAbsent(key,
-            k -> bitmapFont.renderGlyph(codePoint, cw, ch, color.getRGB()));
+        BufferedImage glyph = uiGlyphCache.get(key);
+        if (glyph == null) {
+            glyph = bitmapFont.renderGlyph(codePoint, cw, ch, color.getRGB());
+            uiGlyphCache.put(key, glyph);
+        }
+        return glyph;
     }
 
     /**
@@ -743,8 +764,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
      */
     private BufferedImage getNonAsciiGlyph(int codePoint, int cw, int ch, Color color) {
         UiGlyphKey key = new UiGlyphKey(codePoint, cw, ch, color.getRGB());
-        return nonAsciiGlyphCache.computeIfAbsent(key,
-            k -> renderNonAsciiGlyph(codePoint, cw, ch, color));
+        // computeIfAbsent を使わない理由は getUiGlyph() のコメント参照。
+        BufferedImage glyph = nonAsciiGlyphCache.get(key);
+        if (glyph == null) {
+            glyph = renderNonAsciiGlyph(codePoint, cw, ch, color);
+            nonAsciiGlyphCache.put(key, glyph);
+        }
+        return glyph;
     }
 
     private BufferedImage renderNonAsciiGlyph(int codePoint, int cw, int ch, Color color) {
@@ -808,14 +834,24 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         return s + "…";
     }
 
+    // computeIfAbsent を使わない理由は getUiGlyph() のコメント参照（本文描画では
+    // 1回の再描画あたり画面上の全文字ぶん通るため、ラムダ生成の影響は更に大きい）。
     private BufferedImage getGlyphFg(int cp) {
-        return glyphCacheFg.computeIfAbsent(cp,
-            k -> bitmapFont.renderGlyph(k, cellW, cellH, theme.foreground.getRGB()));
+        BufferedImage glyph = glyphCacheFg.get(cp);
+        if (glyph == null) {
+            glyph = bitmapFont.renderGlyph(cp, cellW, cellH, theme.foreground.getRGB());
+            glyphCacheFg.put(cp, glyph);
+        }
+        return glyph;
     }
 
     private BufferedImage getGlyphBg(int cp) {
-        return glyphCacheBg.computeIfAbsent(cp,
-            k -> bitmapFont.renderGlyph(k, cellW, cellH, theme.background.getRGB()));
+        BufferedImage glyph = glyphCacheBg.get(cp);
+        if (glyph == null) {
+            glyph = bitmapFont.renderGlyph(cp, cellW, cellH, theme.background.getRGB());
+            glyphCacheBg.put(cp, glyph);
+        }
+        return glyph;
     }
 
     private Font getSwingFont() {

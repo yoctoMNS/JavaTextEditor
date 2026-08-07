@@ -35,6 +35,53 @@ import javax.swing.SwingUtilities;
  */
 public final class LiveDiagnostics {
 
+    /**
+     * コンパイル解析（javac / gcc）を実行する唯一のスレッド。
+     *
+     * <p><b>仮想スレッドの都度起動をやめた理由（2026-08 メモリ肥大化の修正）</b>:
+     * 以前は解析要求のたびに {@code Thread.ofVirtual().start()} していた。1回の javac 解析は
+     * 数十MB規模の作業メモリを使い、大きなファイルでは完了までに数百ミリ秒〜数秒かかる。
+     * 一方で解析の引き金（INSERT離脱・保存・バッファ変更の400msデバウンス）はそれより短い間隔で
+     * 連続しうるため、同時に何本もの javac が走り、それぞれの作業メモリが同時に生存する状態に
+     * なっていた。世代カウンタは「返ってきた結果を捨てる」だけで解析そのものは止めないため、
+     * 捨てられる結果のためにメモリを使い切る事故が起きうる。単一スレッドで直列化することで、
+     * 生存する解析は常に1本だけになり、追い越された要求は開始前に破棄できる（下記の世代チェック）。
+     */
+    private static final java.util.concurrent.ExecutorService ANALYSIS_EXECUTOR =
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "live-diagnostics");
+            t.setDaemon(true);
+            return t;
+        });
+
+    /**
+     * 直前に解析したソースとその診断結果（ペインごとに1つ）。
+     *
+     * <p>INSERT離脱の直後に {@code :w} する、auto-import 適用後にバッファ変更フックが走る、といった
+     * 操作では「内容が全く同じソース」に対する解析要求が短時間に複数回発生する。javac を再実行しても
+     * 結果は必ず同一なので、キャッシュした診断をそのまま使って EDT 側の処理（診断表示・auto-import）
+     * だけを従来どおり実行する。観測できる挙動は変えずに javac の実行回数だけを減らす。
+     *
+     * <p>{@link #ANALYSIS_EXECUTOR} 上でのみ読み書きするため同期は不要。
+     */
+    private static final class AnalysisCache {
+        String path;
+        String source;
+        List<CompileDiagnostic> diagnostics;
+
+        boolean matches(String path, String source) {
+            return diagnostics != null
+                && java.util.Objects.equals(this.path, path)
+                && source.equals(this.source);
+        }
+
+        void store(String path, String source, List<CompileDiagnostic> diagnostics) {
+            this.path = path;
+            this.source = source;
+            this.diagnostics = diagnostics;
+        }
+    }
+
     private final CompileAnalyzer javaAnalyzer;
     private final CCompileAnalyzer cAnalyzer;
     private final JdkClassIndex jdkIndex;
@@ -74,10 +121,14 @@ public final class LiveDiagnostics {
         // compileGeneration で「最後に発行した解析要求」だけを世代番号として追跡し、結果が返って
         // きた時点で世代が古ければ（＝その後により新しい解析要求が発行済みなら）黙って破棄する。
         AtomicLong compileGeneration = new AtomicLong(0);
+        // 解析結果キャッシュも世代カウンタと同じくペインごとに1つ作る（インスタンスフィールドに
+        // すると全ペインで共有され、別ペインの内容と取り違える）。
+        AnalysisCache compileCache = new AnalysisCache();
         Runnable trigger = () -> {
             if (isJavaBuffer(editor)) {
                 editor.setStatusMessage("auto-import: analyzing...");
-                runCompileAnalysis(editor, canvas, true, "auto-import: analysis failed", compileGeneration);
+                runCompileAnalysis(editor, canvas, true, "auto-import: analysis failed",
+                    compileGeneration, compileCache);
             } else if (isCBuffer(editor)) {
                 runCAnalysis(editor, canvas, true);
             }
@@ -96,7 +147,8 @@ public final class LiveDiagnostics {
         editor.setOnOrganizeImports(() -> {
             if (isJavaBuffer(editor)) {
                 editor.setStatusMessage("cleaning up imports...");
-                runCompileAnalysis(editor, canvas, false, "E: compile analysis failed", compileGeneration);
+                runCompileAnalysis(editor, canvas, false, "E: compile analysis failed",
+                    compileGeneration, compileCache);
             } else if (isCBuffer(editor)) {
                 organizeCIncludes(editor);
             } else {
@@ -163,21 +215,33 @@ public final class LiveDiagnostics {
      *                            false のとき常に analyzeWithProject を使う（Ctrl+Shift+O 用。複数ファイル対応）。
      *  @param failureMessage 解析失敗時にステータス行へ出す文言
      *  @param generation install が編集対象ごとに1つ保持する世代カウンタ。
-     *                     結果反映時にこの呼び出し以降より新しい解析要求が発行されていれば
-     *                     （＝このスレッドが取得した診断は古い）、EDT反映を丸ごと破棄する。 */
+     *                     解析開始前と結果反映時の両方で確認し、この呼び出し以降により新しい
+     *                     解析要求が発行されていれば（＝この解析結果は古い）、javac の実行自体を
+     *                     省くか、EDT反映を丸ごと破棄する。
+     *  @param cache      install が編集対象ごとに1つ保持する直前の解析結果。内容が同一のソースに
+     *                     対する再解析を省くために使う（{@link AnalysisCache} 参照）。 */
     private void runCompileAnalysis(ModalEditor editor, EditorCanvas canvas,
-            boolean useRealPathIfSaved, String failureMessage, AtomicLong generation) {
+            boolean useRealPathIfSaved, String failureMessage, AtomicLong generation,
+            AnalysisCache cache) {
         String source = editor.getText();
         String snapshotPath = editor.getCurrentFilePath();
         long myGeneration = generation.incrementAndGet();
-        Thread.ofVirtual().start(() -> {
+        ANALYSIS_EXECUTOR.execute(() -> {
+            // 実行待ちの間に新しい要求が来ていれば、javac を動かさずに捨てる。
+            if (generation.get() != myGeneration) return;
             try {
                 // クラス索引が未完了なら完了まで待つ（起動直後の INSERT→NORMAL 対策）
                 jdkIndex.awaitReady();
                 Path projectRoot = workingDirectory.get();
-                List<CompileDiagnostic> diags = (useRealPathIfSaved && snapshotPath != null)
-                    ? javaAnalyzer.analyzeWithProject(snapshotPath, source, projectRoot)
-                    : javaAnalyzer.analyzeWithProject("<buffer>", source, projectRoot);
+                String analyzedPath = (useRealPathIfSaved && snapshotPath != null)
+                    ? snapshotPath : "<buffer>";
+                List<CompileDiagnostic> diags;
+                if (cache.matches(analyzedPath, source)) {
+                    diags = cache.diagnostics;   // 内容が同一: javac は再実行しない
+                } else {
+                    diags = javaAnalyzer.analyzeWithProject(analyzedPath, source, projectRoot);
+                    cache.store(analyzedPath, source, diags);
+                }
                 SwingUtilities.invokeLater(() -> {
                     if (generation.get() != myGeneration) return; // より新しい解析要求に上書き済み: 破棄
                     canvas.setDiagnostics(diags);
@@ -206,7 +270,8 @@ public final class LiveDiagnostics {
     private void runCAnalysis(ModalEditor editor, EditorCanvas canvas, boolean autoInclude) {
         String source = editor.getText();
         String snapshotPath = editor.getCurrentFilePath();
-        Thread.ofVirtual().start(() -> {
+        // Java 側と同じ単一スレッドで直列化する（gcc プロセスの多重起動を防ぐ）。
+        ANALYSIS_EXECUTOR.execute(() -> {
             try {
                 List<CompileDiagnostic> diags = (snapshotPath != null)
                     ? cAnalyzer.analyzeWithPath(snapshotPath, source)
