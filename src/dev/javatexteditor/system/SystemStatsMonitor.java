@@ -83,6 +83,7 @@ public final class SystemStatsMonitor {
      * OS判定なしで共通に試すだけでよい（macOSはNVIDIAドライバが提供されないため自然にempty）。
      */
     Optional<Integer> readGpuUsagePercent() {
+        if (gpuCommandMissing) return Optional.empty();
         String output = runCommand(
             "nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits");
         if (output == null) return Optional.empty();
@@ -95,10 +96,22 @@ public final class SystemStatsMonitor {
     }
 
     /**
+     * 外部コマンドの実行ファイルが見つからないことが判明したら true になる（GPU項目を恒久的に省く）。
+     *
+     * <p>2026-08のメモリ/CPU調査で追加した。nvidia-smi が無い環境（GPU非搭載・他ベンダGPU・
+     * コンテナ等）でも {@link #REFRESH_INTERVAL_SECONDS} 秒ごとに永久にプロセス起動を試み続けており、
+     * 起動失敗のたびに {@link IOException} の生成（スタックトレース込み）とプロセス起動処理のコストを
+     * 払っていた。実行ファイルが存在しないことは実行中に変わらないため、1度分かったら以後は試さない。
+     * 起動はできたが失敗した場合（タイムアウト・非0終了）は一時的な事象でありうるので、
+     * 従来どおり次回も試す。
+     */
+    private volatile boolean gpuCommandMissing = false;
+
+    /**
      * 外部コマンドを実行し、標準出力（native.encodingでデコード）をtrimして返す。
      * 起動失敗・タイムアウト・非0終了はすべて null（=呼び出し側で empty 扱い）に統一する。
      */
-    private static String runCommand(String... command) {
+    private String runCommand(String... command) {
         try {
             Process process = new ProcessBuilder(command)
                 .redirectErrorStream(true)
@@ -117,6 +130,8 @@ public final class SystemStatsMonitor {
             }
             return output;
         } catch (IOException e) {
+            // ProcessBuilder.start() の IOException は実質「実行ファイルが無い」を意味する。
+            gpuCommandMissing = true;
             return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -157,19 +172,28 @@ public final class SystemStatsMonitor {
         return readMemoryUsagePercentFromMxBean();
     }
 
-    /** Linux専用: /proc/meminfo の MemTotal/MemAvailable からメモリ使用率(%)を読む。 */
+    /**
+     * /proc/meminfo を読み込むための使い回しバッファ。全体でも 2KB 程度のファイルで、
+     * 必要な MemTotal / MemAvailable は先頭数行に現れる。
+     *
+     * <p>{@link #refresh()} を実行する単一スレッドからしか触らないため同期は不要。
+     */
+    private final byte[] meminfoBuffer = new byte[8192];
+
+    /**
+     * Linux専用: /proc/meminfo の MemTotal/MemAvailable からメモリ使用率(%)を読む。
+     *
+     * <p>{@code Files.readAllLines} + 行ごとの {@code String.replaceAll} をやめてバイト列を
+     * 直接走査しているのは、この処理が {@link #REFRESH_INTERVAL_SECONDS} 秒ごとに永久に走り続ける
+     * ためである（2026-08 メモリ調査）。旧実装は1回ごとに 8KB の文字バッファ・全行ぶんの
+     * {@link String}・行ごとの正規表現 {@link java.util.regex.Matcher} を生成しており、
+     * アイドル時のアロケーションプロファイルに現れる程度には無視できない量になっていた。
+     */
     private Optional<Integer> readMemoryUsagePercentFromMeminfo() {
-        try {
-            long total = -1;
-            long available = -1;
-            for (String line : Files.readAllLines(MEMINFO_PATH)) {
-                if (line.startsWith("MemTotal:")) {
-                    total = parseMeminfoKb(line);
-                } else if (line.startsWith("MemAvailable:")) {
-                    available = parseMeminfoKb(line);
-                }
-                if (total >= 0 && available >= 0) break;
-            }
+        try (var in = Files.newInputStream(MEMINFO_PATH)) {
+            int length = in.readNBytes(meminfoBuffer, 0, meminfoBuffer.length);
+            long total = findMeminfoKb(meminfoBuffer, length, "MemTotal:");
+            long available = findMeminfoKb(meminfoBuffer, length, "MemAvailable:");
             if (total <= 0 || available < 0) return Optional.empty();
             long used = total - available;
             return Optional.of((int) Math.round(used * 100.0 / total));
@@ -179,10 +203,42 @@ public final class SystemStatsMonitor {
         }
     }
 
-    /** "MemAvailable:   15866900 kB" のようなkB単位の行から数値部分を読む。 */
-    private static long parseMeminfoKb(String line) {
-        String digits = line.replaceAll("[^0-9]", "");
-        return digits.isEmpty() ? -1 : Long.parseLong(digits);
+    /**
+     * "MemAvailable:   15866900 kB" のような行を行頭のラベルで探し、kB単位の数値を返す。
+     * 見つからなければ -1。/proc/meminfo は ASCII のみなのでバイト単位で比較してよい。
+     */
+    private static long findMeminfoKb(byte[] buffer, int length, String label) {
+        int lineStart = 0;
+        while (lineStart < length) {
+            int lineEnd = lineStart;
+            while (lineEnd < length && buffer[lineEnd] != '\n') lineEnd++;
+            if (startsWith(buffer, lineStart, lineEnd, label)) {
+                return parseFirstNumber(buffer, lineStart + label.length(), lineEnd);
+            }
+            lineStart = lineEnd + 1;
+        }
+        return -1;
+    }
+
+    private static boolean startsWith(byte[] buffer, int from, int to, String label) {
+        if (to - from < label.length()) return false;
+        for (int i = 0; i < label.length(); i++) {
+            if (buffer[from + i] != (byte) label.charAt(i)) return false;
+        }
+        return true;
+    }
+
+    /** [from, to) の範囲に現れる最初の10進数を返す。数字が無ければ -1。 */
+    private static long parseFirstNumber(byte[] buffer, int from, int to) {
+        int i = from;
+        while (i < to && (buffer[i] < '0' || buffer[i] > '9')) i++;
+        if (i >= to) return -1;
+        long value = 0;
+        while (i < to && buffer[i] >= '0' && buffer[i] <= '9') {
+            value = value * 10 + (buffer[i] - '0');
+            i++;
+        }
+        return value;
     }
 
     /** JDK標準の com.sun.management.OperatingSystemMXBean からメモリ使用率(%)を読む（非Linux向けフォールバック）。 */

@@ -516,3 +516,15 @@ xterm -bg black -fg gray -fn -misc-fixed-bold-r-*-*-45-*-90-*-*-*-iso10646-1 -fb
 - **依頼文中の`script/setup.sh`という表記は、既存の`scripts/`（複数形）ディレクトリの表記ゆれと判断し、既存の`scripts/setup.sh`/`scripts/setup.bat`に追記する形にした**（新規に`script/`ディレクトリを作らなかった）。
 - **テスト**: `test/dev/javatexteditor/ui/NewMonoFontTest.java`（新設・21テスト）。`JetBrainsMonoFont`/`ComicMonoFont`の`isSupported`/`renderGlyph`寸法/`descentPixels`の健全性、`isBundledFontLoaded()`が例外なく取得できること（このコンテナ環境は`scripts/setup.sh`未実行が既定状態のため、実際のネットワークアクセス無しに「ファイル未配置」のシナリオが自然にシミュレートされている。`setup.sh`実行済み環境ではtrueの分岐を検証する形に自動的に切り替わる）、MiscFixed→JetBrains Mono→Comic Monoと切り替えた際に同一セルサイズ・同一文字の描画結果が毎回変化する（古いフォントのグリフがキャッシュに残らない）ことを検証。`test/dev/javatexteditor/editor/FontColorCommandTest.java`に`:font 2`/`:font 3`選択・フォントファイル未取得時のガイダンスメッセージ検証（`scripts/setup.sh`/`setup.bat`という文言を含むことを確認）を追加（計24テスト）。`test/dev/javatexteditor/ui/FontCellSizeIndependenceTest.java`に4フォント間の独立性検証を追加（計26テスト）。全体テストスイートは既知のベースラインFAIL（`ScrollTest`のhalfPageUp系2件・`ModalEditorTest`1件・`FilerTest`1件）のみで回帰なし（115クラスPASS、3クラスFAILは全て既知）。
 - **`setup.sh`/`setup.bat`自体の自動テスト化について**: 実際のネットワークアクセス（GitHubからのダウンロード）を伴うため、CI・自動テストの対象にはせず、既存の`scripts/setup.sh`（JDKソース取得）と同様に手動確認（開発者が実行してlib/fonts/配下にファイルが生成されることを目視確認）を推奨する。`isBundledFontLoaded()`を使ったユニットテスト（上記`NewMonoFontTest`）で「ファイルが存在する場合／しない場合のいずれでもクラッシュしない」というロジック面は自動テストでカバーしているため、ダウンロード処理自体（curlコマンドの成否）だけが手動確認の対象になる。
+
+## 歩行アニメーションの割り当て削減（2026-08-07）
+
+`WalkingPersonSprite.drawFrame()` は半透明ピクセルごとに `new Color(...)` を生成していた。
+30fpsで永久に呼ばれる経路のため、エディタを放置しているだけでゴミが積み上がる主要因の一つに
+なっていた。前景色ごとに1組だけ生成してキャッシュする形に変更済み。
+
+**このスプライトの描画経路（拡大変換した `Graphics2D` に1ピクセル1回の `fillRect`）は
+軽量化目的で変更してはならない。** 画像化キャッシュも矩形のまとめ描きも、実測でピクセル単位の
+描画結果が変わることを確認している（理由と実測値は
+`.claude/skills/gui-rendering-pipeline/SKILL.md`「アイドル時に描画経路がゴミを出し続けていた
+問題の修正（2026-08-07）」を参照）。
