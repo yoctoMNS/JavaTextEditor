@@ -22,4 +22,4 @@ export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
 # （JEP 346）ため、対話操作中の応答性には影響しない。
 # 既にJAVA_OPTSが設定されていれば上書きしない。
 export JAVA_OPTS="${JAVA_OPTS:--XX:G1PeriodicGCInterval=60000}"
-java $JAVA_OPTS -cp build dev.javatexteditor.Main
+java -Xlog:gc=info:stdout $JAVA_OPTS -cp build dev.javatexteditor.Main
