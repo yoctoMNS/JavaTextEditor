@@ -97,12 +97,28 @@ public class JavacCompletionAnalyzer {
 
             String mainPath = (filePath != null) ? filePath : "<buffer>";
             StringJavaFileObject mainFileObj = new StringJavaFileObject(mainPath, probeText);
-            List<JavaFileObject> sources =
-                JavaSourceCollector.collect(mainFileObj, filePath, projectRoot, null);
-            if (sources == null) return List.of(); // プロジェクトが大きすぎる: 軽量解決に委ねる
+
+            // コンパイル対象として javac に明示的に渡すのは編集中のバッファ1件だけにし、
+            // プロジェクト内の他ファイルは -sourcepath（JavaSourceRoots が算出）経由で
+            // 「型解決に必要になった分だけ」javac に遅延読み込みさせる。以前は
+            // JavaSourceCollector.collect でプロジェクト全体の .java を毎回丸ごと文字列として
+            // 読み込んでいたため、obj. の入力のたびに（このプロジェクト自身では約400MB規模の）
+            // 巨大な一時アロケーションが走り、かつ member-completion-lookup 用の仮想スレッドが
+            // 依頼のたびに新規起動される（BindingDefinitionResolver と違い Shift+K のような
+            // 単発操作ではなく、打鍵のたびに新しいレシーバ文脈へ移るたび発火する）ため、
+            // 複数の巨大解析が同時並行で走り続けヒープが際限なく膨張していた
+            // （CompileAnalyzer/JavaSourceRoots が2026-08-07に修正した問題と同種の再発）。
+            List<String> options = new ArrayList<>();
+            options.add("-proc:none");
+            options.add("-implicit:none");
+            String sourcePath = JavaSourceRoots.sourcePathFor(projectRoot, mainPath, probeText);
+            if (!sourcePath.isEmpty()) {
+                options.add("-sourcepath");
+                options.add(sourcePath);
+            }
 
             JavacTask task = (JavacTask) compiler.getTask(
-                null, fm, collector, List.of("-proc:none"), null, sources);
+                null, fm, collector, options, null, List.of(mainFileObj));
 
             Iterable<? extends CompilationUnitTree> units = task.parse();
             task.analyze();

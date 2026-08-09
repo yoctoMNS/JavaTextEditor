@@ -2026,3 +2026,35 @@ import欠落の `cannot find symbol`）は従来と同一であることを確�
 `./scripts/test.sh` の結果は修正前後で完全に一致（PASS件数・FAIL行ともに差分なし）。
 既知のベースライン失敗（`ScrollTest` のCtrl+U仕様変更未追従など、本ファイル・CLAUDE.md記載の
 21件）以外の新規failは無い。加えて `JavaSourceRootsTest`（7件）を新規追加し全PASS。
+
+## メンバー補完（obj.）によるメモリ肥大化の再発と修正（2026-08-09）
+
+- **報告された症状**: `scripts/run.sh` に `-Xlog:gc=info:stdout` を追加してGCログを取得したところ、
+  起動後わずか数分でヒープ使用量（GC後の生存サイズ）が数百MB→6.8GB超まで単調増加し、
+  以後アイドルにしても周期GC（`G1PeriodicGCInterval`）でほとんど回収されない状態になっていた。
+  上記「Javaファイル編集時にメモリ使用量が青天井に増える問題の修正（2026-08-07）」で
+  一度解決したはずの症状が、⑫`intellij-style-completion`（IntelliJ方式メンバー補完、
+  2026-08-07以降に実装）によって別経路から再発していた。
+- **原因**: `JavacCompletionAnalyzer.resolveMembers`（`obj.` の後のメンバー補完の型解決。
+  `ModalEditor.requestAccurateMembers` が `member-completion-lookup` という名前の仮想スレッドを
+  レシーバ文脈が変わるたびに新規起動して呼ぶ）が、2026-08-07に`CompileAnalyzer`向けに廃止した
+  はずの「プロジェクト全体の`.java`を毎回中身ごと文字列で読み込んでjavacに丸ごと渡す」方式
+  （`JavaSourceCollector.collect`）をそのまま使っていた。`BindingDefinitionResolver`（Shift+K）
+  も同じ方式を使うが単発キー操作でしか発火しないのに対し、メンバー補完は打鍵のたびに
+  自動発火し、かつ古い解析をキャンセルしない（性能上の割り切り、SKILL.md参照）ため、
+  数百MB級のjavac解析が並行して積み上がっていた。
+- **修正**: メンバー補完だけを、2026-08-07に`CompileAnalyzer`で確立した`-sourcepath`方式
+  （`JavaSourceRoots.sourcePathFor`）へ切り替えた。javacに明示的に渡すのは編集中バッファ1件のみとし、
+  他のプロジェクトソースは`-sourcepath`経由で必要な分だけ遅延読み込みさせる。
+  このプロジェクト自身（約28,000行）を対象にした実測（`resolveMembers`1回あたり、
+  `ThreadMXBean#getThreadAllocatedBytes`）で**415MB→92MB（約4.5倍減）・2678ms→1107ms**。
+  `BindingDefinitionResolver`（Shift+K）は意図的に変更していない
+  （無名バッファ・`package`宣言なしファイルへのクロスファイルジャンプを検証する既存テストが
+  `-sourcepath`化すると解決不能に後退するため。詳細・将来直す場合の注意点は
+  `.claude/skills/intellij-style-completion/SKILL.md`「メンバー補完のメモリ肥大化を修正した
+  （2026-08-09）」参照）。
+- **検証**: `./scripts/test.sh`は修正前後で完全に一致（`ScrollTest`18/20・`ModalEditorTest`286/287・
+  `FilerTest`129/1failedの3件は本ファイル既載の既知ベースライン失敗で、修正前のコードでも
+  同一に再現することを個別に確認済み。新規failなし）。影響範囲の
+  `JavacCompletionAnalyzerTest`（24/24）・`BindingDefinitionResolverTest`（25/25）・
+  `JavaSourceRootsTest`（8/8）・`CompileAnalyzerTest`（17/17）はいずれも全PASS。
