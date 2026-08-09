@@ -167,13 +167,45 @@ PLAIN 位置（`obj.` のような修飾なし）で新規クラス名・追加�
 どちらかを直すときにもう一方を追随させる必要はない。新しい補完の実装は `analysis` パッケージ側
 （既存の `CompletionIndex`/`WordIndex`/`CompletionScorer` と同じ場所）に置いてある。
 
+### メンバー補完のメモリ肥大化を修正した（2026-08-09）
+
+- **症状**: Javaバッファを編集し続けるとヒープが際限なく増え続け、アイドルにしても戻らない。
+  `⑨ javac-compile-integration` が2026-08-07に一度修正した「編集のたびにプロジェクト全体を
+  再コンパイルしていた」問題と同じ症状が、本Skill（㉜）実装後に再発していた。
+- **原因**: `JavacCompletionAnalyzer.resolveMembers`（`obj.` の後のメンバー補完、
+  `ModalEditor.requestAccurateMembers` から `member-completion-lookup` 仮想スレッドで
+  呼ばれる）が `JavaSourceCollector.collect` を使っており、呼ばれるたびに作業ディレクトリ配下の
+  `.java` を**全件**中身ごと `String` として読み込み javac に丸ごと渡していた。
+  `BindingDefinitionResolver`（Shift+K）も同じ方式を使うが、あちらは単発キー操作でしか
+  発火しない。メンバー補完は「打鍵のたびに新しいレシーバ文脈（別の `obj.` サイト）へ
+  移るたび」自動発火し、かつ `memberLookupExecutor` は依頼のたびに新しい仮想スレッドを
+  起動して古い解析をキャンセルしない（性能上の歯止め表に記載の既知の割り切り）ため、
+  数百MB級の解析が並行して積み上がった。
+- **修正**: `⑨ javac-compile-integration` が確立した `JavaSourceRoots.sourcePathFor` による
+  `-sourcepath` 方式へ切り替えた。javac に明示的なコンパイル対象として渡すのは編集中バッファ
+  1件だけにし、他のプロジェクトソースは `-sourcepath` 経由で「型解決に必要になった分だけ」
+  javac に遅延読み込みさせる。このプロジェクト自身（約28,000行）を対象にした実測
+  （`ThreadMXBean#getThreadAllocatedBytes`、1回の `resolveMembers` 呼び出し）で
+  **415MB→92MB（約4.5倍減）・2678ms→1107ms**。
+- **`BindingDefinitionResolver` は意図的に変更していない**: そのテスト
+  （`BindingDefinitionResolverTest#test_crossFileResolution` 等）は
+  「無名バッファ（`currentFilePath == null`）から、`package` 宣言の無い別ファイルへの
+  ジャンプ」を検証しており、`JavaSourceRoots` は `package` 宣言を持たないファイルを
+  ソースルート走査で拾わない設計（別プロジェクトの混入防止、上記「なぜ〜」節参照）。
+  `-sourcepath` 化するとこの既存テストが解決不能（`NotFound`）に後退する。
+  Shift+K は単発操作で発火頻度が低く、メモリ肥大化の主因ではないため、
+  スコープ外として現状の全件読み込み方式（`MAX_SOURCE_FILES=2000` の歯止め付き）を維持した。
+  将来 Shift+K 側も直す場合は、まず `currentFilePath == null` かつ `package` 宣言なしの
+  ケースをどう扱うか（例: プロジェクトルート自体を無条件でルートに加える等）を決めてから
+  着手すること。
+
 ---
 
 ## 性能上の歯止め（変更するときは理由を書き残すこと）
 
 | 箇所 | 上限 | 理由 |
 |---|---|---|
-| `JavaSourceCollector.MAX_SOURCE_FILES` | 2000 ファイル | 作業ディレクトリの既定値はホームになりうる。超えたら解析を諦め軽量側に委ねる |
+| `JavacCompletionAnalyzer.resolveMembers` | `-sourcepath`（`JavaSourceRoots`）経由 | 2026-08-09にプロジェクト全体を毎回読み込む方式から変更。詳細は下記「メンバー補完のメモリ肥大化を修正した」参照。`JavaSourceCollector.MAX_SOURCE_FILES`（2000ファイル）は現在 `BindingDefinitionResolver`（Shift+K）専用 |
 | `JavaCompletionEngine.MAX_BUFFER_WORDS` | 200 語 | 数十万行のバッファで候補が膨らみすぎないため |
 | `ModalEditor.COMPLETION_MAX_RESULTS` | 10 件 | ポップアップに載せる件数 |
 | `EditorCanvas.COMPLETION_VISIBLE_ROWS` | 10 行 | 一度に見せる行数（超過分はスクロール） |
