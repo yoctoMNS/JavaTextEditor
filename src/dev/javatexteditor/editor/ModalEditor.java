@@ -234,7 +234,11 @@ public class ModalEditor {
     private Consumer<Runnable> bindingLookupUiDispatcher = Runnable::run;
     // stale 結果破棄用の世代カウンタ。非同期解析の完了前に再度 Shift+K が押された場合、
     // 古い方の結果は適用せず黙って捨てる（Eclipse がジャンプ要求をキャンセルするのと同じ発想）。
-    private long bindingLookupGeneration = 0;
+    //
+    // <p>volatile である理由: 加算するのは常に EDT（lookupJdkDoc）だけなので ++ の非原子性は
+    // 問題にならないが、解析を実行するバックグラウンドスレッド側が「自分より新しい要求が
+    // 既に出ているか」を開始前に読み取れる必要がある（下記の実行前チェック）。
+    private volatile long bindingLookupGeneration = 0;
     // Shift+K (jdk.doc) のプロジェクト全体検索がEDTをフリーズさせないための上限時間。
     // 作業ディレクトリが巨大（既定値がホームディレクトリになりうるため）だと
     // ProjectSymbolResolver.resolve() の全文grepに時間がかかることがあるため、
@@ -416,8 +420,8 @@ public class ModalEditor {
     private boolean memberLookupEnabled = false;
     private Consumer<Runnable> memberLookupExecutor = Runnable::run;
     private Consumer<Runnable> memberLookupUiDispatcher = Runnable::run;
-    // stale 結果破棄用の世代カウンタ（bindingLookupGeneration と同じ考え方）
-    private long memberLookupGeneration = 0;
+    // stale 結果破棄用の世代カウンタ（bindingLookupGeneration と同じ考え方。volatile の理由も同じ）
+    private volatile long memberLookupGeneration = 0;
     // 実行中の型解決要求（同じレシーバに対して javac を二重起動しないための印）
     private dev.javatexteditor.analysis.JavaCompletionEngine.MemberKey pendingMemberKey = null;
     // 補完候補のクラス名を確定したときに import を挿入するために使う（null なら import しない）
@@ -1387,6 +1391,9 @@ public class ModalEditor {
         final Path root = getProjectRoot();
         final UndoablePieceTable bufferAtRequest = buffer;
         memberLookupExecutor.accept(() -> {
+            // Shift+K と同じく、実行待ちの間に別のレシーバへ移っていれば javac を動かさず捨てる
+            // （打鍵のたびに発火する経路なので、直列化と組み合わせないと待ち行列が伸び続ける）。
+            if (generation != memberLookupGeneration) return;
             java.util.List<dev.javatexteditor.analysis.CompletionItem> members =
                 completionEngine.resolveMembersAccurately(ctx, text, filePathAtRequest, root);
             memberLookupUiDispatcher.accept(
@@ -7265,6 +7272,10 @@ public class ModalEditor {
             final String filePathAtRequest = currentFilePath;
             setStatusMessage("Resolving definition of " + word + "...");
             bindingLookupExecutor.accept(() -> {
+                // 実行待ちの間に次の Shift+K が押されていれば、javac を動かす前に捨てる。
+                // 完了後の世代チェック（applyBindingResolution）は結果を捨てるだけで解析自体は
+                // 止めないため、連打すると 1回あたり約400MBの解析が無駄に積み上がっていた。
+                if (generation != bindingLookupGeneration) return;
                 BindingDefinitionResolver.Resolution resolution;
                 try {
                     resolution = bindingDefinitionResolver.resolve(

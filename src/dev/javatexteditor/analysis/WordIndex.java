@@ -36,8 +36,8 @@ import java.util.regex.Pattern;
  * 編集の保存を検知した際、プロジェクト全体を再スキャンするとファイル数が多いプロジェクトで
  * 重くなる。そのため、保存されたファイル1つだけを再解析し、そのファイルが寄与していた単語
  * だけを削除・追加する。どの単語がどのファイルに由来するかを {@code fileWords}
- * （ファイル→そのファイルが持つ単語集合）と {@code wordFiles}（単語→参照しているファイル集合）
- * の相互参照で追跡し、ある単語を参照するファイルが0件になった時点でのみ {@code words} から
+ * （ファイル→そのファイルが持つ単語集合）と {@code wordFileCounts}（単語→参照しているファイル数）
+ * で追跡し、ある単語を参照するファイルが0件になった時点でのみ {@code words} から
  * 削除する（複数ファイルに同じ単語がある場合に、片方を更新しただけで消えないようにするため）。
  * {@link ConcurrentSkipListMap}/{@link ConcurrentHashMap} を使うことで、この差分更新と
  * 通常の {@link #query} を排他ロックなしで安全に並行実行できる（弱一貫性のイテレーションで十分）。
@@ -46,11 +46,60 @@ public final class WordIndex {
 
     private static final Pattern WORD = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
-    // ディレクトリ探索・ファイル名検索など他機能と同じスキップ対象（project-wide-search 系と共通の慣例）
-    private static final Set<String> SKIP_DIRS = FileNameSearcher.SKIP_DIRS;  // 実体は search 側の1定義
+    // ディレクトリ探索・ファイル名検索など他機能と同じスキップ対象（project-wide-search 系と共通の慣例）に
+    // 加えて、本索引だけは lib/ も除外する。
+    //
+    // <p><b>lib/ を FileNameSearcher.SKIP_DIRS 側へ足してはならない</b>: あちらは \f/\g・:grep・
+    // gr（参照検索）の既定スキップ集合であり、⑫ openjdk-source-tracing は
+    // lib/openjdk-native/ 配下の HotSpot ソースを gr の検索対象として意図的に見に行く。
+    // 共通集合へ lib を足すとその機能が壊れるため、除外は本クラス内に閉じる。
+    //
+    // <p><b>除外する理由</b>: lib/ は .gitignore にあるとおり scripts/setup.sh が取得する
+    // 外部ソース（OpenJDK の C/C++ ソースと同梱フォント）の置き場で、利用者が編集する対象ではない。
+    // Alt+/ の単語補完候補として有用でない一方、量が桁違いに大きい。実測では
+    // lib/openjdk-native/ だけで 78MB・4,553 ファイル・テキスト 58.3MB あり（プロジェクト自身の
+    // ソースは 2.6MB）、索引が保持するヒープは 11MB → 320MB（約29倍）に膨らんでいた。
+    // WordIndex は起動時に構築されたあとプロセスが終わるまで生き続けるため、この差は
+    // そのまま「GC しても下がらないヒープの底上げ」として現れる。
+    private static final Set<String> SKIP_DIRS = concatSkipDirs(FileNameSearcher.SKIP_DIRS, "lib");
+
+    private static Set<String> concatSkipDirs(Set<String> base, String extra) {
+        Set<String> merged = new java.util.HashSet<>(base);
+        merged.add(extra);
+        return Set.copyOf(merged);
+    }
 
     // バイナリ・巨大ファイルの走査に時間を取られないための上限
     private static final long MAX_FILE_SIZE_BYTES = 2L * 1024 * 1024; // 2MB
+
+    /**
+     * 索引に取り込むファイル数・単語数の上限（2026-08-10 メモリ調査で追加）。
+     *
+     * <p><b>上限が必須である理由</b>: 本索引はプロセスが終わるまで生き続けるため、
+     * 保持量がそのまま「GC しても下がらないヒープの底」になる。しかも走査の起点は
+     * {@code WorkingDirectoryManager} が決める作業ディレクトリで、その既定値は
+     * <b>ユーザーのホームディレクトリ</b>である（{@code scripts/run.sh} を引数なしで
+     * 起動した場合がこれに当たる）。つまり既定の起動方法では、利用者のホーム配下すべてが
+     * 索引対象になる。実測では小さなホーム（テキスト約1,000ファイル）でも156MBを保持し、
+     * 実際の開発者のホームでは数GBに達してヒープが際限なく伸び続けていた。
+     *
+     * <p><b>ファイル数と単語数の両方を制限する理由</b>: 単語数は {@code words} と
+     * {@code wordFileCounts} の大きさを、ファイル数は {@code fileWords}（ファイル→そのファイルの
+     * 単語集合）の大きさを、それぞれ独立に決める。片方だけでは頭打ちにならない
+     * （少数の巨大ファイルでも語彙は膨らみ、逆に単語の重複が多い大量のファイルでも
+     * {@code fileWords} は増え続けるため）。
+     *
+     * <p>上限に達した時点で走査を打ち切り、それまでに集めた分で {@code ready} にする
+     * （{@link #query} は現在バッファ由来の候補を優先して詰めるため、索引が部分的でも
+     * Alt+/ の実用性は保たれる）。通常の（数百〜数千ファイル規模の）プロジェクトでは
+     * どちらの上限にも到達しない。
+     *
+     * <p><b>値の根拠</b>: 参照カウント化後の実測は1語あたり約650バイトなので、
+     * 単語数の上限10万語で索引の保持量はおよそ65MB前後で頭打ちになる。
+     * 本プロジェクト自身は357ファイル・10,238語であり、どちらの上限にも約10〜28倍の余裕がある。
+     */
+    private static final int MAX_INDEXED_FILES = 10_000;
+    private static final int MAX_INDEXED_WORDS = 100_000;
 
     // 単語抽出の対象とする拡張子（バイナリファイルは開かない）
     private static final Set<String> TEXT_EXTENSIONS = Set.of(
@@ -67,10 +116,21 @@ public final class WordIndex {
     // マップ全体をコピーすることになり、プロジェクトが大きいほど保存のたびに重くなる）。
     private final ConcurrentSkipListMap<String, Set<String>> words = new ConcurrentSkipListMap<>();
 
-    // 単語（元の大文字小文字表記）→ その単語を含むファイルの集合。updateFile() で、
+    // 単語（元の大文字小文字表記）→ その単語を含むファイルの数。updateFile() で、
     // あるファイルからその単語が消えたときに「他のファイルにもう存在しないなら words からも消す」
     // 判定をするために使う。
-    private final ConcurrentHashMap<String, Set<Path>> wordFiles = new ConcurrentHashMap<>();
+    //
+    // <p><b>ファイル集合（{@code Set<Path>}）から件数へ変えた理由（2026-08-10 メモリ調査）</b>:
+    // 以前は単語ごとに {@code ConcurrentHashMap.newKeySet()} を1個ずつ確保していた。
+    // 要素が1〜数個しかない集合に対して ConcurrentHashMap 本体・KeySetView・ノード表配列を
+    // 丸ごと持つため、単語1つあたり約400バイトの管理コストが単語本体とは別にかかっていた
+    // （異なる単語163,357語で実測157MB＝1語あたり約960バイト）。
+    //
+    // <p>この集合は「参照しているファイルが0件になったか」の判定にしか使っておらず、
+    // 同じファイルが同じ単語を二重に登録することはない（初回スキャンは各ファイルを1回しか
+    // 訪れず、{@link #updateFile} は旧単語集合との差分だけを増減させる）。したがって
+    // 件数だけを持てば意味は完全に同じで、単語1つあたり Integer 1個で済む。
+    private final ConcurrentHashMap<String, Integer> wordFileCounts = new ConcurrentHashMap<>();
 
     // ファイル → そのファイルが最後に寄与した単語集合。updateFile() で旧内容との差分を取るために使う。
     private final ConcurrentHashMap<Path, Set<String>> fileWords = new ConcurrentHashMap<>();
@@ -256,19 +316,18 @@ public final class WordIndex {
         this.ready = true;
     }
 
-    /** 単語1つを、指定ファイルが参照している状態として登録する。 */
+    /** 単語1つを、指定ファイルが参照している状態として登録する（参照数を1増やす）。 */
     private void linkWord(Path file, String word) {
-        wordFiles.computeIfAbsent(word, w -> ConcurrentHashMap.newKeySet()).add(file);
+        wordFileCounts.merge(word, 1, Integer::sum);
         words.computeIfAbsent(word.toLowerCase(Locale.ROOT), k -> ConcurrentHashMap.newKeySet()).add(word);
     }
 
-    /** 単語1つについて、指定ファイルからの参照を外す。他に参照するファイルが無くなった場合のみ words から消す。 */
+    /** 単語1つについて、指定ファイルからの参照を外す。参照数が0になった場合のみ words から消す。 */
     private void unlinkWord(Path file, String word) {
-        Set<Path> files = wordFiles.get(word);
-        if (files == null) return;
-        files.remove(file);
-        if (!files.isEmpty()) return;
-        wordFiles.remove(word);
+        // 参照数を1減らし、0になったらエントリごと削除する（compute はキー単位で原子的）。
+        Integer remaining = wordFileCounts.compute(word,
+            (w, count) -> (count == null || count <= 1) ? null : count - 1);
+        if (remaining != null) return;   // まだ他のファイルが参照している
         String key = word.toLowerCase(Locale.ROOT);
         Set<String> originals = words.get(key);
         if (originals == null) return;
@@ -306,6 +365,11 @@ public final class WordIndex {
 
                     @Override
                     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                        // 上限に達したら走査自体を打ち切る（集めた分はそのまま使う）
+                        if (fileWords.size() >= MAX_INDEXED_FILES
+                                || wordFileCounts.size() >= MAX_INDEXED_WORDS) {
+                            return FileVisitResult.TERMINATE;
+                        }
                         if (attrs.size() <= MAX_FILE_SIZE_BYTES && hasTextExtension(file)) {
                             indexFile(file);
                         }
@@ -332,7 +396,7 @@ public final class WordIndex {
     }
 
     /** 起動時の全体スキャン専用。updateFile() と違い、この時点ではファイル間の重複判定は不要
-     *  （初回スキャンでは同一ファイルを2回見ることはない）ため、直接 words/wordFiles/fileWords に積む。 */
+     *  （初回スキャンでは同一ファイルを2回見ることはない）ため、直接 words/wordFileCounts/fileWords に積む。 */
     private void indexFile(Path file) {
         try {
             String content = Files.readString(file);

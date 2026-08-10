@@ -56,6 +56,39 @@ public final class PaneManager implements EditorHost {
 
     private static final Color ACTIVE_BORDER_COLOR = new Color(0x88, 0x88, 0xFF);
 
+    /**
+     * Shift+K（定義ジャンプ）とメンバー補完（{@code obj.}）の javac 解析を実行するスレッド。
+     * 用途ごとに1本ずつ持ち、全ペインで共有する。
+     *
+     * <p><b>要求ごとの {@code Thread.ofVirtual().start()} をやめた理由（2026-08-10 メモリ調査）</b>:
+     * 以前は Shift+K を押すたび・レシーバ文脈が変わるたびに新しい仮想スレッドを起動していた。
+     * javac の属性付けは1回あたり Shift+K で約400MB・1.5〜3.5秒、メンバー補完で約70MBを使う
+     * （{@code ThreadMXBean#getThreadAllocatedBytes} による実測値）。世代カウンタは返ってきた
+     * 結果を捨てるだけで解析そのものは止めないため、同時実行数に上限が無く、連打・連続入力で
+     * 数百MB級の作業メモリが何本も同時に生存しえた。
+     *
+     * <p>{@link LiveDiagnostics} が 2026-08-07 にコンパイル診断で確立した方式（単一スレッドで
+     * 直列化し、追い越された要求は javac を動かす前に破棄する）へ揃える。破棄の判定は
+     * {@code ModalEditor} 側の世代カウンタが行う（実行前チェック）。
+     *
+     * <p><b>2本に分けている理由</b>: 1本に統合すると、3.5秒かかりうる Shift+K の後ろに
+     * 打鍵ごとに発火するメンバー補完が待たされ、補完の反映が体感できるほど遅れる。
+     * 用途ごとに分けても、{@link LiveDiagnostics} の1本と合わせて同時に走る javac は最大3本に
+     * 収まり、上限の無かった従来と違って生存量が有界になる。
+     */
+    private static final java.util.concurrent.ExecutorService BINDING_LOOKUP_EXECUTOR =
+        newAnalysisExecutor("binding-definition-lookup");
+    private static final java.util.concurrent.ExecutorService MEMBER_LOOKUP_EXECUTOR =
+        newAnalysisExecutor("member-completion-lookup");
+
+    private static java.util.concurrent.ExecutorService newAnalysisExecutor(String threadName) {
+        return java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, threadName);
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
     // Ctrl+Alt+矢印: アクティブペインのリサイズ量・最小ペインサイズ（ピクセル）
     private static final int PANE_RESIZE_STEP_PX = 20;
     private static final int PANE_RESIZE_MIN_PX   = 60;
@@ -346,12 +379,12 @@ public final class PaneManager implements EditorHost {
         // javac の属性付けはプロジェクト規模に比例して重いため EDT では実行せず、
         // 仮想スレッドで解析して invokeLater で結果を反映する（完全非同期）。
         editor.enableBindingDefinitionLookup(
-            task -> Thread.ofVirtual().name("binding-definition-lookup").start(task),
+            BINDING_LOOKUP_EXECUTOR::execute,
             javax.swing.SwingUtilities::invokeLater);
         // メンバー補完（obj. の後）の正確な型解決も同じ理由で完全非同期にする。
         // 有効化しない場合はリフレクションによる軽量解決だけで動作する。
         editor.enableMemberCompletionLookup(
-            task -> Thread.ofVirtual().name("member-completion-lookup").start(task),
+            MEMBER_LOOKUP_EXECUTOR::execute,
             javax.swing.SwingUtilities::invokeLater);
         editor.setBufferListSupplier(bufferRegistry::entries);
         editor.setOnFileOpened(bufferRegistry::register);

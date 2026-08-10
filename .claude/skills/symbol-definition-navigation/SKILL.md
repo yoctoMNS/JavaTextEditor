@@ -634,7 +634,17 @@ catch して NotFound に変換する（⑧ と同じ graceful degradation）。
   変わっていたら結果を黙って破棄する（編集・バッファ切替・カーソル移動・モード遷移・
   新しい Shift+K のいずれでも失効。Eclipse がジャンプ要求をキャンセルするのと同じ発想）。
   破棄されるのは「結果の適用」だけで、走り出した解析スレッド自体はキャンセルしない
-  （仮想スレッドが完了まで走るが、連打しても世代ガードで結果は最後の1件しか適用されない）。
+  （javac の解析は中断できないため、走り始めた1件は完了まで走る）。
+- **同時実行は1本に直列化してある（2026-08-10）**: 以前は Shift+K を押すたびに
+  `Thread.ofVirtual().start()` していたため同時実行数に上限が無く、1回あたり385〜426MB・
+  1.5〜3.5秒（`ThreadMXBean#getThreadAllocatedBytes` 実測）の解析が連打で何本も並走して
+  ヒープを圧迫しえた。現在は `PaneManager.BINDING_LOOKUP_EXECUTOR`（単一スレッド・デーモン）で
+  直列化し、**実行待ちの間に次の Shift+K が押されていれば javac を動かす前に破棄**する
+  （`LiveDiagnostics` が2026-08-07にコンパイル診断で確立した方式に合わせた）。
+  この実行前チェックのため `bindingLookupGeneration` は `volatile`（加算は常に EDT のみ）。
+  メンバー補完用の `MEMBER_LOOKUP_EXECUTOR` と分けてあるのは、3.5秒かかりうる Shift+K の
+  後ろに打鍵ごとのメンバー補完が待たされるのを避けるため。経緯は `docs/decision-log.md`
+  「WordIndex がホームディレクトリ全体を無制限に索引化していた問題の修正（2026-08-10）」参照。
 - **JDK 要素への接続**: `jumpToJdkElement()` が `OpenjdkSourceTracer.readJavaSourceByFqcn(
   moduleName, fqcn)`（`:main` コマンド用に実装済みの文字列ベース版）で src.zip から直接ソースを
   引き、既存の `openJdkSourceBuffer()` + `jumpToMember()` を再利用する。JDK 索引（`jdkIndex`）の
