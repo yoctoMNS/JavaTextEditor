@@ -1322,7 +1322,10 @@ public class ModalEditor {
             return;
         }
         boolean classReady = completionIndex != null && completionIndex.isReady();
-        boolean wordReady = wordIndex != null && wordIndex.isReady();
+        // wordIndex == null は「:pr 未実行でディスク索引そのものを構築していない」状態であり、
+        // 「構築中で待つべき」状態とは異なる（2026-08-10）。この場合は queryMergedCompletion が
+        // 現在バッファの単語だけにフォールバックするため、待たずに進んでよい。
+        boolean wordReady = wordIndex == null || wordIndex.isReady();
         if (!classReady && !wordReady) {
             setStatusMessage("Building completion index...");
             return;
@@ -1458,10 +1461,10 @@ public class ModalEditor {
         int wordBudget = classAvailable
             ? Math.max(0, COMPLETION_MAX_RESULTS - COMPLETION_CLASS_RESERVED_SLOTS)
             : COMPLETION_MAX_RESULTS;
-        if (wordIndex != null && wordIndex.isReady()) {
-            for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix, wordBudget)) {
-                if (seen.add(item.label())) merged.add(item);
-            }
+        // wordIndex が null（:pr 未実行）でも queryWordCompletion は現在バッファの単語だけに
+        // フォールバックするため、ここでは呼び出し自体を条件分岐しない（2026-08-10）。
+        for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix, wordBudget)) {
+            if (seen.add(item.label())) merged.add(item);
         }
         if (classAvailable && merged.size() < COMPLETION_MAX_RESULTS) {
             for (dev.javatexteditor.analysis.CompletionItem item
@@ -1473,9 +1476,16 @@ public class ModalEditor {
         return merged;
     }
 
-    /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
+    /**
+     * Alt+/ で単語補完ポップアップを起動する。
+     *
+     * <p>{@code :pr} でプロジェクトルートが固定済みなら作業ディレクトリ配下の単語（{@link #wordIndex}）
+     * ＋現在バッファの単語、未固定（{@code wordIndex == null}）なら現在バッファの単語のみを候補にする
+     * （2026-08-10。{@link #queryWordCompletion} が null 分岐でフォールバックする）。
+     * 「構築中で待つべき」状態（{@code wordIndex != null && !isReady()}）とは区別する。
+     */
     private void triggerWordCompletion() {
-        if (wordIndex == null || !wordIndex.isReady()) {
+        if (wordIndex != null && !wordIndex.isReady()) {
             setStatusMessage("Building word index...");
             return;
         }
@@ -1503,6 +1513,9 @@ public class ModalEditor {
      * maxResults 枠が埋まらない場合だけディスク索引（辞書順）から補う。
      * カーソル位置そのものの語（今まさに入力中の未完成なプレフィックス）は
      * extractWordsByProximity 側で除外済み。
+     *
+     * <p>{@code wordIndex == null}（{@code :pr} 未実行でディスク索引を構築していない。2026-08-10）
+     * の場合は現在バッファの単語だけを返す。
      */
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
         return queryWordCompletion(prefix, COMPLETION_MAX_RESULTS);
@@ -1513,8 +1526,9 @@ public class ModalEditor {
         int cursorOffset = prefixStartOffset();
         java.util.List<String> bufferWordsOrdered = dev.javatexteditor.analysis.WordIndex
             .extractWordsByProximity(buffer.getText(), cursorOffset, prefix);
-        java.util.List<String> words = new java.util.ArrayList<>(
-            wordIndex.query(prefix, maxResults, bufferWordsOrdered));
+        java.util.List<String> words = new java.util.ArrayList<>(wordIndex != null
+            ? wordIndex.query(prefix, maxResults, bufferWordsOrdered)
+            : bufferWordsOrdered.subList(0, Math.min(bufferWordsOrdered.size(), maxResults)));
         // Cバッファはプロジェクトルート配下の単語（wordIndex）に加え、#include しているヘッダの
         // 識別子も候補に含める（CLAUDE.md「C言語のファイルを開いているときの入力補完候補」節）。
         if (words.size() < maxResults && isCFilePath(currentFilePath)) {
@@ -1617,7 +1631,7 @@ public class ModalEditor {
             return;
         }
         boolean classReady = completionIndex != null && completionIndex.isReady();
-        boolean wordReady = wordIndex != null && wordIndex.isReady();
+        boolean wordReady = wordIndex == null || wordIndex.isReady();  // trigger側と同じ理由
         if (!classReady && !wordReady) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
@@ -1634,7 +1648,9 @@ public class ModalEditor {
     }
 
     private void recheckWordCompletion() {
-        if (wordIndex == null) {
+        // wordIndex == null（:pr 未実行）はバッファ内単語のみのフォールバックで継続する。
+        // 「構築中で待つべき」状態（!isReady()）だけポップアップを閉じる（2026-08-10、trigger側と同じ理由）。
+        if (wordIndex != null && !wordIndex.isReady()) {
             dismissCompletion();
             return;
         }

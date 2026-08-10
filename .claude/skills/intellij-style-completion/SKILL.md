@@ -221,6 +221,38 @@ PLAIN 位置（`obj.` のような修飾なし）で新規クラス名・追加�
   `[Buffer, buffer, BUFFER_REGISTRY]` へ）。`WordIndex` には10,000ファイル / 100,000語の
   上限も入ったが、本プロジェクトは357ファイル・10,238語で到達しない。
 
+### WordIndex の構築を `:pr` 実行まで完全に見送るよう変更（2026-08-10 続報。現行仕様）
+
+- **経緯**: 上記の上限化に続き、ユーザーから「`:pr` でプロジェクトルートが指定されるまでは、
+  Javaバッファなら現在バッファの単語＋標準API、その他の言語なら現在バッファの単語のみを
+  補完候補にしたい」という提案があり、根本原因（ホーム全体の無条件索引化）をほぼゼロにする
+  変更として採用した。**これが現行仕様であり、以後 `WordIndex` の挙動を論じるときは
+  この節を基準にすること**（上2節は経緯として残す）。
+- **`AnalysisServices.startProjectIndexing`（起動時）は `WordIndex` を構築しなくなった**。
+  `CompletionIndex`（JDK クラス名。ディスク走査を伴わない固定サイズ）だけを起動時に構築する。
+  `WordIndex` は新設の `AnalysisServices.startWordIndexing(Path)` に切り出し、`:pr` の
+  `ProjectRootManager` リスナー（`EditorApplication`）からのみ呼ばれる。
+- **Javaバッファは既存コードの無変更で意図どおりになった**: `JavaCompletionEngine.plainCandidates`
+  はもともと「現在バッファの単語（静的解析、`WordIndex` インスタンス不要）→ JDK クラス名→
+  キーワード→（`wordIndex` があれば）ディスク索引」の順で、`wordIndex == null` なら自然に
+  「バッファの単語＋標準API＋キーワード」だけになる。メンバー補完（`obj.` 後）ももとから
+  `WordIndex` 非依存。変更が要ったのは「`wordIndex == null`（:pr 未実行）」と
+  「`wordIndex != null && !isReady()`（構築中で待つべき）」を区別できていなかった
+  `ModalEditor` 側だけ（`triggerCompletion`/`recheckCompletion`/`triggerWordCompletion`/
+  `recheckWordCompletion`/`queryWordCompletion`/`queryMergedCompletion`）。前者はメッセージなしで
+  即座にバッファ内単語フォールバックへ進み、後者だけ「Building word index...」で待たせる。
+- **`:pr` 実行時の反映**: 新設インスタンスを `SERVICES.wordIndex()` 経由で取得し、既に開いている
+  全ペインへ `editor.setWordIndex(...)` で反映する（新規ペインは `PaneManager` 経由の
+  `wireInto()` が `SERVICES.wordIndex()` の非 null 値を自動的に拾う）。
+- **`:cd` は今回もトリガーにしていない**: `:cd`（作業ディレクトリ変更、FILER モードでの
+  ディレクトリ閲覧等で頻繁に発生しうる）に索引の自動再構築を結び付けると、閲覧のたびに
+  ディスク走査が走りかねない。`:pr`（利用者が「ここがプロジェクトルートだ」と明示する操作）
+  だけをトリガーにする、というユーザーの提案どおりの境界を採用した。
+- **実測（上限修正後との比較・実機と同じ起動条件で Full GC 後の真の生存量）**:
+  70MB→**21MB**、RSS 327MB→**248MB**。ヒストグラムから `WordIndex` 由来のオブジェクトが
+  完全に消えたことを確認済み。詳細・検証方法は `docs/decision-log.md`
+  「単語補完（WordIndex）の構築を `:pr` 実行まで完全に見送るよう変更（2026-08-10 続報）」参照。
+
 ---
 
 ## 性能上の歯止め（変更するときは理由を書き残すこと）
@@ -229,7 +261,7 @@ PLAIN 位置（`obj.` のような修飾なし）で新規クラス名・追加�
 |---|---|---|
 | `JavacCompletionAnalyzer.resolveMembers` | `-sourcepath`（`JavaSourceRoots`）経由 | 2026-08-09にプロジェクト全体を毎回読み込む方式から変更。詳細は下記「メンバー補完のメモリ肥大化を修正した」参照。`JavaSourceCollector.MAX_SOURCE_FILES`（2000ファイル）は現在 `BindingDefinitionResolver`（Shift+K）専用 |
 | `PaneManager.MEMBER_LOOKUP_EXECUTOR` | 同時1本（単一スレッド） | 2026-08-10追加。依頼ごとの仮想スレッド起動をやめ、追い越された要求は javac を動かす前に破棄する |
-| `WordIndex.MAX_INDEXED_FILES` / `MAX_INDEXED_WORDS` | 10,000 ファイル / 100,000 語 | 2026-08-10追加。走査の起点が利用者のホームになりうるため、恒久保持量に天井が要る（1語あたり約650バイト＝約65MBで頭打ち） |
+| `WordIndex.MAX_INDEXED_FILES` / `MAX_INDEXED_WORDS` | 10,000 ファイル / 100,000 語 | 2026-08-10追加。`:pr` 実行後の索引にも天井を残す（1語あたり約650バイト＝約65MBで頭打ち）。ただし2026-08-10続報以降、`:pr` 未実行の間は索引自体を構築しないため、この上限は「`:pr` で固定したプロジェクトルートが巨大だった場合」だけの保険 |
 | `JavaCompletionEngine.MAX_BUFFER_WORDS` | 200 語 | 数十万行のバッファで候補が膨らみすぎないため |
 | `ModalEditor.COMPLETION_MAX_RESULTS` | 10 件 | ポップアップに載せる件数 |
 | `EditorCanvas.COMPLETION_VISIBLE_ROWS` | 10 行 | 一度に見せる行数（超過分はスクロール） |

@@ -2146,3 +2146,61 @@ Full GC 後のヒストグラムも一致した。生存の大半が `Concurrent
 「無名バッファ・`package` 宣言なしファイルへのクロスファイルジャンプを検証する既存テストが
 解決不能に後退する」という理由で意図的に見送った経緯がある。今回は直列化で同時実行数を
 有界にするに留めた。
+
+## 単語補完（WordIndex）の構築を `:pr` 実行まで完全に見送るよう変更（2026-08-10 続報）
+
+- **経緯**: 上記「WordIndex がホームディレクトリ全体を無制限に索引化していた問題の修正」の
+  対応後、ユーザーから設計変更の提案があった。「`:pr` でプロジェクトルートが指定されるまでは、
+  Javaファイルなら現在バッファの単語＋標準API（クラス・メソッド・フィールド）のみ、
+  その他の言語なら現在バッファの単語のみを補完候補にしてほしい。メモリ削減に効くか」という
+  内容。調査の結果、`:cd`/`:pr` のいずれも当時は `WordIndex` の再構築をトリガーしておらず
+  （`WordIndex.build()` は起動時に1回きり）、既定の起動方法では常にホームディレクトリが
+  索引対象になっていた。この提案は「上限を設ける」という前回の対症療法よりさらに踏み込み、
+  `:pr` 未実行の間は索引そのものを作らないことで根本原因（ホーム全体の無条件索引化）を
+  ほぼゼロにする。
+- **実測（前回の上限修正後との比較、Xvfb上の実アプリをRobotで操作、実機と同じ起動条件）**:
+
+  | 指標 | 上限修正後 | :pr ゲート後 |
+  |---|---|---|
+  | 起動10秒後のヒープ | 70MB | 61MB |
+  | Full GC後の生存量 | 67MB | **21MB** |
+  | RSS | 327MB | **248MB** |
+
+  Full GC後のヒストグラムから `WordIndex` 由来の `ConcurrentHashMap`/`ConcurrentSkipListMap`
+  一式が完全に消え、残るのは JDK クラス索引（`jrt:/` 由来。ホームディレクトリの規模に
+  無関係な固定サイズ）と JVM 内部オブジェクトのみになったことを確認した。
+- **修正内容**:
+  1. `AnalysisServices.startProjectIndexing` から `WordIndex.build` を除去し、
+     `CompletionIndex`（JDK クラス名。ディスク走査を伴わないため常時構築のままでよい）だけを
+     起動時に構築するようにした。`WordIndex` は新設の `startWordIndexing(Path)` に切り出し、
+     `:pr` のリスナー（`EditorApplication`）からのみ呼ぶ。
+  2. `:pr` 実行時、新設インスタンスを `SERVICES.wordIndex()` 経由で取得し、
+     既に開いている全ペインへ `editor.setWordIndex(...)` で反映する（新規ペインは
+     `PaneManager` 経由の `wireInto()` が自動的に拾う。既存の null チェックのみで対応可能）。
+  3. `ModalEditor` の補完系メソッド（`triggerCompletion`/`recheckCompletion`/
+     `triggerWordCompletion`/`recheckWordCompletion`/`queryWordCompletion`/
+     `queryMergedCompletion`）で、「`wordIndex == null`（:pr 未実行）」と
+     「`wordIndex != null && !isReady()`（構築中で一時的に待つべき）」を区別した。
+     前者はメッセージを出さずバッファ内単語のみのフォールバックへ即座に進み、
+     後者だけ従来どおり「Building word index...」で待たせる。
+- **Java バッファ側は既存コードの無変更で済んだ**: `JavaCompletionEngine.plainCandidates` は
+  もともと「現在バッファの単語（`WordIndex.matchWordsByProximity`、静的メソッドでバッファの
+  みを見る）→ JDK クラス名（`CompletionIndex`）→ キーワード→（`wordIndex` があれば）
+  ディスク索引」の順で候補を積む構造になっており、`wordIndex` が `null` のときは自然に
+  「バッファの単語＋標準API＋キーワード」だけになる。メンバー補完
+  （`obj.` の後、`ReflectionMemberProvider`＋現在ファイルの `SourceAnalyzer` 解析）も
+  もとから `WordIndex` に依存していない。変更が必要だったのは「`wordIndex == null` を
+  “待つべき” と誤判定してブロックしていた」`ModalEditor` 側の非Java・Alt+/ 経路のみ。
+- **検証**: 新規に `PrGateProbe`（`ModalEditor` を直接操作する検証コード。テストハーネスとは
+  別に一時的な検証専用コードとして作成、リポジトリには追加していない）で3ケースを確認:
+  Javaバッファ・:pr未実行→バッファ内単語のみ（他ファイル語は含まれない）、
+  非Javaバッファ・:pr未実行→バッファ内単語のみ、非Javaバッファ・:pr実行後（`setWordIndex`
+  相当）→他ファイル語も候補に含まれる。いずれも期待どおり。`./scripts/test.sh` は
+  この変更の前後でも完全に一致（120 class passed / 4 class failed、新規failなし）。
+  `IntelliJCompletionTest`（49/49）・`WordCompletionTest`（39/39）・`CWordCompletionTest`
+  （12/12）・`WordIndexTest`（5/5）はいずれも全PASS。
+- **今回は変更しなかったもの**: `:cd`（作業ディレクトリ変更）は依然 `WordIndex` を再構築しない
+  （`WD_MANAGER.addChangeListener` は `setProjectRoot` のみを呼ぶ）。これは今回の変更の前から
+  存在する既存仕様で、今回のスコープは「`:pr` を新しい構築トリガーとして追加すること」に
+  限定した（ユーザーの提案どおり `:pr` を明示的なゲートとして採用し、`:cd` の頻繁な移動
+  ―― FILER モードでのディレクトリ閲覧等 ―― を索引の自動再構築に結び付けない）。
