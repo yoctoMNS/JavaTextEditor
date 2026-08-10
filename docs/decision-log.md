@@ -2058,3 +2058,149 @@ import欠落の `cannot find symbol`）は従来と同一であることを確�
   同一に再現することを個別に確認済み。新規failなし）。影響範囲の
   `JavacCompletionAnalyzerTest`（24/24）・`BindingDefinitionResolverTest`（25/25）・
   `JavaSourceRootsTest`（8/8）・`CompileAnalyzerTest`（17/17）はいずれも全PASS。
+
+## WordIndex がホームディレクトリ全体を無制限に索引化していた問題の修正（2026-08-10）
+
+- **報告された症状**: `scripts/run.sh` の GC ログで、起動後わずか79秒でヒープ使用量が
+  49MB→3,708MB まで単調増加し、Young GC・Mixed GC を挟んでも一度も下がらない。
+  利用者の操作は「ファイルを開いて放置／Javaファイルを編集／補完を使用／定義元へジャンプ」の4つ。
+- **調査方法**: ①Xvfb 上で実機と同じ起動経路（`Main`）から起動し `jcmd GC.heap_info` で時系列測定、
+  ②`java.awt.Robot` で実キーイベントを送って4操作を実際に再現（スクリーンショットで到達を検証）、
+  ③`jcmd GC.run` による強制 Full GC 後の生存量測定でリークと割り当て速度を切り分け、
+  ④`jcmd GC.class_histogram` で生存オブジェクトの内訳を特定、
+  ⑤`ThreadMXBean#getThreadAllocatedBytes` による解析経路ごとの1回あたり割り当て量の実測。
+
+### まず否定されたもの: リークではなく、解析3経路でもなかった
+
+強制 Full GC 後の生存量は逐次・同時実行のいずれでも 4MB まで戻り、参照が溜まり続ける
+古典的なリークではないことを確認した。1回あたりの割り当て量は Shift+K が 385〜426MB、
+メンバー補完が 66〜70MB、編集時診断が 65MB で、後2者は 2026-08-07・2026-08-09 の修正が
+効いていた。**これら3経路を合成負荷で連続実行しても、実機ログの単調増加は再現しなかった**
+（GC後は130〜245MBで安定）。この否定的結果が、原因が解析経路ではないことの決め手になった。
+
+### 真の原因: 作業ディレクトリの既定値がホームディレクトリであること
+
+`WorkingDirectoryManager.resolve()` は、ヒントが無い場合（＝`run.sh` を引数なしで起動した場合）
+**ユーザーのホームディレクトリ**を作業ディレクトリにする。`AnalysisServices.startProjectIndexing()`
+はこれを起点に `WordIndex` を構築するため、既定の起動方法では利用者のホーム配下すべてが
+索引対象になっていた。`WordIndex` はプロセスが終わるまで生き続けるので、これがそのまま
+「GC しても下がらないヒープの底」になる。小さなホーム（テキスト2,516ファイル）ですら
+157MB を保持し、実際の開発者のホームでは際限なく伸び続ける。調査の初期に再現しなかったのは、
+検証時に `Main` へファイル引数を渡しており作業ディレクトリが小さなサブディレクトリに
+なっていたためで、引数なしに変えた時点で実機と同じ挙動（起動10秒で378MB）が再現した。
+
+Full GC 後のヒストグラムも一致した。生存の大半が `ConcurrentHashMap` 314,278個・
+`KeySetView` 313,995個で、これは `WordIndex` が**異なる単語1つにつき ConcurrentHashMap を
+2個ずつ**（`words` の値と `wordFiles` の値）確保していたことによる。要素が1〜数個の集合に
+本体・KeySetView・ノード表配列を丸ごと持つため、単語1つあたり約960バイトかかっていた。
+
+### 修正（3点）
+
+1. **`wordFiles`（単語→ファイル集合）を参照カウントへ**。この集合は「参照ファイルが0件に
+   なったか」の判定にしか使っておらず、同一ファイルが同一単語を二重登録することはない
+   （初回スキャンは各ファイルを1回しか訪れず、`updateFile` は差分だけを増減させる）ため、
+   件数だけで意味は完全に同じ。1語あたり約960→650バイトになった。
+2. **`WordIndex` にファイル数・単語数の上限を追加**（10,000ファイル / 100,000語）。
+   走査の起点が利用者のホームになりうる以上、上限は必須。到達時は走査を打ち切り、
+   集めた分で `ready` にする（`query` は現在バッファ由来の候補を優先するため実用性は保たれる）。
+3. **`WordIndex` だけ `lib/` を除外**。`lib/openjdk-native/` は⑫が `setup.sh` で取得する
+   OpenJDK の C/C++ ソース（78MB・4,553ファイル）で、利用者が編集する対象ではないのに
+   索引を 11MB→320MB に膨らませていた。**`FileNameSearcher.SKIP_DIRS` へ足してはならない**
+   （あちらは `gr`/`:grep` の既定スキップ集合で、⑫は `lib/openjdk-native/` を意図的に
+   検索対象にしている）ため、除外は `WordIndex` 内に閉じた。副次的に Alt+/ の候補から
+   OpenJDK 由来のノイズ（`buff0` 等）が消え、プロジェクトの識別子が上位に来るようになった。
+
+### あわせて修正: Shift+K とメンバー補完の同時実行に上限が無かった
+
+`PaneManager` は Shift+K を押すたび・レシーバ文脈が変わるたびに
+`Thread.ofVirtual().start()` していた。世代カウンタは返ってきた結果を捨てるだけで解析自体は
+止めないため、同時実行数に上限が無く、400MB級（Shift+K）・70MB級（メンバー補完）の
+作業メモリが何本も同時に生存しえた。`LiveDiagnostics` が 2026-08-07 に確立した方式
+（単一スレッドで直列化し、追い越された要求は javac を動かす前に破棄）へ揃えた。
+用途ごとに1本ずつ持つのは、1本に統合すると3.5秒かかりうる Shift+K の後ろに打鍵ごとの
+メンバー補完が待たされるため。`LiveDiagnostics` の1本と合わせて同時に走る javac は最大3本で有界。
+実行前の世代チェックを追加したので、両カウンタは `volatile` にした（加算は常に EDT のみ）。
+
+### 実測（実機と同じ起動条件・Xvfb 上の `Main` を Robot で操作）
+
+| 指標 | 修正前 | 修正後 |
+|---|---|---|
+| 起動10秒後のヒープ | 378MB | 70MB |
+| 4操作すべて実行した後 | 428MB | 113MB |
+| 強制 Full GC 後の生存量 | 273MB | 67MB |
+| RSS | 563MB | 327MB |
+| `WordIndex` 単体の保持（ホーム起点） | 157MB | 52MB |
+| `WordIndex` 単体の保持（プロジェクト起点） | 12MB | 9MB |
+
+### 検証
+
+`./scripts/test.sh` は修正前後で完全に一致（いずれも 120 class passed / 4 class failed。
+`[FAIL]` 行・`PASS: n / m` 行を集計した結果が完全一致することを確認済みで、新規 fail は無い）。
+既知のベースライン失敗は本ファイル既載のものと同一。
+
+### 残課題（今回スコープ外）
+
+`BindingDefinitionResolver`（Shift+K）は依然 `JavaSourceCollector.collect`（プロジェクト全体の
+`.java` を毎回中身ごと読んで javac へ渡す）方式のままで、1回あたり385〜426MB・1.5〜3.5秒かかる。
+`-sourcepath` 方式（`JavaSourceRoots.sourcePathFor`）へ変えれば大幅に減るが、2026-08-09 に
+「無名バッファ・`package` 宣言なしファイルへのクロスファイルジャンプを検証する既存テストが
+解決不能に後退する」という理由で意図的に見送った経緯がある。今回は直列化で同時実行数を
+有界にするに留めた。
+
+## 単語補完（WordIndex）の構築を `:pr` 実行まで完全に見送るよう変更（2026-08-10 続報）
+
+- **経緯**: 上記「WordIndex がホームディレクトリ全体を無制限に索引化していた問題の修正」の
+  対応後、ユーザーから設計変更の提案があった。「`:pr` でプロジェクトルートが指定されるまでは、
+  Javaファイルなら現在バッファの単語＋標準API（クラス・メソッド・フィールド）のみ、
+  その他の言語なら現在バッファの単語のみを補完候補にしてほしい。メモリ削減に効くか」という
+  内容。調査の結果、`:cd`/`:pr` のいずれも当時は `WordIndex` の再構築をトリガーしておらず
+  （`WordIndex.build()` は起動時に1回きり）、既定の起動方法では常にホームディレクトリが
+  索引対象になっていた。この提案は「上限を設ける」という前回の対症療法よりさらに踏み込み、
+  `:pr` 未実行の間は索引そのものを作らないことで根本原因（ホーム全体の無条件索引化）を
+  ほぼゼロにする。
+- **実測（前回の上限修正後との比較、Xvfb上の実アプリをRobotで操作、実機と同じ起動条件）**:
+
+  | 指標 | 上限修正後 | :pr ゲート後 |
+  |---|---|---|
+  | 起動10秒後のヒープ | 70MB | 61MB |
+  | Full GC後の生存量 | 67MB | **21MB** |
+  | RSS | 327MB | **248MB** |
+
+  Full GC後のヒストグラムから `WordIndex` 由来の `ConcurrentHashMap`/`ConcurrentSkipListMap`
+  一式が完全に消え、残るのは JDK クラス索引（`jrt:/` 由来。ホームディレクトリの規模に
+  無関係な固定サイズ）と JVM 内部オブジェクトのみになったことを確認した。
+- **修正内容**:
+  1. `AnalysisServices.startProjectIndexing` から `WordIndex.build` を除去し、
+     `CompletionIndex`（JDK クラス名。ディスク走査を伴わないため常時構築のままでよい）だけを
+     起動時に構築するようにした。`WordIndex` は新設の `startWordIndexing(Path)` に切り出し、
+     `:pr` のリスナー（`EditorApplication`）からのみ呼ぶ。
+  2. `:pr` 実行時、新設インスタンスを `SERVICES.wordIndex()` 経由で取得し、
+     既に開いている全ペインへ `editor.setWordIndex(...)` で反映する（新規ペインは
+     `PaneManager` 経由の `wireInto()` が自動的に拾う。既存の null チェックのみで対応可能）。
+  3. `ModalEditor` の補完系メソッド（`triggerCompletion`/`recheckCompletion`/
+     `triggerWordCompletion`/`recheckWordCompletion`/`queryWordCompletion`/
+     `queryMergedCompletion`）で、「`wordIndex == null`（:pr 未実行）」と
+     「`wordIndex != null && !isReady()`（構築中で一時的に待つべき）」を区別した。
+     前者はメッセージを出さずバッファ内単語のみのフォールバックへ即座に進み、
+     後者だけ従来どおり「Building word index...」で待たせる。
+- **Java バッファ側は既存コードの無変更で済んだ**: `JavaCompletionEngine.plainCandidates` は
+  もともと「現在バッファの単語（`WordIndex.matchWordsByProximity`、静的メソッドでバッファの
+  みを見る）→ JDK クラス名（`CompletionIndex`）→ キーワード→（`wordIndex` があれば）
+  ディスク索引」の順で候補を積む構造になっており、`wordIndex` が `null` のときは自然に
+  「バッファの単語＋標準API＋キーワード」だけになる。メンバー補完
+  （`obj.` の後、`ReflectionMemberProvider`＋現在ファイルの `SourceAnalyzer` 解析）も
+  もとから `WordIndex` に依存していない。変更が必要だったのは「`wordIndex == null` を
+  “待つべき” と誤判定してブロックしていた」`ModalEditor` 側の非Java・Alt+/ 経路のみ。
+- **検証**: 新規に `PrGateProbe`（`ModalEditor` を直接操作する検証コード。テストハーネスとは
+  別に一時的な検証専用コードとして作成、リポジトリには追加していない）で3ケースを確認:
+  Javaバッファ・:pr未実行→バッファ内単語のみ（他ファイル語は含まれない）、
+  非Javaバッファ・:pr未実行→バッファ内単語のみ、非Javaバッファ・:pr実行後（`setWordIndex`
+  相当）→他ファイル語も候補に含まれる。いずれも期待どおり。`./scripts/test.sh` は
+  この変更の前後でも完全に一致（120 class passed / 4 class failed、新規failなし）。
+  `IntelliJCompletionTest`（49/49）・`WordCompletionTest`（39/39）・`CWordCompletionTest`
+  （12/12）・`WordIndexTest`（5/5）はいずれも全PASS。
+- **今回は変更しなかったもの**: `:cd`（作業ディレクトリ変更）は依然 `WordIndex` を再構築しない
+  （`WD_MANAGER.addChangeListener` は `setProjectRoot` のみを呼ぶ）。これは今回の変更の前から
+  存在する既存仕様で、今回のスコープは「`:pr` を新しい構築トリガーとして追加すること」に
+  限定した（ユーザーの提案どおり `:pr` を明示的なゲートとして採用し、`:cd` の頻繁な移動
+  ―― FILER モードでのディレクトリ閲覧等 ―― を索引の自動再構築に結び付けない）。

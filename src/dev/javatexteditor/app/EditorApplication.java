@@ -149,9 +149,12 @@ public final class EditorApplication {
         PROJECT_ROOT_MANAGER = new ProjectRootManager();
         Path projectRoot = WD_MANAGER.getWorkingDirectory();
 
-        // 作業ディレクトリに依存する索引（補完・単語）の構築を開始する。
-        // ★必ず SwingUtilities.invokeLater より前で呼ぶこと（構築開始が遅れると
-        //   起動直後の Ctrl+Space / Alt+/ が空振りする）。
+        // JDK クラス名索引（補完）の構築を開始する。★必ず SwingUtilities.invokeLater より前で
+        // 呼ぶこと（構築開始が遅れると起動直後の Ctrl+Space が空振りする）。
+        // Alt+/ 単語索引（WordIndex）はここでは構築しない。`:pr` でプロジェクトルートが
+        // 固定されたときに初めて構築する（下記 PROJECT_ROOT_MANAGER のリスナー・
+        // AnalysisServices#startWordIndexing の Javadoc参照。2026-08-10、ホームディレクトリ
+        // 全体を無制限に索引化していた問題の修正）。
         SERVICES.startProjectIndexing(projectRoot);
 
         final GraphicsConfiguration targetScreen = detectMouseScreen();
@@ -188,10 +191,18 @@ public final class EditorApplication {
                 frame.setTitle(buildTitle(wd));
             });
 
-            // :pr で固定するプロジェクトルート変更時: 全エディタへ反映（バグ修正、decision-log.md参照）
+            // :pr で固定するプロジェクトルート変更時: 全エディタへ反映（バグ修正、decision-log.md参照）。
+            // あわせて Alt+/ 単語索引（WordIndex）の構築もここで初めて開始する（2026-08-10）。
+            // 起動時は作業ディレクトリ（既定ではユーザーのホーム）を無条件に索引化していたが、
+            // `:pr` で明示的にプロジェクトルートを固定したときだけ索引化するよう変更した
+            // （経緯は AnalysisServices#startWordIndexing の Javadoc・decision-log.md参照）。
+            // 既に開いているペインへは setWordIndex() で反映し、以後に開くペインは
+            // PaneManager 経由の wireInto() が SERVICES.wordIndex() の非 null 値を自動的に拾う。
             PROJECT_ROOT_MANAGER.addChangeListener(root -> {
+                SERVICES.startWordIndexing(root);
                 for (PaneTree.Leaf l : panes.allLeaves()) {
                     l.editor().setProjectRootOverride(root);
+                    l.editor().setWordIndex(SERVICES.wordIndex());
                 }
             });
 

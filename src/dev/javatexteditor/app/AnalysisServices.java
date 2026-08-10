@@ -72,14 +72,40 @@ public final class AnalysisServices {
     }
 
     /**
-     * 作業ディレクトリに依存する索引（Ctrl+Space の補完索引・Alt+/ の単語索引）の
-     * バックグラウンド構築を開始する。作業ディレクトリ確定直後、
-     * <b>{@code SwingUtilities.invokeLater} に入るより前</b>に呼ぶこと。
+     * JDK クラス名索引（{@link CompletionIndex}）のバックグラウンド構築を開始する。
+     * 起動時に必ず1回呼ぶこと。<b>{@code SwingUtilities.invokeLater} に入るより前</b>に呼ぶこと。
+     *
+     * <p><b>{@link WordIndex}（Alt+/ の単語索引・作業ディレクトリ配下のディスク走査）は
+     * ここでは構築しない</b>（2026-08-10 変更）。{@link #startWordIndexing(Path)} を参照。
      */
     public void startProjectIndexing(Path projectRoot) {
-        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築
+        // 補完インデックス（JDK クラス名のみ）をバックグラウンドで構築。ディスク走査を伴わず
+        // JVM 起動ごとに1回だけ・固定サイズなので、作業ディレクトリの規模に関わらず常時構築してよい。
         completionIndex = CompletionIndex.build(jdkClassIndex);
-        // Alt+/ 単語補完インデックス（作業ディレクトリ配下の単語）もバックグラウンドで構築
+    }
+
+    /**
+     * Alt+/ 単語索引（{@link WordIndex}）のバックグラウンド構築を開始する。
+     *
+     * <p><b>{@code :pr} でプロジェクトルートが固定されたときにのみ呼ぶ（2026-08-10 追加）</b>。
+     * 以前は {@link #startProjectIndexing(Path)} が起動直後に無条件でディスク走査していたが、
+     * 走査の起点は {@code WorkingDirectoryManager} が決める作業ディレクトリで、その既定値は
+     * <b>ユーザーのホームディレクトリ</b>（{@code scripts/run.sh} を引数なしで起動した場合）
+     * だった。索引はプロセスが終わるまで生き続けるため、`:pr` 未実行のセッションでも
+     * ホーム配下すべてを索引化した分（実測157MB、上限を入れた後でも52MB）が常に
+     * ヒープに載っていた（詳細は decision-log.md 「WordIndex がホームディレクトリ全体を
+     * 無制限に索引化していた問題の修正（2026-08-10）」）。
+     *
+     * <p>`:pr` 未実行の間は {@link #wordIndex()} が {@code null} を返し続け、呼び出し側
+     * （{@code ModalEditor} の補完系メソッド）は既存の null 分岐でバッファ内単語のみに
+     * フォールバックする（JDK クラス名・メンバーは {@link #completionIndex} / JDK 索引が
+     * 別途常時利用可能なので、Java バッファは実質的に「現在バッファの単語 + 標準API」になる）。
+     *
+     * <p>呼び出し側（{@code EditorApplication}）は、構築後のインスタンスを
+     * {@link #wordIndex()} 経由で取得し、既に開いている全ペインへ手動で反映すること
+     * （新規ペインは {@link #wireInto} が自動的に拾う）。
+     */
+    public void startWordIndexing(Path projectRoot) {
         wordIndex = WordIndex.build(projectRoot);
     }
 

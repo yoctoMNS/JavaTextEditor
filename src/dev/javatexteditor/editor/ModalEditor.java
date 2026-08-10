@@ -234,7 +234,11 @@ public class ModalEditor {
     private Consumer<Runnable> bindingLookupUiDispatcher = Runnable::run;
     // stale 結果破棄用の世代カウンタ。非同期解析の完了前に再度 Shift+K が押された場合、
     // 古い方の結果は適用せず黙って捨てる（Eclipse がジャンプ要求をキャンセルするのと同じ発想）。
-    private long bindingLookupGeneration = 0;
+    //
+    // <p>volatile である理由: 加算するのは常に EDT（lookupJdkDoc）だけなので ++ の非原子性は
+    // 問題にならないが、解析を実行するバックグラウンドスレッド側が「自分より新しい要求が
+    // 既に出ているか」を開始前に読み取れる必要がある（下記の実行前チェック）。
+    private volatile long bindingLookupGeneration = 0;
     // Shift+K (jdk.doc) のプロジェクト全体検索がEDTをフリーズさせないための上限時間。
     // 作業ディレクトリが巨大（既定値がホームディレクトリになりうるため）だと
     // ProjectSymbolResolver.resolve() の全文grepに時間がかかることがあるため、
@@ -416,8 +420,8 @@ public class ModalEditor {
     private boolean memberLookupEnabled = false;
     private Consumer<Runnable> memberLookupExecutor = Runnable::run;
     private Consumer<Runnable> memberLookupUiDispatcher = Runnable::run;
-    // stale 結果破棄用の世代カウンタ（bindingLookupGeneration と同じ考え方）
-    private long memberLookupGeneration = 0;
+    // stale 結果破棄用の世代カウンタ（bindingLookupGeneration と同じ考え方。volatile の理由も同じ）
+    private volatile long memberLookupGeneration = 0;
     // 実行中の型解決要求（同じレシーバに対して javac を二重起動しないための印）
     private dev.javatexteditor.analysis.JavaCompletionEngine.MemberKey pendingMemberKey = null;
     // 補完候補のクラス名を確定したときに import を挿入するために使う（null なら import しない）
@@ -1318,7 +1322,10 @@ public class ModalEditor {
             return;
         }
         boolean classReady = completionIndex != null && completionIndex.isReady();
-        boolean wordReady = wordIndex != null && wordIndex.isReady();
+        // wordIndex == null は「:pr 未実行でディスク索引そのものを構築していない」状態であり、
+        // 「構築中で待つべき」状態とは異なる（2026-08-10）。この場合は queryMergedCompletion が
+        // 現在バッファの単語だけにフォールバックするため、待たずに進んでよい。
+        boolean wordReady = wordIndex == null || wordIndex.isReady();
         if (!classReady && !wordReady) {
             setStatusMessage("Building completion index...");
             return;
@@ -1387,6 +1394,9 @@ public class ModalEditor {
         final Path root = getProjectRoot();
         final UndoablePieceTable bufferAtRequest = buffer;
         memberLookupExecutor.accept(() -> {
+            // Shift+K と同じく、実行待ちの間に別のレシーバへ移っていれば javac を動かさず捨てる
+            // （打鍵のたびに発火する経路なので、直列化と組み合わせないと待ち行列が伸び続ける）。
+            if (generation != memberLookupGeneration) return;
             java.util.List<dev.javatexteditor.analysis.CompletionItem> members =
                 completionEngine.resolveMembersAccurately(ctx, text, filePathAtRequest, root);
             memberLookupUiDispatcher.accept(
@@ -1451,10 +1461,10 @@ public class ModalEditor {
         int wordBudget = classAvailable
             ? Math.max(0, COMPLETION_MAX_RESULTS - COMPLETION_CLASS_RESERVED_SLOTS)
             : COMPLETION_MAX_RESULTS;
-        if (wordIndex != null && wordIndex.isReady()) {
-            for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix, wordBudget)) {
-                if (seen.add(item.label())) merged.add(item);
-            }
+        // wordIndex が null（:pr 未実行）でも queryWordCompletion は現在バッファの単語だけに
+        // フォールバックするため、ここでは呼び出し自体を条件分岐しない（2026-08-10）。
+        for (dev.javatexteditor.analysis.CompletionItem item : queryWordCompletion(prefix, wordBudget)) {
+            if (seen.add(item.label())) merged.add(item);
         }
         if (classAvailable && merged.size() < COMPLETION_MAX_RESULTS) {
             for (dev.javatexteditor.analysis.CompletionItem item
@@ -1466,9 +1476,16 @@ public class ModalEditor {
         return merged;
     }
 
-    /** Alt+/ で単語補完ポップアップを起動する（作業ディレクトリ配下の単語 + 現在バッファの単語）。 */
+    /**
+     * Alt+/ で単語補完ポップアップを起動する。
+     *
+     * <p>{@code :pr} でプロジェクトルートが固定済みなら作業ディレクトリ配下の単語（{@link #wordIndex}）
+     * ＋現在バッファの単語、未固定（{@code wordIndex == null}）なら現在バッファの単語のみを候補にする
+     * （2026-08-10。{@link #queryWordCompletion} が null 分岐でフォールバックする）。
+     * 「構築中で待つべき」状態（{@code wordIndex != null && !isReady()}）とは区別する。
+     */
     private void triggerWordCompletion() {
-        if (wordIndex == null || !wordIndex.isReady()) {
+        if (wordIndex != null && !wordIndex.isReady()) {
             setStatusMessage("Building word index...");
             return;
         }
@@ -1496,6 +1513,9 @@ public class ModalEditor {
      * maxResults 枠が埋まらない場合だけディスク索引（辞書順）から補う。
      * カーソル位置そのものの語（今まさに入力中の未完成なプレフィックス）は
      * extractWordsByProximity 側で除外済み。
+     *
+     * <p>{@code wordIndex == null}（{@code :pr} 未実行でディスク索引を構築していない。2026-08-10）
+     * の場合は現在バッファの単語だけを返す。
      */
     private java.util.List<dev.javatexteditor.analysis.CompletionItem> queryWordCompletion(String prefix) {
         return queryWordCompletion(prefix, COMPLETION_MAX_RESULTS);
@@ -1506,8 +1526,9 @@ public class ModalEditor {
         int cursorOffset = prefixStartOffset();
         java.util.List<String> bufferWordsOrdered = dev.javatexteditor.analysis.WordIndex
             .extractWordsByProximity(buffer.getText(), cursorOffset, prefix);
-        java.util.List<String> words = new java.util.ArrayList<>(
-            wordIndex.query(prefix, maxResults, bufferWordsOrdered));
+        java.util.List<String> words = new java.util.ArrayList<>(wordIndex != null
+            ? wordIndex.query(prefix, maxResults, bufferWordsOrdered)
+            : bufferWordsOrdered.subList(0, Math.min(bufferWordsOrdered.size(), maxResults)));
         // Cバッファはプロジェクトルート配下の単語（wordIndex）に加え、#include しているヘッダの
         // 識別子も候補に含める（CLAUDE.md「C言語のファイルを開いているときの入力補完候補」節）。
         if (words.size() < maxResults && isCFilePath(currentFilePath)) {
@@ -1610,7 +1631,7 @@ public class ModalEditor {
             return;
         }
         boolean classReady = completionIndex != null && completionIndex.isReady();
-        boolean wordReady = wordIndex != null && wordIndex.isReady();
+        boolean wordReady = wordIndex == null || wordIndex.isReady();  // trigger側と同じ理由
         if (!classReady && !wordReady) return;
         String prefix = extractCompletionPrefix();
         if (prefix.isEmpty()) {
@@ -1627,7 +1648,9 @@ public class ModalEditor {
     }
 
     private void recheckWordCompletion() {
-        if (wordIndex == null) {
+        // wordIndex == null（:pr 未実行）はバッファ内単語のみのフォールバックで継続する。
+        // 「構築中で待つべき」状態（!isReady()）だけポップアップを閉じる（2026-08-10、trigger側と同じ理由）。
+        if (wordIndex != null && !wordIndex.isReady()) {
             dismissCompletion();
             return;
         }
@@ -7265,6 +7288,10 @@ public class ModalEditor {
             final String filePathAtRequest = currentFilePath;
             setStatusMessage("Resolving definition of " + word + "...");
             bindingLookupExecutor.accept(() -> {
+                // 実行待ちの間に次の Shift+K が押されていれば、javac を動かす前に捨てる。
+                // 完了後の世代チェック（applyBindingResolution）は結果を捨てるだけで解析自体は
+                // 止めないため、連打すると 1回あたり約400MBの解析が無駄に積み上がっていた。
+                if (generation != bindingLookupGeneration) return;
                 BindingDefinitionResolver.Resolution resolution;
                 try {
                     resolution = bindingDefinitionResolver.resolve(
