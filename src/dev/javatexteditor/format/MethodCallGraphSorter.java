@@ -5,13 +5,34 @@ import java.util.regex.Pattern;
 
 /**
  * メソッド名の出現ベースで構築した軽量コールグラフを使い、Step-downルール（呼び出し元の直下に
- * 呼び出し先を配置）+ アルファベット順で並び替える。型解決は一切行わず、正規表現の単語境界
- * マッチ（{@code \bNAME\b}）だけで「AがBを呼んでいるらしい」を判定する軽量版。
- * すべてローカル変数・引数のみで完結し、呼び出し完了後は何も保持しない。
+ * 呼び出し先を配置）+ アルファベット順で並び替える。型解決は一切行わず、正規表現だけで
+ * 「AがBを呼んでいるらしい」を判定する軽量版。
+ *
+ * <p>単なる単語境界マッチ（{@code \bNAME\b}）では、{@code current.init()}（別インスタンスへの
+ * 呼び出し）や {@code int init = 5;}（同名の変数）まで「呼び出し」と誤検出してしまう。
+ * そのため呼び出し判定パターン（{@link #callPattern(String)}）は次の2点を追加で要求する:
+ * <ul>
+ *   <li>名前の直後（空白は許容）に {@code (} が続くこと（変数アクセスとの区別）</li>
+ *   <li>名前の直前が {@code .} でないこと、ただし {@code this.} の直後は許容すること
+ *       （後読み {@code (?<=\bthis\.)|(?<!\.)} で判定。{@code obj.name(}/{@code super.name(} を除外し、
+ *       暗黙のthis呼び出し {@code name(} と明示的な {@code this.name(} だけを対象にする）</li>
+ * </ul>
+ *
+ * <p>すべてローカル変数・引数のみで完結し、呼び出し完了後は何も保持しない。
  */
 final class MethodCallGraphSorter {
 
     private MethodCallGraphSorter() {}
+
+    /**
+     * {@code methodName} への「自インスタンス呼び出し」だけにマッチするパターンを組み立てる。
+     * {@code obj.methodName(} のような他インスタンス経由の呼び出しや {@code super.methodName(}、
+     * {@code int methodName = 0;} のような同名変数は対象外にする。
+     */
+    private static Pattern callPattern(String methodName) {
+        return Pattern.compile(
+            "(?:(?<=\\bthis\\.)|(?<!\\.))\\b" + Pattern.quote(methodName) + "\\s*\\(");
+    }
 
     /**
      * @param methodSlices equals/hashCode/toString/clone を除いたメソッドのスライス一覧
@@ -37,13 +58,16 @@ final class MethodCallGraphSorter {
         }
 
         Set<String> names = byName.keySet();
+        Map<String, Pattern> patternByName = new HashMap<>();
+        for (String name : names) patternByName.put(name, callPattern(name));
+
         Map<String, Set<String>> calls = new HashMap<>();
         for (String caller : names) {
             String body = bodyByName.get(caller);
             Set<String> callees = new LinkedHashSet<>();
             for (String callee : names) {
                 if (callee.equals(caller)) continue;
-                if (Pattern.compile("\\b" + Pattern.quote(callee) + "\\b").matcher(body).find()) {
+                if (patternByName.get(callee).matcher(body).find()) {
                     callees.add(callee);
                 }
             }

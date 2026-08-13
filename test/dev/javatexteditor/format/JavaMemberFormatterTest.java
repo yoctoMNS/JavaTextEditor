@@ -460,6 +460,88 @@ public class JavaMemberFormatterTest {
                     && out.indexOf("void alpha()") < out.indexOf("void zeta()"));
         }
 
+        // Test 23〜25: 誤検出されると targetMethod が aRun の呼び出し先として検出され、
+        // 「aRun, targetMethod, bMiddle」という（元のソースと同じ）順になり無変更＝nullを返してしまう
+        // （＝バグを再現できない弱いテストになる）。ソース順を「aRun, targetMethod, bMiddle」にしておくと、
+        // 正しく誤検出を除外できていれば targetMethod は「一度も呼ばれないメソッド」として独立した
+        // ルート扱いになり、アルファベット順で bMiddle の後ろへ実際に並び替わる（非null・検証可能）。
+
+        // Test 23: 別インスタンス経由の同名呼び出し（obj.targetMethod()）は自クラスの呼び出しと誤認識しない
+        {
+            String src = """
+                package p;
+                class A {
+                    public void aRun() {
+                        otherInstance.targetMethod();
+                    }
+                    private void targetMethod() {}
+                    public void bMiddle() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("別インスタンス経由の呼び出しは誤検出しない (obj.method())",
+                out != null && out.indexOf("void bMiddle()") < out.indexOf("void targetMethod()"));
+        }
+
+        // Test 24: super.targetMethod() も自クラスの呼び出しと誤認識しない
+        {
+            String src = """
+                package p;
+                class A {
+                    public void aRun() {
+                        super.targetMethod();
+                    }
+                    private void targetMethod() {}
+                    public void bMiddle() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("super経由の呼び出しは誤検出しない (super.method())",
+                out != null && out.indexOf("void bMiddle()") < out.indexOf("void targetMethod()"));
+        }
+
+        // Test 25: 同名の変数・フィールドへのアクセス（メソッド呼び出しではない）は誤検出しない
+        {
+            String src = """
+                package p;
+                class A {
+                    public void aRun() {
+                        int targetMethod = 0;
+                    }
+                    private void targetMethod() {}
+                    public void bMiddle() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("同名変数へのアクセスは誤検出しない (int method = 0;)",
+                out != null && out.indexOf("void bMiddle()") < out.indexOf("void targetMethod()"));
+        }
+
+        // Test 26: 明示的な this.method() は正しく「呼び出し」として検出され、Step-downされる
+        // （ソース順をあえて helper, run, zzzAnother にし、正しく検出されれば run の直下へ
+        // 実際に並び替わることを非null・具体的な位置で検証する）
+        {
+            String src = """
+                package p;
+                class A {
+                    private void helper() {}
+                    public void run() {
+                        this.helper();
+                    }
+                    public void zzzAnother() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("this.method()は正しくStep-downされる",
+                out != null
+                    && out.indexOf("void run()") < out.indexOf("void helper()")
+                    && out.indexOf("void helper()") < out.indexOf("void zzzAnother()"));
+        }
+
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + (total - pass) + ")");
         if (pass != total) {
