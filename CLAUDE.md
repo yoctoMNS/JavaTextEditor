@@ -114,6 +114,7 @@ project-root/
 | ㉛ | `image-preview` | 画像ファイル（png/jpg/jpeg/gif/bmp）を開いた際の全画面プレビュー（アスペクト比維持の自動フィット・`+`/`-`/`0`による手動ズーム・`hjkl`/矢印キーによるパン）、`SwingWorker`による非同期読み込み、読み込み失敗時はMode.BINARYへ自動フォールバック | ✅ 完了（38/38テスト・`Main.isImageFile()`（拡張子+`ImageIO.read()`二段判定）・`ui.ImageRenderer`（Swing非依存の拡縮計算+描画委譲）・新規`Mode.IMAGE`（`Mode.BINARY`と同じ独立モード方式、`KeymapRegistry`不使用）・`imageModeOwner`は既存の参照一致による自動失効パターンを踏襲・パンは既存の`scrollRow`/`scrollCol`をそのまま流用しJScrollPane/CardLayoutは不採用） |
 
 | ㉜ | `intellij-style-completion` | Javaバッファの入力補完をIntelliJ IDEA方式にする（`obj.`のメンバー補完＋ハイブリッド型解決・候補のシグネチャ/型表示・CamelCase/単語境界マッチ・一致品質→近接度→使用頻度の並べ替え・メソッド確定時の`()`挿入・クラス確定時のimport挿入） | ✅ 完了（新規64テスト・キーバインドは一切変更なし＝Ctrl+Space/自動表示/Tab・Enterのまま・Alt+/のVim式近接順は不変・PLAIN位置でjavacを使わない判断は費用対効果によるスコープ外） |
+| ㉝ | `java-auto-formatter` | `.java`ファイル保存時のメンバー自動並び替え（static→instanceフィールド・可視性順・コンストラクタ引数なし優先・オーバーロードのクラスタリング・equals/hashCode/toString等の最下部集約・ネスト型への再帰適用。class/interface/enum/recordそれぞれ規約順） | ✅ 完了（新規32テスト・`dev.javatexteditor.format`パッケージ新設・Compiler Tree APIで境界特定しテキストスライスのみ操作するハイブリッド方式・jdk-source疑似バッファ/`java.`等JDKパッケージ/構文エラー時は多重フェイルセーフで無変更・Step-downルールとrecordの正規/カスタムコンストラクタ判別は費用対効果によるスコープ外） |
 
 ### 依存関係（Skillを作る順序の制約）
 

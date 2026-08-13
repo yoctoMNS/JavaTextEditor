@@ -22,6 +22,8 @@ import dev.javatexteditor.classfile.ClassFileFormatException;
 import dev.javatexteditor.classfile.ClassFileFormatter;
 import dev.javatexteditor.classfile.ClassFileParser;
 import dev.javatexteditor.classfile.MnemonicFormatter;
+import dev.javatexteditor.format.JavaAutoFormatGuard;
+import dev.javatexteditor.format.JavaMemberFormatter;
 import dev.javatexteditor.markdown.MarkdownRenderer;
 import dev.javatexteditor.projectbuild.BuildDiagnostic;
 import dev.javatexteditor.projectbuild.BuildResult;
@@ -3823,7 +3825,8 @@ public class ModalEditor {
                 Files.write(targetPath, bytes);
                 statusMessage = "\"" + PathDisplay.baseName(targetPath.toString()) + "\" written (" + bytes.length + " bytes)";
             } else {
-                Files.writeString(targetPath, buffer.getText());
+                String textToWrite = applyJavaAutoFormatIfEligible(targetPath, buffer.getText());
+                Files.writeString(targetPath, textToWrite);
                 statusMessage = "\"" + PathDisplay.baseName(targetPath.toString()) + "\" written";
             }
             buffer.markSaved();
@@ -3841,6 +3844,26 @@ public class ModalEditor {
             statusMessage = "E: " + e.getMessage();
             return false;
         }
+    }
+
+    /**
+     * .javaファイル保存直前に呼ぶ、メンバー自動並び替え（{@code dev.javatexteditor.format}）フック。
+     * {@link JavaAutoFormatGuard} の条件を満たさない場合や並び替えの必要が無い場合は
+     * 元のテキストをそのまま返す。並び替えが行われた場合は、ディスクに書く内容と
+     * バッファの内容を一致させるため buffer 自体も書き換える（undo で元に戻せる）。
+     */
+    private String applyJavaAutoFormatIfEligible(Path targetPath, String originalText) {
+        if (!JavaAutoFormatGuard.isEligible(targetPath, currentFilePath, inJdkSourceBuffer)) {
+            return originalText;
+        }
+        String formatted = JavaMemberFormatter.format(originalText);
+        if (formatted == null || formatted.equals(originalText)) {
+            return originalText;
+        }
+        buffer.delete(0, originalText.length());
+        buffer.insert(0, formatted);
+        clampCursorAfterUndoRedo();
+        return formatted;
     }
 
     // -------------------------------------------------------------------------
