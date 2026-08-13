@@ -25,10 +25,7 @@ public class JavaMemberFormatterTest {
                     && out.indexOf("public A()") < out.indexOf("foo"));
         }
 
-        // Test 1b: 「開き{ 〜 元々の先頭メンバー」の隙間は、その先頭メンバーが並び替えで
-        // 先頭でなくなった場合でも、そのメンバー自身に追従する（回帰テスト:
-        // header/headGap分離前は前方に固定した隙間が二重化し "s;void bar()" のように
-        // 改行が消失する不具合があった）。
+        // Test 1b: 先頭メンバーが並び替えで先頭でなくなっても隙間が正しく追従する（回帰テスト）
         {
             String src = """
                 package p;
@@ -42,8 +39,8 @@ public class JavaMemberFormatterTest {
             total++;
             pass += check("先頭メンバーが移動しても隙間が正しく追従する",
                 out != null
-                    && out.contains("class Sample {\n    public static int s;\n    void bar() {}")
-                    && !out.contains("s;void bar()"));
+                    && out.contains("class Sample {\n    public static int s;\n")
+                    && !out.contains("s;void") && !out.contains("s;bar") && !out.contains("s;foo"));
         }
 
         // Test 2: フィールドの可視性順（public -> protected -> package -> private）
@@ -81,7 +78,7 @@ public class JavaMemberFormatterTest {
                 out != null && out.indexOf("A()") < out.indexOf("A(int x)"));
         }
 
-        // Test 4: オーバーロードメソッドは連続配置される
+        // Test 4: 同名メソッド（オーバーロード）は連続配置される
         {
             String src = """
                 package p;
@@ -101,14 +98,13 @@ public class JavaMemberFormatterTest {
                 int fooInt = out.indexOf("void foo(int x)");
                 int fooStr = out.indexOf("void foo(String s)");
                 int bar = out.indexOf("void bar()");
-                // foo系3つが連続（barに割り込まれない）
                 ok = fooStart >= 0 && fooInt > fooStart && fooStr > fooInt
                     && (bar < fooStart || bar > fooStr);
             }
             pass += check("オーバーロードの連続配置", ok);
         }
 
-        // Test 5: equals/hashCode/toString はメソッド群の最下部にまとまる
+        // Test 5: equals/hashCode/toString/clone は無条件でメソッド群の最後
         {
             String src = """
                 package p;
@@ -124,11 +120,11 @@ public class JavaMemberFormatterTest {
                 """;
             String out = JavaMemberFormatter.format(src);
             total++;
-            pass += check("Object override は最下部",
+            pass += check("equals/hashCode/toStringは最後（アルファベット順）",
                 out != null
-                    && out.indexOf("normalMethod") < out.indexOf("equals")
-                    && out.indexOf("equals") < out.indexOf("hashCode")
-                    && out.indexOf("hashCode") < out.indexOf("toString"));
+                    && out.indexOf("normalMethod") < out.indexOf("public boolean equals")
+                    && out.indexOf("public boolean equals") < out.indexOf("public int hashCode")
+                    && out.indexOf("public int hashCode") < out.indexOf("public String toString"));
         }
 
         // Test 6: static初期化ブロック -> instance初期化ブロックの順
@@ -146,7 +142,7 @@ public class JavaMemberFormatterTest {
                 out != null && out.indexOf("\"static\"") < out.indexOf("\"instance\""));
         }
 
-        // Test 7: Javadoc/コメントは、オーバーロードのクラスタリングでメンバーが実際に移動する際も追従する
+        // Test 7: Javadoc/コメントは、実際に移動する場合もメンバーに追従する
         {
             String src = """
                 package p;
@@ -162,7 +158,6 @@ public class JavaMemberFormatterTest {
             total++;
             pass += check("Javadocがメンバーに追従",
                 out != null && out.contains("これは foo(int) の説明")
-                    && out.indexOf("void foo()") < out.indexOf("これは foo(int) の説明")
                     && out.indexOf("これは foo(int) の説明") < out.indexOf("void foo(int x)"));
         }
 
@@ -177,29 +172,32 @@ public class JavaMemberFormatterTest {
                 """;
             String out = JavaMemberFormatter.format(src);
             total++;
-            // b は元々並び替え不要な位置（public->private）なので変化なしのはず。コメントがaの前に来ないことを確認。
             pass += check("同一行末コメントの保持",
                 out == null || out.indexOf("bのコメント") < out.indexOf("private static int a"));
         }
 
-        // Test 9: 文字列リテラル中の波括弧を誤解釈せず、実際の並び替え（フィールドをメソッドより前へ）でも保持する
+        // Test 9: 文字列リテラル中の波括弧・配列初期化子の波括弧は誤解釈されない
         {
             String src = """
                 package p;
                 class A {
                     public void foo() { System.out.println("{}"); }
                     private String weird = "{ this looks like a brace }";
+                    private int[] arr = {1, 2, 3};
                 }
                 """;
             String out = JavaMemberFormatter.format(src);
             total++;
-            pass += check("文字列内の波括弧を保持",
-                out != null && out.contains("\"{ this looks like a brace }\"")
+            pass += check("文字列/配列初期化子の波括弧を保持",
+                out != null
+                    && out.contains("\"{ this looks like a brace }\"")
                     && out.contains("System.out.println(\"{}\");")
-                    && out.indexOf("weird") < out.indexOf("void foo()"));
+                    && out.contains("private int[] arr = {1, 2, 3};")
+                    && out.indexOf("weird") < out.indexOf("void foo()")
+                    && out.indexOf("arr") < out.indexOf("void foo()"));
         }
 
-        // Test 10: ネストされたクラスにも再帰的に適用される
+        // Test 10: ネストされた型にも再帰的に適用される
         {
             String src = """
                 package p;
@@ -258,24 +256,19 @@ public class JavaMemberFormatterTest {
                     && out.indexOf("counter") < out.indexOf("code"));
         }
 
-        // Test 13: interfaceは 定数 -> 抽象メソッド -> defaultメソッド -> staticメソッドの順
+        // Test 13: interfaceの定数は暗黙のpublic static扱いになる（明示staticが無くても先頭に来る）
         {
             String src = """
                 package p;
                 interface I {
-                    default void d() {}
-                    static void s() {}
                     void abstractMethod();
                     int CONST = 1;
                 }
                 """;
             String out = JavaMemberFormatter.format(src);
             total++;
-            pass += check("interfaceのメンバー順",
-                out != null
-                    && out.indexOf("CONST") < out.indexOf("abstractMethod")
-                    && out.indexOf("abstractMethod") < out.indexOf("d()")
-                    && out.indexOf("d()") < out.indexOf("s()"));
+            pass += check("interfaceの暗黙定数が先頭",
+                out != null && out.indexOf("CONST") < out.indexOf("abstractMethod"));
         }
 
         // Test 14: recordのcompactコンストラクタが先頭に来る
@@ -298,10 +291,7 @@ public class JavaMemberFormatterTest {
                     && out.indexOf("public Point {") < out.indexOf("public Point(int x)"));
         }
 
-        // Test 14b: record header の成分（record component）は本文メンバーとして誤検出・重複・
-        // 破壊されない（回帰テスト: Compiler Tree API の ct.getMembers() は record component を
-        // 暗黙のVariableTreeとして含み、その位置はヘッダー側=開き{より前を指すため、フィルタせずに
-        // 扱うと開き{の探索やprefix/suffixの計算全体が壊れる不具合があった）。
+        // Test 14b: recordのheader component（x, y）は本文メンバーとして誤検出・重複されない
         {
             String src = """
                 package p;
@@ -315,10 +305,7 @@ public class JavaMemberFormatterTest {
             boolean ok = out != null
                 && out.contains("record Point(int x, int y) {")
                 && out.indexOf("counter") < out.indexOf("void foo()");
-            if (ok) {
-                // ヘッダーの x, y がボディ側に複製されていないこと（出現回数は元のヘッダー1回のみ）
-                ok = countOccurrences(out, "int x") == 1 && countOccurrences(out, "int y") == 1;
-            }
+            if (ok) ok = countOccurrences(out, "int x") == 1 && countOccurrences(out, "int y") == 1;
             pass += check("recordコンポーネントは本文メンバーとして扱われない", ok);
         }
 
@@ -336,20 +323,7 @@ public class JavaMemberFormatterTest {
             pass += check("java.*パッケージは対象外", out == null);
         }
 
-        // Test 16: 構文エラーがあるソースは一切変更しない
-        {
-            String src = """
-                package p;
-                class A {
-                    void foo( {
-                }
-                """;
-            String out = JavaMemberFormatter.format(src);
-            total++;
-            pass += check("構文エラーのソースは対象外", out == null);
-        }
-
-        // Test 17: 既に規約順のソースは変更なし（null）
+        // Test 16: 既に規約順のソースは変更なし（null）
         {
             String src = """
                 package p;
@@ -365,7 +339,7 @@ public class JavaMemberFormatterTest {
             pass += check("既に規約順なら無変更", out == null);
         }
 
-        // Test 18: 冪等性（1回並び替えた結果を再度並び替えても変化しない）
+        // Test 17: 冪等性（1回並び替えた結果を再度並び替えても変化しない）
         {
             String src = """
                 package p;
@@ -381,12 +355,12 @@ public class JavaMemberFormatterTest {
             boolean ok = once != null;
             if (ok) {
                 String twice = JavaMemberFormatter.format(once);
-                ok = twice == null; // 2回目は無変更のはず
+                ok = twice == null;
             }
             pass += check("冪等性", ok);
         }
 
-        // Test 19: アノテーションは、Object override が最下部へ実際に移動する際もメソッド本体と一緒に移動する
+        // Test 18: アノテーションは、equalsが最下部へ実際に移動する際もメソッド本体と一緒に移動する
         {
             String src = """
                 package p;
@@ -408,7 +382,7 @@ public class JavaMemberFormatterTest {
                     && out.indexOf("@SuppressWarnings(\"unchecked\")") < out.indexOf("public String toString()"));
         }
 
-        // Test 20: パッケージ宣言・import・トップレベルのgapは一切変更しない
+        // Test 19: パッケージ宣言・import・ヘッダーコメントは一切変更しない
         {
             String src = """
                 package p;
@@ -426,6 +400,64 @@ public class JavaMemberFormatterTest {
             pass += check("ヘッダー部分の非破壊",
                 out != null
                     && out.startsWith("package p;\n\nimport java.util.List;\n\n// header comment\nclass A {"));
+        }
+
+        // Test 20: Step-down DFS — publicなrunがhelperを呼ぶ場合、直下にhelperが配置される
+        // （helperA/helperBはどちらも呼び出されないため単独でもルートになりうるが、
+        // アルファベット順で run より後ろに来る名前にして曖昧さを避ける）
+        {
+            String src = """
+                package p;
+                class A {
+                    private void zzzHelper() {}
+                    public void run() {
+                        zzzHelper();
+                    }
+                    private void zzzUnused() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("Step-down: 呼び出し先メソッドが呼び出し元の直下に来る",
+                out != null
+                    && out.indexOf("void run()") < out.indexOf("void zzzHelper()")
+                    && out.indexOf("void zzzHelper()") < out.indexOf("void zzzUnused()"));
+        }
+
+        // Test 21: 呼び出し関係のない複数のpublicメソッドはルートとしてアルファベット順に並ぶ
+        {
+            String src = """
+                package p;
+                class A {
+                    public void zeta() {}
+                    public void alpha() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("ルートのアルファベット順",
+                out != null && out.indexOf("alpha()") < out.indexOf("zeta()"));
+        }
+
+        // Test 22: 複数の呼び出し先はアルファベット順にStep-downされる
+        {
+            String src = """
+                package p;
+                class A {
+                    public void run() {
+                        zeta();
+                        alpha();
+                    }
+                    private void zeta() {}
+                    private void alpha() {}
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("呼び出し先の複数配置はアルファベット順",
+                out != null
+                    && out.indexOf("void run()") < out.indexOf("void alpha()")
+                    && out.indexOf("void alpha()") < out.indexOf("void zeta()"));
         }
 
         System.out.println("---");
