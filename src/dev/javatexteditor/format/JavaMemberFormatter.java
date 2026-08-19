@@ -252,13 +252,45 @@ public final class JavaMemberFormatter {
                 return new MemberSlice(start, end, MemberKind.CONSTRUCTOR, className, isStatic, visibility, 0, true);
             }
         }
+        // フィールド初期化子中の呼び出し式（例: `Font font = new Font(...)` の `new Font(`）を
+        // メソッド宣言と誤認識しないよう、トップレベルの代入 `=` より前に現れる `(` だけを
+        // メソッド宣言のものとみなす（`=` が `(` より先に現れる場合は初期化子付きフィールド）。
+        int topLevelEq = indexOfTopLevelAssign(rest);
         Matcher nameM = NAME_BEFORE_PAREN.matcher(rest);
-        if (nameM.find()) {
+        if (nameM.find() && (topLevelEq < 0 || nameM.start() < topLevelEq)) {
             String name = nameM.group(1);
             int paramCount = countParams(rest.substring(nameM.end() - 1));
             return new MemberSlice(start, end, MemberKind.METHOD, name, isStatic, visibility, paramCount, false);
         }
         return new MemberSlice(start, end, MemberKind.FIELD, null, isStatic, visibility, 0, false);
+    }
+
+    /**
+     * {@code text} 内でトップレベル（丸括弧・角括弧の深さ0）に現れる代入 {@code =} の位置を返す。
+     * {@code ==}/{@code !=}/{@code <=}/{@code >=} は除外する。見つからなければ -1。
+     */
+    private static int indexOfTopLevelAssign(String text) {
+        int depthParen = 0, depthSquare = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            switch (c) {
+                case '(' -> depthParen++;
+                case ')' -> { if (depthParen > 0) depthParen--; }
+                case '[' -> depthSquare++;
+                case ']' -> { if (depthSquare > 0) depthSquare--; }
+                case '=' -> {
+                    if (depthParen == 0 && depthSquare == 0) {
+                        char prev = i > 0 ? text.charAt(i - 1) : '\0';
+                        char next = i + 1 < text.length() ? text.charAt(i + 1) : '\0';
+                        boolean isComparison = next == '=' || prev == '=' || prev == '!'
+                            || prev == '<' || prev == '>';
+                        if (!isComparison) return i;
+                    }
+                }
+                default -> { }
+            }
+        }
+        return -1;
     }
 
     /** interfaceのフィールド判定用の簡易ヒューリスティック: 名前(の直後が'('でない=メソッドでない。 */

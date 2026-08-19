@@ -542,6 +542,30 @@ public class JavaMemberFormatterTest {
                     && out.indexOf("void helper()") < out.indexOf("void zzzAnother()"));
         }
 
+        // Test 27: フィールド初期化子中の呼び出し式（new Font(...)）をメソッド宣言と誤認識しない
+        // （`Font font = new Font(...)` の `new Font(` に NAME_BEFORE_PAREN がマッチし、
+        // 「メソッドFont」として誤ってコンストラクタの後ろに並び替わってしまう不具合の再発防止）
+        {
+            String src = """
+                package p;
+                class A {
+                    private Canvas canvas;
+                    private A(String[] args) {
+                        this.args = args;
+                    }
+                    private Font font = new Font(Font.MONOSPACED, Font.BOLD, 30);
+                    public void keyPressed(int e) {
+                    }
+                }
+                """;
+            String out = JavaMemberFormatter.format(src);
+            total++;
+            pass += check("フィールド初期化子中のnew呼び出しをメソッドと誤認識しない",
+                out != null
+                    && out.indexOf("Font font") < out.indexOf("private A(")
+                    && out.indexOf("Font font") < out.indexOf("void keyPressed"));
+        }
+
         System.out.println("---");
         System.out.println("PASS: " + pass + " / " + total + "  (FAIL: " + (total - pass) + ")");
         if (pass != total) {
