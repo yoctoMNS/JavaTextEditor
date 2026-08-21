@@ -183,6 +183,13 @@ for (int[] h : searchHighlights) {
 - **再発防止テスト**: `EmacsIsearchTest.testBareCtrlKeyDuringIsearchDoesNotResetQuery()`を追加。`ctrlS()`ヘルパー（`VK_S`単発）の前に明示的に`sendCode(ed, KeyEvent.VK_CONTROL, CTRL_DOWN_MASK)`を送ることで、実機のイベント順序を単体テストレベルでも再現できるようにした。既存の`ctrlS()`/`ctrlR()`ヘルパーは変更していない（`VK_S`/`VK_R`単発イベントのみを送る既存の全テストは、本修正が「未対応キー」分岐の範囲を狭めただけなので影響を受けない）。
 - **教訓**: `ModalEditor.processKey()`を直接呼ぶ単体テストは「1つの論理キー入力＝1回の`processKey()`呼び出し」という前提を置いているため、実際のAWT/OSが1つの論理キー入力に対して複数のKEY_PRESSEDイベント（修飾キー単体分を含む）を発生させるケースを原理的に検証できない。今後isearchのような「セッション中は特定キー以外を『未対応』として即終了する」設計を新規に追加する場合は、単体テストだけで十分と判断せず、Robot+Xvfb（`RobotKeyInputTest`と同じ手法）での実機検証も行うこと。
 
+## NORMALモードから開始したisearchで日本語等マルチバイト文字が検索できない不具合の修正（2026-08-21）
+
+- **症状**: `Ctrl+S`/`Ctrl+R`でインクリメンタルサーチを開始し、IME（日本語入力等）で変換確定した文字列を打っても`isearchQuery`に反映されず、マルチバイト文字での検索ができなかった。半角英数字の検索は問題なく動作していた。
+- **原因**: IME確定文字列は`KeyEvent`ではなく`InputMethodEvent`経由で届く（`EditorCanvas.inputMethodTextChanged()`）。確定部分は`PaneManager`が配線した`imeCommitHandler`（`canvas.setImeCommitHandler(...)`）へ渡され、そこから1文字ずつ`editor.processKey(0, ch, 0)`として通常のキー入力と同じ経路に流し込まれる設計になっている。ところがこのハンドラの先頭に`if (!editor.isInsertMode() && !editor.isCommandMode()) return;`という早期returnがあり、**INSERT/COMMANDモード以外では確定文字列を丸ごと捨てていた**。isearchはMode自体を変更しない設計（`interceptEmacsIsearch()`節参照）のため、`Ctrl+S`をNORMALモードから押して開始したisearchは`mode == Mode.NORMAL`のままであり、この判定に一致せずIME確定文字列が破棄されていた（INSERTモードから開始したisearchでは`isInsertMode()`がtrueのままなので問題は起きなかった）。
+- **修正**: `PaneManager.java`の`imeCommitHandler`のガード条件に`editor.isEmacsIsearchActive()`を追加し、`isInsertMode() || isCommandMode() || isEmacsIsearchActive()`のいずれかを満たせば確定文字列を通すようにした。isearch本体（`appendEmacsIsearchChar()`等）は元々1文字ずつの`char`を受け取る設計のままで変更していない（サロゲートペアも`Character.toChars()`で分割済みの`char`単位で`processKey`が呼ばれるため、追加対応不要）。
+- **教訓**: 「モードを増やさずisearchを実装する」設計（本ファイル前半参照）は`ModalEditor`内部の分岐には有効だが、`ModalEditor`の外側（GUI配線層）で`isInsertMode()`/`isCommandMode()`だけを見て機能を出し分けているコードがあると、isearchのような「モードを変えないサブ状態」は見落とされやすい。今後isearch中にも動作すべき機能をGUI層に追加する場合は、`isInsertMode()`/`isCommandMode()`の判定だけで終わらせず、`isEmacsIsearchActive()`も含めて判定すること。
+
 ---
 
 ## 注意点
