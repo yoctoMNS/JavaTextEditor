@@ -364,7 +364,10 @@ public final class PaneManager implements EditorHost {
         // IME（日本語入力等）が確定した文字列を、KEY_TYPEDの1文字コミットと同じ経路で挿入する。
         // 変換中の未確定文字列自体は EditorCanvas 側でカーソル位置にオーバーレイ表示される。
         canvas.setImeCommitHandler(committed -> {
-            if (!editor.isInsertMode() && !editor.isCommandMode()) return;
+            // Emacs式インクリメンタルサーチ（Ctrl+S/Ctrl+R）はNORMALモードからも開始できるため、
+            // isInsertMode()/isCommandMode()だけで判定すると、NORMALモードから開始したisearch中に
+            // IME（日本語入力等）で確定した文字列が破棄され、マルチバイト文字を検索できなくなる。
+            if (!editor.isInsertMode() && !editor.isCommandMode() && !editor.isEmacsIsearchActive()) return;
             for (int i = 0; i < committed.length(); ) {
                 int cp = committed.codePointAt(i);
                 for (char ch : Character.toChars(cp)) {
