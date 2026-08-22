@@ -167,6 +167,41 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("nux");
 
     // -------------------------------------------------------------------------
+    // ステータスラインの配色（アプリ起動時に1度だけランダム決定・以後は固定）
+    // -------------------------------------------------------------------------
+    // ステータスライン背景・歩行キャラクターの色は、実行のたびに変わるランダム色にする。
+    // クラス初期化（static初期化子、JVM起動時に1度だけ実行される）の時点で決定し、
+    // 30fpsで再描画されるpaintContent/drawStatusLine内では一切再抽選しない
+    // （毎フレーム色が変わるチラツキを防ぐため）。
+    private static final java.util.Random STATUS_COLOR_RANDOM = new java.util.Random();
+    private static final Color STATUS_LINE_COLOR = randomVividColor();
+    // ステータスラインの文字色は背景の反転色（RGB各成分を255から引いた色）にすることで、
+    // 背景がどんな色に抽選されても常に視認できるようにする（古典的なreverse video方式）。
+    private static final Color STATUS_LINE_TEXT_COLOR = invertColor(STATUS_LINE_COLOR);
+    // 歩行キャラクターもステータスライン背景とは別にランダム色にするが、背景との明度差が
+    // 小さすぎる場合は反転して視認性を確保する。
+    private static final Color WALKING_PERSON_COLOR = randomContrastingColor(STATUS_LINE_COLOR);
+
+    private static Color randomVividColor() {
+        float hue = STATUS_COLOR_RANDOM.nextFloat();
+        float saturation = 0.55f + STATUS_COLOR_RANDOM.nextFloat() * 0.35f; // 0.55-0.90
+        float brightness = 0.55f + STATUS_COLOR_RANDOM.nextFloat() * 0.35f; // 0.55-0.90
+        return Color.getHSBColor(hue, saturation, brightness);
+    }
+
+    private static Color invertColor(Color c) {
+        return new Color(255 - c.getRed(), 255 - c.getGreen(), 255 - c.getBlue());
+    }
+
+    private static Color randomContrastingColor(Color background) {
+        Color candidate = randomVividColor();
+        if (Math.abs(luminance(candidate) - luminance(background)) < 0.25) {
+            candidate = invertColor(candidate);
+        }
+        return candidate;
+    }
+
+    // -------------------------------------------------------------------------
     // ステータスラインのウォーキングパーソンアニメーション
     // -------------------------------------------------------------------------
     private final long  animStartMs = System.currentTimeMillis();
@@ -2025,7 +2060,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
 
     private void drawStatusLine(Graphics2D g2, int lineHeight) {
         int y = getHeight() - 4;
-        g2.setColor(theme.accent);
+        g2.setColor(STATUS_LINE_COLOR);
         g2.fillRect(0, y - lineHeight, getWidth(), lineHeight);
         String label = (commandLineText != null) ? commandLineText
                      : visualBlockMode ? "-- VISUAL BLOCK --"
@@ -2033,13 +2068,13 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
                      : visualMode     ? "-- VISUAL --"
                      : insertMode     ? "-- INSERT --"
                      :                  "-- NORMAL --";
-        drawUiText(g2, label, 4, y, cellW, lineHeight, theme.background);
+        drawUiText(g2, label, 4, y, cellW, lineHeight, STATUS_LINE_TEXT_COLOR);
 
         // 右端に現在時刻（24時間表記）を表示
         String clockLabel = LocalTime.now().format(CLOCK_FORMAT);
         int clockWidth = uiTextWidth(clockLabel, cellW);
         int rightX = getWidth() - clockWidth - 4;
-        drawUiText(g2, clockLabel, rightX, y, cellW, lineHeight, theme.background);
+        drawUiText(g2, clockLabel, rightX, y, cellW, lineHeight, STATUS_LINE_TEXT_COLOR);
 
         // CPU使用率・GPU使用率・メモリ使用率（取得できた項目のみ"|"区切り）は時刻表示の左隣に表示。
         // カーソル位置（行数:トータル文字数）はCPU使用率の隣に"|"区切りで表示する。
@@ -2049,7 +2084,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             : cursorPositionLabel + " | " + statsLabel;
         int statsWidth = uiTextWidth(rightStatsLabel, cellW);
         rightX -= statsWidth + cellW; // 時刻表示との間に1文字分の余白
-        drawUiText(g2, rightStatsLabel, rightX, y, cellW, lineHeight, theme.background);
+        drawUiText(g2, rightStatsLabel, rightX, y, cellW, lineHeight, STATUS_LINE_TEXT_COLOR);
 
         // 診断件数はシステムステータス表示のさらに左隣に表示
         if (!diagnostics.isEmpty()) {
@@ -2060,7 +2095,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
             String diagLabel = buildDiagLabel(errCount, warnCount);
             int labelWidth = uiTextWidth(diagLabel, cellW);
             rightX -= labelWidth + cellW; // システムステータス表示との間に1文字分の余白
-            drawUiText(g2, diagLabel, rightX, y, cellW, lineHeight, theme.background);
+            drawUiText(g2, diagLabel, rightX, y, cellW, lineHeight, STATUS_LINE_TEXT_COLOR);
         }
 
         // ウォーキングパーソンアニメーション（左→右へ走り抜ける）。
@@ -2079,16 +2114,8 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         // ステータスライン内でずれることなく描画される。
         int spriteH = (int) Math.round(WalkingPersonSprite.PERSON_H * scale);
         int y = statusTopY + (lineHeight - spriteH) / 2;
-        // ステータスライン背景色（accent）に対して視認性の高い色を選択する
-        Color spriteColor = contrastColor(theme.accent, theme.foreground, theme.background);
-        WalkingPersonSprite.drawFrame(g2, frame, x, y, scale, spriteColor);
-    }
-
-    /** accent に対してより高いコントラストを持つ方の色を返す。 */
-    private static Color contrastColor(Color accent, Color a, Color b) {
-        return (luminance(a) - luminance(accent)) * (luminance(a) - luminance(accent))
-             > (luminance(b) - luminance(accent)) * (luminance(b) - luminance(accent))
-             ? a : b;
+        // 起動時に1度だけ抽選したキャラクター色を使う（毎フレーム再抽選しない）
+        WalkingPersonSprite.drawFrame(g2, frame, x, y, scale, WALKING_PERSON_COLOR);
     }
 
     private static double luminance(Color c) {
