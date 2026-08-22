@@ -696,3 +696,12 @@ java -cp build dev.javatexteditor.ui.SyntaxHighlightPreview
   のみで回帰なし）。目視確認は使い捨てのプレビューコードでVISUAL LINE選択状態をレンダリングし、
   選択範囲の文字が視認できることをスクリーンショットで確認した（`SyntaxHighlightPreview.java`とは
   別の一時ファイルで検証、本体には追加していない）。
+
+## DARK_MONOの通常文字色を#E6E6E6に再変更（2026-08）
+
+- `DARK_MONO`の「予約語・クラス名以外」の全構文要素（`foreground`/`syntaxString`/`syntaxComment`/
+  `syntaxNumber`/`syntaxPreprocessor`/`syntaxSymbol`/`syntaxOperator`）を、直前の変更で
+  `#333333`にしていたところ、ユーザー要望により`#E6E6E6`（明るいグレー）に再変更した。
+  `accent`（選択ハイライト色`#666666`）・`syntaxKeyword`/`syntaxType`（`#FFFFFF`）は変更していない。
+  黒背景`#000000`に対して十分な明るさのグレーになったため、選択ハイライト`#666666`との明度差も
+  保たれており、前節で修正した選択時の可読性の問題は再発しない。
