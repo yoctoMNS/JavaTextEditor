@@ -606,7 +606,8 @@ java -cp build dev.javatexteditor.ui.SyntaxHighlightPreview
 ユーザーから「:color の仕様を変更した上で2つ増やしたい」という依頼があった。
 
 - **新テーマ追加**: `Theme` enumに `DARK_MONO`（背景#000000、予約語・クラス名=明るい白#FFFFFF、
-  それ以外の全構文要素=少し暗い白#F1F1F1）・`BEIGE_MONO`（背景#F5F0E6のベージュ、
+  それ以外の全構文要素=少し明るい灰色#FBFBFB。初期値は#F1F1F1だったが2026-08にユーザー要望で
+  #FBFBFBへ修正済み）・`BEIGE_MONO`（背景#F5F0E6のベージュ、
   予約語・クラス名=黒#000000、それ以外=少し明るい黒#333333）を追加した。
   この2テーマは「キーワード/クラス名」と「それ以外」の**2色だけ**で構成する単色系テーマで、
   `syntaxString`/`syntaxComment`/`syntaxNumber`/`syntaxPreprocessor`/`syntaxSymbol`/
