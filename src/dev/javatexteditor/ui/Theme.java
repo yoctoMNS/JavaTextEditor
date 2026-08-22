@@ -3,10 +3,20 @@ package dev.javatexteditor.ui;
 import java.awt.Color;
 
 /**
- * テーマごとの配色定義。
+ * テーマごとの配色定義。:color コマンドで切り替える（詳細は ModalEditor.applyColorCommand()
+ * 参照）。番号とenum定数の対応: :color 0 = DARK_MONO（既定）, :color 1 = BEIGE_MONO,
+ * :color 2 = DARK_MODE, :color 3 = LIGHT_MODE。
+ *
+ * DARK_MONO/BEIGE_MONOは「予約語・クラス名」と「それ以外」の2色だけで構成する単色系テーマ
+ * （2026-08 ユーザー要望により新規追加・既定テーマに設定）。DARK_MODE/LIGHT_MODEは
+ * トークン種別ごとに色分けする従来の多色構文ハイライトテーマ。
+ *
  * LIGHT_MODEは純粋な黒(#000000)・純粋な白(#FFFFFF)を使わない
  * （コントラストが強すぎると目が疲れやすいため、わずかに調整した色を使う）。
  * DARK_MODEの背景は2026-07のユーザー要望により純黒(#000000)に変更済み。
+ * これら2テーマの配色は2026-08のDARK_MONO/BEIGE_MONO追加時にも変更していない
+ * （DARK_MODEは「絶対変更しないでほしい」というユーザーの明示的な指示による。
+ * LIGHT_MODEは2026-08にユーザー提供の配色へ全面差し替え済み）。
  *
  * syntaxKeyword はキーワード（if/static/return等）に加え、void/int/char/unsigned/bool
  * 等の基本型・ALL_CAPS識別子（マクロ・定数）も含む色。DARK_MODEでは純白(#FFFFFF)にして
@@ -16,20 +26,36 @@ import java.awt.Color;
  * 代入等の演算子の色。
  */
 public enum Theme {
-    LIGHT_MODE(
+    DARK_MONO(
+        false,
+        new Color(0x00, 0x00, 0x00),  // 黒背景
+        new Color(0xF1, 0xF1, 0xF1),  // 通常文字（少し暗い白）
+        new Color(0xF1, 0xF1, 0xF1),
+        new Color(0xFF, 0xFF, 0xFF),  // キーワード（明るい白）
+        new Color(0xFF, 0xFF, 0xFF),  // 型名/クラス名（明るい白）
+        new Color(0xF1, 0xF1, 0xF1),  // 文字列
+        new Color(0xF1, 0xF1, 0xF1),  // コメント
+        new Color(0xF1, 0xF1, 0xF1),  // 数値
+        new Color(0xF1, 0xF1, 0xF1),  // プリプロセッサ/マクロ
+        new Color(0xF1, 0xF1, 0xF1),  // 記号
+        new Color(0xF1, 0xF1, 0xF1)   // 演算子
+    ),
+    BEIGE_MONO(
+        true,
         new Color(0xF5, 0xF0, 0xE6),  // ベージュ背景
-        new Color(0x33, 0x33, 0x33),  // 薄い黒文字
-        new Color(0x99, 0x99, 0x99),  // ステータス行区切り等に使う中間色
-        new Color(0x33, 0x33, 0x33),  // キーワード（foregroundと同色）
-        new Color(0x26, 0x7F, 0x99),  // 型名（ティール系）
-        new Color(0xA3, 0x15, 0x15),  // 文字列（暗い赤）
-        new Color(0x3F, 0x7F, 0x5F),  // コメント（緑）
-        new Color(0x17, 0x50, 0xEB),  // 数値（青）
-        new Color(0xAF, 0x00, 0xDB),  // プリプロセッサ/マクロ（紫）
-        new Color(0x2E, 0x8B, 0x57),  // 記号（括弧・カンマ・セミコロン等、緑）
-        new Color(0x00, 0x6E, 0x8A)   // 演算子（暗めの水色）
+        new Color(0x33, 0x33, 0x33),  // 通常文字（少し明るい黒）
+        new Color(0x33, 0x33, 0x33),
+        new Color(0x00, 0x00, 0x00),  // キーワード（黒）
+        new Color(0x00, 0x00, 0x00),  // 型名/クラス名（黒）
+        new Color(0x33, 0x33, 0x33),  // 文字列
+        new Color(0x33, 0x33, 0x33),  // コメント
+        new Color(0x33, 0x33, 0x33),  // 数値
+        new Color(0x33, 0x33, 0x33),  // プリプロセッサ/マクロ
+        new Color(0x33, 0x33, 0x33),  // 記号
+        new Color(0x33, 0x33, 0x33)   // 演算子
     ),
     DARK_MODE(
+        false,
         new Color(0x00, 0x00, 0x00),  // 純黒背景
         new Color(0xB8, 0xB8, 0xB8),  // 通常の文字（少し明るい灰色）
         new Color(0x66, 0x66, 0x66),
@@ -41,8 +67,24 @@ public enum Theme {
         new Color(0xC0, 0x60, 0xC8),  // プリプロセッサ/マクロ（マゼンタ）
         new Color(0x6A, 0xE6, 0x6A),  // 記号（括弧・カンマ・セミコロン等、明るい緑）
         new Color(0x3F, 0x9B, 0xB0)   // 演算子（少し暗い水色。型名の明るい水色より暗くする）
+    ),
+    LIGHT_MODE(
+        true,
+        new Color(0xF5, 0xF0, 0xE6),  // 背景: 温かみのあるウォームベージュ
+        new Color(0x2D, 0x31, 0x42),  // 通常文字: 目に優しいダークチャコール（黒の眩しさを抑制）
+        new Color(0x8A, 0x92, 0x9A),  // 区切り/中間色: ミュートグレー
+        new Color(0x00, 0x52, 0xCC),  // キーワード: コバルトブルー（通常文字と完全分離）
+        new Color(0x00, 0x7A, 0x87),  // 型名: ディープティール（青緑系）
+        new Color(0xAD, 0x1A, 0x1A),  // 文字列: クリムゾンレッド（視認性の高い赤）
+        new Color(0x65, 0x74, 0x6E),  // コメント: スレートグリーン（コードの邪魔をしない低彩度）
+        new Color(0xB3, 0x59, 0x00),  // 数値: ダークアンバー/オレンジ（文字列・キーワードと干渉しない）
+        new Color(0x7B, 0x1F, 0xA2),  // プリプロセッサ: ディープパープル
+        new Color(0x55, 0x55, 0x55),  // 記号: ニュートラルダークグレー（構文ノイズの防止）
+        new Color(0x9E, 0x2A, 0x2B)   // 演算子: ラスティレッド/暗いコラール（記号と差別化）
     );
 
+    /** 背景が明るい系のテーマか（ファイル末尾を超えた領域の白/黒塗りの判定に使う）。 */
+    public final boolean isLight;
     public final Color background;
     public final Color foreground;
     public final Color accent;
@@ -55,10 +97,11 @@ public enum Theme {
     public final Color syntaxSymbol;
     public final Color syntaxOperator;
 
-    Theme(Color background, Color foreground, Color accent,
+    Theme(boolean isLight, Color background, Color foreground, Color accent,
           Color syntaxKeyword, Color syntaxType, Color syntaxString,
           Color syntaxComment, Color syntaxNumber, Color syntaxPreprocessor,
           Color syntaxSymbol, Color syntaxOperator) {
+        this.isLight = isLight;
         this.background = background;
         this.foreground = foreground;
         this.accent = accent;

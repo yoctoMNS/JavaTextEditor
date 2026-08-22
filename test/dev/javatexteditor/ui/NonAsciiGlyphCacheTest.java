@@ -30,8 +30,8 @@ public class NonAsciiGlyphCacheTest {
             canvas.setCursor(0, 5); // カーソルを文字と重ならない位置に置く
 
             BufferedImage img = render(canvas, 200, 100);
-            boolean found = hasPixelColor(img, 0x33, 0x33, 0x33, 0, 0, 20, 30);
-            pass += check("非ASCII文字がLIGHT_MODE前景色(0x333333)で描画される", found);
+            boolean found = hasPixelColor(img, 0x2D, 0x31, 0x42, 0, 0, 20, 30);
+            pass += check("非ASCII文字がLIGHT_MODE前景色(0x2D3142)で描画される", found);
         }
 
         // Test 2: テーマ変更後、非ASCII文字の色がDARK_MODEの前景色に切り替わる
@@ -116,7 +116,7 @@ public class NonAsciiGlyphCacheTest {
 
             BufferedImage img = render(canvas, 400, 100);
             int cursorX = 3 * 12 + 12; // AA(2セル)+あ(2セル)=4セル分 → 48px から開始
-            boolean cursorAtExpectedX = hasPixelColor(img, 0x33, 0x33, 0x33, cursorX, 0, 12, 20);
+            boolean cursorAtExpectedX = hasPixelColor(img, 0x2D, 0x31, 0x42, cursorX, 0, 12, 20);
             pass += check("全角文字を含む行でカーソルXピクセル座標が等幅計算(列×セル幅)と一致する"
                 + " expectedX=" + cursorX, cursorAtExpectedX);
         }

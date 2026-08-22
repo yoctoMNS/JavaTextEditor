@@ -1283,7 +1283,7 @@ public class EditorCanvas extends JPanel implements InputMethodListener {
         //     カーソルはこの領域には存在し得ない（cursorRowは常に有効な行番号にクランプされる）。
         if (voidScreenRowStart < visibleRows) {
             int voidY = voidScreenRowStart * lineHeight;
-            g2.setColor(theme == Theme.LIGHT_MODE ? Color.WHITE : Color.BLACK);
+            g2.setColor(theme.isLight ? Color.WHITE : Color.BLACK);
             g2.fillRect(0, voidY, getWidth(), visibleRows * lineHeight - voidY);
         }
 

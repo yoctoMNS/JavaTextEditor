@@ -84,6 +84,8 @@ public class SyntaxHighlightPreview {
         render(Theme.LIGHT_MODE, SourceLanguage.JAVA, JAVA_SAMPLE, 980, 620, "preview_syntax_java_light.png");
         render(Theme.DARK_MODE, SourceLanguage.C, C_SAMPLE, 900, 300, "preview_syntax_c_dark.png");
         render(Theme.LIGHT_MODE, SourceLanguage.C, C_SAMPLE, 900, 300, "preview_syntax_c_light.png");
+        render(Theme.DARK_MONO, SourceLanguage.JAVA, JAVA_SAMPLE, 980, 620, "preview_syntax_java_darkmono.png");
+        render(Theme.BEIGE_MONO, SourceLanguage.JAVA, JAVA_SAMPLE, 980, 620, "preview_syntax_java_beigemono.png");
 
         System.out.println("✅ 構文ハイライトのプレビュー画像をbuild/に保存しました。");
         System.exit(0); // Swing Timer等の非daemonスレッドでJVMが終了しないため明示的に終了する

@@ -255,11 +255,11 @@ public class ModalEditor {
     // grep/telescope/FILER/:e/:w は従来どおり getProjectRoot()（:cd 現在ディレクトリ）を使う。
     // セッション中のみ保持し永続化しない（起動時 null）。上書きは再度 :pr を打つだけでよい。
     private Path projectRootOverride = null;
-    // :color コマンドで切り替えるカラーテーマ。既定はダークモード（従来のMain.java側の
-    // 固定値と同じ）。canvas への実際の反映は syncCanvas() が毎回行う（EditorCanvas.setTheme()
+    // :color コマンドで切り替えるカラーテーマ。既定は :color 0（DARK_MONO、2026-08〜）。
+    // canvas への実際の反映は syncCanvas() が毎回行う（EditorCanvas.setTheme()
     // 側で値が変わっていない場合はグリフキャッシュを再構築しないガードを持つため、
     // 未変更時に呼んでも1キー入力ごとの負荷は増えない）。
-    private Theme theme = Theme.DARK_MODE;
+    private Theme theme = Theme.DARK_MONO;
     // :font コマンドで切り替える半角ASCIIフォント。既定はMiscFixed（:font 0）。
     private FontChoice fontChoice = FontChoice.MISC_FIXED;
     private final FileNameSearcher fileNameSearcher = new FileNameSearcher();
@@ -3363,18 +3363,25 @@ public class ModalEditor {
     }
 
     /**
-     * :color 0（ダークモード）/ :color 1（ライトモード）でカラーテーマを切り替える。
+     * :color 0（DARK_MONO・既定）/ :color 1（BEIGE_MONO）/ :color 2（DARK_MODE）/
+     * :color 3（LIGHT_MODE）でカラーテーマを切り替える。
      * 実際の描画への反映は syncCanvas() の canvas.setTheme() 経由。
      */
     private void applyColorCommand(String arg) {
         if (arg.equals("0")) {
+            theme = Theme.DARK_MONO;
+            statusMessage = "color: dark mono";
+        } else if (arg.equals("1")) {
+            theme = Theme.BEIGE_MONO;
+            statusMessage = "color: beige mono";
+        } else if (arg.equals("2")) {
             theme = Theme.DARK_MODE;
             statusMessage = "color: dark mode";
-        } else if (arg.equals("1")) {
+        } else if (arg.equals("3")) {
             theme = Theme.LIGHT_MODE;
             statusMessage = "color: light mode";
         } else {
-            statusMessage = "E: usage :color 0 (dark) | :color 1 (light)";
+            statusMessage = "E: usage :color 0 (dark mono) | 1 (beige mono) | 2 (dark) | 3 (light)";
         }
     }
 

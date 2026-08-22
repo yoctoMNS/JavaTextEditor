@@ -7,7 +7,8 @@ import java.awt.event.KeyEvent;
 
 /**
  * :font 0/1/2/3（MiscFixed / IBM Plex Mono / JetBrains Mono / Comic Mono）・
- * :color 0/1（ダーク / ライト）コマンドの回帰テスト（mainメソッド形式・JUnit不使用）。
+ * :color 0/1/2/3（DARK_MONO / BEIGE_MONO / DARK_MODE / LIGHT_MODE）コマンドの
+ * 回帰テスト（mainメソッド形式・JUnit不使用）。
  */
 public class FontColorCommandTest {
     private static int pass = 0;
@@ -19,8 +20,10 @@ public class FontColorCommandTest {
         testFontOneSelectsIbmPlexMono();
         testFontTwoSelectsJetBrainsMono();
         testFontThreeSelectsComicMono();
-        testColorZeroSelectsDark();
-        testColorOneSelectsLight();
+        testColorZeroSelectsDarkMono();
+        testColorOneSelectsBeigeMono();
+        testColorTwoSelectsDark();
+        testColorThreeSelectsLight();
         testInvalidFontArgShowsError();
         testInvalidColorArgShowsError();
         testCanvasReflectsChoicesAfterSync();
@@ -50,7 +53,7 @@ public class FontColorCommandTest {
     static void testDefaultsAreMiscFixedAndDark() {
         ModalEditor ed = newEditorWithCanvas("abc");
         check("既定フォントはMiscFixed", FontChoice.MISC_FIXED, ed.getFontChoice());
-        check("既定テーマはダークモード", Theme.DARK_MODE, ed.getTheme());
+        check("既定テーマはDARK_MONO", Theme.DARK_MONO, ed.getTheme());
     }
 
     static void testFontZeroSelectsMiscFixed() {
@@ -83,17 +86,29 @@ public class FontColorCommandTest {
         check(":font 0 でMiscFixedへ戻る", FontChoice.MISC_FIXED, ed.getFontChoice());
     }
 
-    static void testColorZeroSelectsDark() {
+    static void testColorZeroSelectsDarkMono() {
         ModalEditor ed = newEditorWithCanvas("abc");
-        sendCommand(ed, "color 1");
+        sendCommand(ed, "color 2");
         sendCommand(ed, "color 0");
-        check(":color 0 でダークモードになる", Theme.DARK_MODE, ed.getTheme());
+        check(":color 0 でDARK_MONOになる", Theme.DARK_MONO, ed.getTheme());
     }
 
-    static void testColorOneSelectsLight() {
+    static void testColorOneSelectsBeigeMono() {
         ModalEditor ed = newEditorWithCanvas("abc");
         sendCommand(ed, "color 1");
-        check(":color 1 でライトモードになる", Theme.LIGHT_MODE, ed.getTheme());
+        check(":color 1 でBEIGE_MONOになる", Theme.BEIGE_MONO, ed.getTheme());
+    }
+
+    static void testColorTwoSelectsDark() {
+        ModalEditor ed = newEditorWithCanvas("abc");
+        sendCommand(ed, "color 2");
+        check(":color 2 でダークモードになる", Theme.DARK_MODE, ed.getTheme());
+    }
+
+    static void testColorThreeSelectsLight() {
+        ModalEditor ed = newEditorWithCanvas("abc");
+        sendCommand(ed, "color 3");
+        check(":color 3 でライトモードになる", Theme.LIGHT_MODE, ed.getTheme());
     }
 
     static void testInvalidFontArgShowsError() {
@@ -106,7 +121,7 @@ public class FontColorCommandTest {
     static void testInvalidColorArgShowsError() {
         ModalEditor ed = newEditorWithCanvas("abc");
         sendCommand(ed, "color 9");
-        check("不正な:color引数はテーマを変更しない", Theme.DARK_MODE, ed.getTheme());
+        check("不正な:color引数はテーマを変更しない", Theme.DARK_MONO, ed.getTheme());
         check("不正な:color引数はエラーメッセージ", true, ed.getStatusMessage().startsWith("E:"));
     }
 
@@ -114,7 +129,7 @@ public class FontColorCommandTest {
         EditorCanvas canvas = new EditorCanvas();
         ModalEditor ed = new ModalEditor("abc", canvas);
         sendCommand(ed, "font 1");
-        sendCommand(ed, "color 1");
+        sendCommand(ed, "color 3");
         check("canvasにIBM Plex Monoが反映される", FontChoice.IBM_PLEX_MONO, canvas.getFontChoice());
         check("canvasにライトモードが反映される", Theme.LIGHT_MODE, canvas.getTheme());
         sendCommand(ed, "font 2");
