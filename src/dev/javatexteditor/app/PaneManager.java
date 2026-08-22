@@ -333,7 +333,7 @@ public final class PaneManager implements EditorHost {
 
     /** 新しいリーフを生成してコールバックを設定する（既定のフォントセルサイズ・テーマ・フォントを使用）。 */
     private PaneTree.Leaf createLeaf(String text, String path) {
-        return createLeaf(text, path, initialCellW, initialCellH, Theme.DARK_MODE, FontChoice.MISC_FIXED);
+        return createLeaf(text, path, initialCellW, initialCellH, Theme.DARK_MONO, FontChoice.MISC_FIXED);
     }
 
     /**
@@ -342,7 +342,7 @@ public final class PaneManager implements EditorHost {
      * 独立に変更可能。あくまで「分割直後の初期値」を揃えるだけ）。
      */
     private PaneTree.Leaf createLeaf(String text, String path, int cellW, int cellH) {
-        return createLeaf(text, path, cellW, cellH, Theme.DARK_MODE, FontChoice.MISC_FIXED);
+        return createLeaf(text, path, cellW, cellH, Theme.DARK_MONO, FontChoice.MISC_FIXED);
     }
 
     /**

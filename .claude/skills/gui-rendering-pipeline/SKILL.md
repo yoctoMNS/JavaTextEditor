@@ -600,3 +600,58 @@ java -cp build dev.javatexteditor.ui.SyntaxHighlightPreview
 
 > 30fpsという再描画頻度自体は変更していない（アニメーションの滑らかさ＝仕様のため）。
 > 残るアイドル時の割り当ては大半がJava2D/XRender内部のもので、実測で0.3MB/秒程度。
+
+## :color コマンドの仕様変更・単色系テーマ2種追加（DARK_MONO/BEIGE_MONO・2026-08-22）
+
+ユーザーから「:color の仕様を変更した上で2つ増やしたい」という依頼があった。
+
+- **新テーマ追加**: `Theme` enumに `DARK_MONO`（背景#000000、予約語・クラス名=明るい白#FFFFFF、
+  それ以外の全構文要素=少し暗い白#F1F1F1）・`BEIGE_MONO`（背景#F5F0E6のベージュ、
+  予約語・クラス名=黒#000000、それ以外=少し明るい黒#333333）を追加した。
+  この2テーマは「キーワード/クラス名」と「それ以外」の**2色だけ**で構成する単色系テーマで、
+  `syntaxString`/`syntaxComment`/`syntaxNumber`/`syntaxPreprocessor`/`syntaxSymbol`/
+  `syntaxOperator`はすべて同じ「それ以外」色を指す（DARK_MODE/LIGHT_MODEのようなトークン種別
+  ごとの多色分けはしない）。
+- **:color コマンドの番号割当を変更**: `:color 0` = DARK_MONO（新規・既定）、`:color 1` = BEIGE_MONO
+  （新規）、`:color 2` = DARK_MODE（既存、無変更）、`:color 3` = LIGHT_MODE（既存、配色のみ変更・
+  下記参照）。旧仕様（0=DARK_MODE, 1=LIGHT_MODE）から番号の意味が変わっている点に注意。
+  `ModalEditor.applyColorCommand()`のif-else分岐を4分岐に拡張しただけで、実装方式自体は変更していない。
+- **既定テーマをDARK_MONOに変更**: `ModalEditor.theme`フィールドの初期値、および
+  `PaneManager.createLeaf()`の2つのフォールバックオーバーロード（theme引数を省略した版）の
+  デフォルト値を`Theme.DARK_MONO`に変更した。**`EditorCanvas.theme`フィールド自体の初期値は
+  意図的に`Theme.LIGHT_MODE`のまま変更していない**（既存のSKILL冒頭に記載の通り、実際の起動経路
+  では`PaneManager.createLeaf()`が必ず`editor.setTheme(theme)`/`canvas.setTheme(theme)`を明示的に
+  呼ぶためこのフィールドの初期値は実行時に使われず、`EditorCanvasTest`の複数ケースが`setTheme()`を
+  呼ばずにLIGHT_MODEの背景色(#F5F0E6)を前提にしていたため、フィールド初期値を変えるとテストが
+  意味なく壊れるだけだったため）。
+- **LIGHT_MODEの配色を全面差し替え**: ユーザー提供の配色（背景=ウォームベージュ#F5F0E6、通常文字=
+  ダークチャコール#2D3142、キーワード=コバルトブルー#0052CC、型名=ディープティール#007A87、
+  文字列=クリムゾンレッド#AD1A1A、コメント=スレートグリーン#65746E、数値=ダークアンバー#B35900、
+  プリプロセッサ=ディープパープル#7B1FA2、記号=ニュートラルダークグレー#555555、演算子=
+  ラスティレッド#9E2A2B）にそのまま差し替えた。**DARK_MODEの配色は「絶対変更しないでほしい」という
+  ユーザーの明示的指示により一切変更していない**。
+- **`isLight`フィールドを`Theme`に新設**: 「zz等でファイル末尾を超えてスクロールした場合の白/黒塗り」
+  （本ファイル前出の節参照）の判定が、旧実装では`theme == Theme.LIGHT_MODE`という個別テーマの
+  ハードコード比較だったため、テーマが4種に増えると全テーマを網羅できない。`Theme`に
+  `public final boolean isLight`（背景が明るい系かどうか）を追加し、`EditorCanvas`側の判定を
+  `theme.isLight ? Color.WHITE : Color.BLACK`に変更した。DARK_MONO/DARK_MODE=`false`、
+  BEIGE_MONO/LIGHT_MODE=`true`。**実装時に一度この真偽値を取り違え（ダーク系にtrueを割り当てる逆転
+  ミス）、`EditorCanvasTest`のzz末尾超過領域テストで発覚した。** 次にこのフィールドを追加・変更する際は
+  「isLight=trueは背景が明るいテーマ」という定義を再確認し、既存のzz関連テスト（Test 34〜36）が
+  必ず正しい期待値（LIGHT系は白塗り、DARK系は黒塗り）になっていることをテスト実行で確認すること。
+- **テスト**: `test/dev/javatexteditor/editor/FontColorCommandTest.java`を新しい0/1/2/3の4分岐に
+  合わせて更新（既定テーマの期待値もDARK_MONOへ変更、計26/26 PASS）。`EditorCanvasTest`・
+  `NonAsciiGlyphCacheTest`はLIGHT_MODEの前景色・アクセント色がテスト内でハードコードされていた
+  箇所（カーソルブロック色0x333333→0x2D3142、IME/VISUAL LINEのアクセント色0x999999→0x8A929A）を
+  新配色に合わせて更新した（EditorCanvasTest 51/51、NonAsciiGlyphCacheTest 5/5、他の全体テスト
+  スイートは既知のベースラインFAIL3件のみで回帰なし）。
+- **目視確認**: 本ファイル前出の「構文ハイライトの色・分類変更ワークフロー」節の手順に従い、
+  `SyntaxHighlightPreview.java`に`Theme.DARK_MONO`/`Theme.BEIGE_MONO`のレンダリング呼び出しを
+  追加した（`preview_syntax_java_darkmono.png`/`preview_syntax_java_beigemono.png`）。次に
+  この2テーマの配色を調整する際も、既存の4パターン（java/c × dark/light）と同様にこのファイルを
+  実行してPNGをユーザーに提示すること。
+- **意図的にスコープ外とした点**: DARK_MONO/BEIGE_MONOは仕様上「キーワード/クラス名」と「それ以外」
+  の2色構成であるため、`SyntaxHighlighter`の分類ロジック（`SyntaxKind`への振り分け）自体は変更して
+  いない（`Theme`側で複数の`syntaxXxx`フィールドに同じ色を割り当てているだけ）。将来「単色テーマでも
+  文字列だけ別色にしたい」等の要望が来た場合は、この2テーマの各`syntaxXxx`値を個別に変えるだけで
+  対応できる（分類ロジックの変更は不要）。

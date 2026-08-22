@@ -695,8 +695,10 @@ The half-width font and color theme can be switched with commands.
   :font 1    use IBM Plex Mono as the half-width font
   :font 2    use JetBrains Mono as the half-width font
   :font 3    use Comic Mono as the half-width font
-  :color 0   use the dark color theme (default)
-  :color 1   use the light color theme
+  :color 0   use the dark mono color theme (default)
+  :color 1   use the beige mono color theme
+  :color 2   use the dark color theme
+  :color 3   use the light color theme
 
 In addition to the current mode, the status line (at the very bottom of
 the screen) shows, on the right, a clock, CPU/GPU usage, memory usage

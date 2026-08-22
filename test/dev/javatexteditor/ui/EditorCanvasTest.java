@@ -48,7 +48,7 @@ public class EditorCanvasTest {
             // カーソルブロックは(0, 0)から(charWidth, lineHeight)を前景色で塗る。
             // (1, 1)は必ずブロック内に入る。
             int pixel = img.getRGB(1, 1);
-            pass += checkColor("NORMALモードカーソルブロック色", 0x33, 0x33, 0x33, pixel);
+            pass += checkColor("NORMALモードカーソルブロック色", 0x2D, 0x31, 0x42, pixel);
         }
 
         // Test 4: INSERTモードでもカーソルはブロック（■）のまま描画されるか
@@ -64,7 +64,7 @@ public class EditorCanvasTest {
             // (1, 1)は必ずブロック内に入る。INSERTモードでも縦棒(2px)ではなく
             // NORMALモードと同じブロックカーソルが描画されることを確認する。
             int pixel = img.getRGB(1, 1);
-            pass += checkColor("INSERTモードカーソルブロック色", 0x33, 0x33, 0x33, pixel);
+            pass += checkColor("INSERTモードカーソルブロック色", 0x2D, 0x31, 0x42, pixel);
         }
 
         // Test 5: charCellWidthが半角・全角を正しく判定するか
@@ -251,7 +251,7 @@ public class EditorCanvasTest {
             // 行0のx=300付近（テキスト描画範囲外の右端）がアクセント色になるはず
             // cachedLineHeight≒20なので行0のy範囲は0〜19、中央y≒10
             int pixel = img.getRGB(300, 10);
-            boolean isAccent = colorMatch(pixel, 0x99, 0x99, 0x99);
+            boolean isAccent = colorMatch(pixel, 0x8A, 0x92, 0x9A);
             System.out.println((isAccent ? "[OK] " : "[FAIL] ")
                 + "VISUAL LINE 行0の右端がアクセント色（行全幅ハイライト）");
             pass += isAccent ? 1 : 0;
@@ -484,7 +484,7 @@ public class EditorCanvasTest {
 
             BufferedImage img = render(canvas, 400, 300);
             int pixel = img.getRGB(5, canvas.getCellH() - 1);
-            pass += checkColor("IME変換中オーバーレイの下線色", 0x99, 0x99, 0x99, pixel);
+            pass += checkColor("IME変換中オーバーレイの下線色", 0x8A, 0x92, 0x9A, pixel);
         }
 
         // Test 32: IMEが確定した文字列は setImeCommitHandler のコールバックに渡され、
@@ -507,7 +507,7 @@ public class EditorCanvasTest {
 
             boolean commitOk = committedCaptured.toString().equals("日本語");
             BufferedImage img = render(canvas, 400, 300);
-            boolean overlayCleared = !colorMatch(img.getRGB(5, 19), 0x99, 0x99, 0x99);
+            boolean overlayCleared = !colorMatch(img.getRGB(5, 19), 0x8A, 0x92, 0x9A);
 
             boolean ok = commitOk && overlayCleared;
             System.out.println((ok ? "[OK] " : "[FAIL] ")
@@ -643,7 +643,7 @@ public class EditorCanvasTest {
             BufferedImage img = render(canvas, 400, 300);
             // カーソルブロックは(50, 20)から(charWidth, lineHeight)を前景色で塗る
             int pixel = img.getRGB(51, 21);
-            pass += checkColor("wrap時折返し先カーソルの描画位置", 0x33, 0x33, 0x33, pixel);
+            pass += checkColor("wrap時折返し先カーソルの描画位置", 0x2D, 0x31, 0x42, pixel);
         }
 
         // Test 43: wrap時、ensureCursorColVisible は横スクロールを一切行わない（常に0のまま）
