@@ -705,3 +705,10 @@ java -cp build dev.javatexteditor.ui.SyntaxHighlightPreview
   `accent`（選択ハイライト色`#666666`）・`syntaxKeyword`/`syntaxType`（`#FFFFFF`）は変更していない。
   黒背景`#000000`に対して十分な明るさのグレーになったため、選択ハイライト`#666666`との明度差も
   保たれており、前節で修正した選択時の可読性の問題は再発しない。
+
+## DARK_MONOの通常文字色を#DBDBDBに再々変更（2026-08）
+
+- `DARK_MONO`の「予約語・クラス名以外」の全構文要素を、前節の`#E6E6E6`からユーザー要望により
+  `#DBDBDB`（わずかに落ち着いたグレー）に変更した。`accent`（`#666666`）・`syntaxKeyword`/
+  `syntaxType`（`#FFFFFF`）は変更していない。明度差の関係（黒背景・選択ハイライト`#666666`との
+  対比）は前節の判断から変わらず保たれている。
