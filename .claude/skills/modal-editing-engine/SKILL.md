@@ -242,6 +242,47 @@ public void processKey(int keyCode, char keyChar, int modifiers) {
   →空行になる）・`testAutoIndentKeptWhenCodeTyped()`（1文字でも入力すればEsc後も保持される、回帰なし
   確認）。
 
+## `:restart` / `:restart!`（アプリケーション再起動、2026-08 追加）
+
+- **要望**: 「:restart で再起動するようにコマンドを追加してほしい」という依頼。エディタ内から
+  現在の実行環境のまま新しいプロセスを立ち上げ直す（設定変更後の再読み込み等を、一度手動で
+  `scripts/run.sh` を叩き直さずに済ませたい用途を想定）。
+- **`:qa`/`:qa!`との共通化**: 「未保存の変更がある編集対象が1つでもあれば拒否し、`!`を付けると
+  強制続行する」という未保存変更ガードは`:qa`と全く同じ意味論のため、既存の`quitAll(boolean)`
+  内にインライン展開されていたチェックを`blockOnUnsavedChanges()`という共有privateメソッドへ
+  切り出し、`quitAll`/`restartApplication`の両方から呼ぶようにした（3行程度の重複を許容する
+  範囲を超え、かつ将来どちらか一方だけ挙動を変えると簡単に非対称なバグを生む性質の共通ロジック
+  だったため、切り出しを選んだ）。
+- **既定実装（`performRestart()`）**: `System.getProperty("java.home")`から`java`実行ファイルの
+  絶対パスを求め、`System.getProperty("java.class.path")`（このJVM自身が起動時に渡された
+  クラスパスと同じ値）をそのまま子プロセスへ渡し、`dev.javatexteditor.Main`を`ProcessBuilder`で
+  再起動する。現在開いているファイル（`currentFilePath`）があれば引数として渡し、新プロセスが
+  同じファイルを開いた状態で起動されるようにする（`:split`/`:vsplit`で複数ペインを開いていた場合、
+  分割構成やファイル群を再現するセッション永続化は行わない。CLAUDE.md「作業ディレクトリ・:pwd/:cd
+  の設計決定事項」でセッションをまたぐ永続化を持たない既存方針と同じ判断）。
+- **`SingleInstanceGuard`との連携が実装の要**: このプロジェクトは同一プロジェクトルートに対する
+  多重起動を`.editor-lock`ファイルの排他ロックで防止している（`SingleInstanceGuard`）。新プロセスを
+  起動する**前**に旧プロセスのロックを明示的に解放しないと、旧プロセスがまだ完全に終了していない
+  間は新プロセスの`tryAcquire()`が「既に起動中」と誤判定して即座に終了してしまう（シャットダウン
+  フックによる自動解放はJVM終了時に走るが、新プロセス起動より確実に先に完了する保証がない）。
+  このため`SingleInstanceGuard.release()`を`private`から`public`に変更し（元々シャットダウンフック
+  専用だった）、`performRestart()`から`ProcessBuilder.start()`の直前に明示的に呼ぶようにした。
+  二重に呼ばれても内部のnullチェックにより安全（既存のシャットダウンフックが後から呼んでも無害）。
+- **`exitCallback`/`exitAllCallback`と同じ差し替え可能パターンを踏襲**: `restartCallback`
+  （既定値`this::performRestart`）＋`setRestartCallback(Runnable)`という、既存の2つのコールバック
+  フィールドと全く同じ形にした。テストで実際のプロセス起動を避けるため、この差し替え口を必ず使う
+  （`RestartCommandTest`参照）。
+- **テスト**: `test/dev/javatexteditor/editor/RestartCommandTest.java`（新設・7テスト）。
+  `WaQaCommandTest`の`:qa`/`:qa!`テストと同型の観点（未保存なしで実行される・未保存ありで拒否
+  される・拒否メッセージがファイルパスを含む・複数エディタ間での未保存判定・`!`での強制実行・
+  `:qa`と互いに誤って衝突しない）を検証。**実プロセスの起動自体（`performRestart()`のデフォルト
+  実装、`ProcessBuilder.start()`や`System.exit(0)`を含む経路）はテストしていない**——実際に新しい
+  JVMプロセス（GUIアプリ）を起動するとテスト実行環境（ヘッドレスコンテナ）で不安定になり、かつ
+  テストプロセス自身も`System.exit(0)`で終了してしまうため、単体テストの手法として不適切と判断した。
+  `setRestartCallback()`によるフェイク差し替えのみで、コマンドパース・未保存ガード・コールバック
+  配線の正しさを検証する（`exitAllCallback`のテストが実際に`System.exit(0)`を呼ばずフェイクで
+  済ませているのと同じ方針）。
+
 ## テスト（完了条件）
 
 - 変更後は `./scripts/build.sh && ./scripts/test.sh` で全テスト PASS を確認する。

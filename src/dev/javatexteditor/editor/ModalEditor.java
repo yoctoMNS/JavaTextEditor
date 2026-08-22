@@ -13,6 +13,7 @@ import dev.javatexteditor.analysis.OpenjdkSourceTracer;
 import dev.javatexteditor.analysis.ProjectSymbolResolver;
 import dev.javatexteditor.analysis.ReceiverTypeResolver;
 import dev.javatexteditor.app.EditorHost;
+import dev.javatexteditor.app.SingleInstanceGuard;
 import dev.javatexteditor.buffer.BinaryFileDetector;
 import dev.javatexteditor.buffer.HexDumpFormatter;
 import dev.javatexteditor.buffer.MappedFileSource;
@@ -57,6 +58,7 @@ import dev.javatexteditor.ui.TelescopeView;
 import dev.javatexteditor.ui.Theme;
 import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
 import javax.imageio.ImageIO;
 import javax.swing.SwingWorker;
@@ -185,6 +187,7 @@ public class ModalEditor {
     private String statusMessage = "";
     private Runnable exitCallback = () -> System.exit(0);
     private Runnable exitAllCallback = () -> System.exit(0); // :qa/:qa! 用。既定はexitCallbackと同じ全終了
+    private Runnable restartCallback = this::performRestart; // :restart/:restart! 用
     private Runnable closeBlockedCallback = null; // 最後の1ペインで :q を拒否するとき呼ぶ
     private Runnable splitHorizontalCallback = null; // sv: 左右分割
     private Runnable splitVerticalCallback   = null; // ss: 上下分割
@@ -497,6 +500,11 @@ public class ModalEditor {
     /** :qa/:qa! で全終了するときに呼ばれるコールバックを差し替える（既定は System.exit(0)）。 */
     public void setExitAllCallback(Runnable callback) {
         this.exitAllCallback = callback;
+    }
+
+    /** :restart/:restart! が呼ぶコールバックを差し替える（既定は {@link #performRestart()}）。 */
+    public void setRestartCallback(Runnable callback) {
+        this.restartCallback = callback;
     }
 
     public void setCloseBlockedCallback(Runnable callback) {
@@ -3095,6 +3103,8 @@ public class ModalEditor {
         r.on(() -> { if (filerRenameActive) applyFilerRename(); else requestSaveToFile(currentFilePath); }, "w");
         r.on(() -> quitAll(false),                   "qa", "qall");
         r.on(() -> quitAll(true),                    "qa!", "qall!");
+        r.on(() -> restartApplication(false),        "restart");
+        r.on(() -> restartApplication(true),         "restart!");
         r.on(this::closeCurrentPane,                 "q");
         r.on(this::saveAndCloseCurrentPane,          "wq");
         r.onPrefix("w ", this::requestSaveToFile); // 保存先が存在しない場合は y/n 確認を挟む
@@ -3912,21 +3922,75 @@ public class ModalEditor {
      * （Vimの :qa がウィンドウ分割の有無に関わらずアプリケーションを終了するのと同じ意味論）。
      */
     private void quitAll(boolean force) {
-        List<ModalEditor> editors = allEditorsSupplier.get();
-        if (!force) {
-            List<String> unsaved = new ArrayList<>();
-            for (ModalEditor ed : editors) {
-                if (ed.buffer.isModified()) {
-                    unsaved.add(ed.currentFilePath != null ? ed.currentFilePath : "[No Name]");
-                }
-            }
-            if (!unsaved.isEmpty()) {
-                statusMessage = "E37: No write since last change for: "
-                        + String.join(", ", unsaved) + " (add ! to override)";
-                return;
+        if (!force && blockOnUnsavedChanges()) return;
+        exitAllCallback.run();
+    }
+
+    /**
+     * :restart / :restart!（forceの意味は{@link #quitAll(boolean)}と同じ）。
+     * アプリケーション全体を終了し、同じプロジェクト・同じ実行環境（javaコマンド・クラスパス）で
+     * 新しいプロセスを起動し直す。デフォルト実装は{@link #performRestart()}（{@link #restartCallback}
+     * で差し替え可能、テストではプロセス起動を避けるためのフェイクに差し替える）。
+     */
+    private void restartApplication(boolean force) {
+        if (!force && blockOnUnsavedChanges()) return;
+        restartCallback.run();
+    }
+
+    /**
+     * :qa/:restart共通: 未保存の編集対象があれば拒否メッセージを出して true を返す
+     * （force=falseのときだけ呼び出し元が使う）。
+     */
+    private boolean blockOnUnsavedChanges() {
+        List<String> unsaved = new ArrayList<>();
+        for (ModalEditor ed : allEditorsSupplier.get()) {
+            if (ed.buffer.isModified()) {
+                unsaved.add(ed.currentFilePath != null ? ed.currentFilePath : "[No Name]");
             }
         }
-        exitAllCallback.run();
+        if (unsaved.isEmpty()) return false;
+        statusMessage = "E37: No write since last change for: "
+                + String.join(", ", unsaved) + " (add ! to override)";
+        return true;
+    }
+
+    /**
+     * :restart の既定実装。現在のJVM（{@code java.home}）・現在の実行時クラスパス
+     * （{@code java.class.path}）を使い、{@code dev.javatexteditor.Main} を新しいプロセスとして
+     * 起動し直す。現在開いているファイル（{@link #currentFilePath}）があれば引数として渡し、
+     * 新プロセスがそのファイルを開いた状態で起動するようにする（複数ペイン分割時、どのファイルを
+     * 渡すかは「このコマンドを実行したペイン」のもので決まる。他ペインの状態・分割構成自体は
+     * 再現しない。セッション永続化は他コマンド同様スコープ外——CLAUDE.md「作業ディレクトリ」節参照）。
+     *
+     * <p>新プロセスを起動する<b>前</b>に{@link SingleInstanceGuard#release()}を明示的に呼ぶ。
+     * 呼ばないと、旧プロセス（このJVM）がまだ完全に終了していない間は排他ロックを保持したままのため、
+     * 新プロセスの{@code SingleInstanceGuard.tryAcquire()}が「既に起動中」と誤判定して即座に
+     * 終了してしまう（ロック自体はシャットダウンフックでも解放されるが、そのタイミングは
+     * 新プロセスの起動より後になる保証がないため、明示的な解放が必要）。
+     */
+    private void performRestart() {
+        try {
+            String javaBin = System.getProperty("java.home")
+                + File.separator + "bin" + File.separator + "java";
+            List<String> command = new ArrayList<>();
+            command.add(javaBin);
+            command.add("-cp");
+            command.add(System.getProperty("java.class.path"));
+            command.add("dev.javatexteditor.Main");
+            if (currentFilePath != null) {
+                command.add(currentFilePath);
+            }
+            SingleInstanceGuard.release();
+            new ProcessBuilder(command)
+                .directory(new File(System.getProperty("user.dir")))
+                .redirectOutput(ProcessBuilder.Redirect.INHERIT)
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
+                .start();
+        } catch (IOException e) {
+            statusMessage = "E: restart failed: " + e.getMessage();
+            return;
+        }
+        System.exit(0);
     }
 
     /**

@@ -73,8 +73,14 @@ public final class SingleInstanceGuard {
         }
     }
 
-    /** 保持中のロックとファイルハンドルを解放する（シャットダウンフックから呼ばれる）。 */
-    private static synchronized void release() {
+    /**
+     * 保持中のロックとファイルハンドルを解放する。シャットダウンフックから自動的に呼ばれるほか、
+     * {@code :restart}（ModalEditor.performRestart()）が新しいプロセスを起動する前に明示的に
+     * 呼ぶことで、旧プロセスがまだ終了しきっていない間でも新プロセスが即座にロックを取得できる
+     * ようにする（呼び出し元の詳細はModalEditorのJavadoc参照）。二重に呼ばれても
+     * null チェックにより安全（冪等）。
+     */
+    public static synchronized void release() {
         try {
             if (heldLock != null) heldLock.release();
         } catch (IOException ignored) {
