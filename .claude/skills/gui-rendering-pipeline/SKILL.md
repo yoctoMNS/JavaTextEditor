@@ -656,3 +656,43 @@ java -cp build dev.javatexteditor.ui.SyntaxHighlightPreview
   いない（`Theme`側で複数の`syntaxXxx`フィールドに同じ色を割り当てているだけ）。将来「単色テーマでも
   文字列だけ別色にしたい」等の要望が来た場合は、この2テーマの各`syntaxXxx`値を個別に変えるだけで
   対応できる（分類ロジックの変更は不要）。
+
+## DARK_MONOの通常文字色を#333333に変更・DARK_MONO/BEIGE_MONOのVISUAL LINE選択ハイライトが文字と重なって見えなくなる不具合の修正（2026-08）
+
+- **色の変更**: `DARK_MONO`の「予約語・クラス名以外」の全構文要素（`foreground`/`syntaxString`/
+  `syntaxComment`/`syntaxNumber`/`syntaxPreprocessor`/`syntaxSymbol`/`syntaxOperator`）を
+  `#FBFBFB`（前節参照）から`#333333`へユーザー要望により変更した。予約語・クラス名の明るい白
+  `#FFFFFF`との対比で、それ以外の文字はより控えめに沈める意図。
+- **不具合の報告**: 「DARK_MONO/BEIGE_MONOでVISUAL LINE選択時、選択している文字が塗りつぶし色と
+  重なって見えなくなる」という報告があった。
+- **原因**: `EditorCanvas.drawSelectionHighlight()`は選択範囲の背景を`theme.accent`で塗りつぶし
+  （`paintContent()`内で選択ハイライト描画→本文描画の順に呼ばれるため、本文の文字色がこの背景の
+  上に重ねて描画される設計。本ファイル冒頭「1.5 選択ハイライト」「2. 表示行範囲」のコメント参照）、
+  その後`theme.foreground`または`syntaxXxx`の色で文字を描画する。ところが`DARK_MONO`/`BEIGE_MONO`
+  追加時、`accent`フィールドに誤って`foreground`と**全く同じ値**（DARK_MONOは旧`#FBFBFB`、
+  BEIGE_MONOは`#333333`）を設定していた。そのため選択範囲の背景色と非キーワード文字の描画色が
+  完全に一致し、キーワード以外の選択文字が背景に溶けて完全に見えなくなっていた（DARK_MODE/
+  LIGHT_MODEの`accent`は元々`foreground`と異なる値だったため、この不具合はDARK_MONO/BEIGE_MONO
+  固有の設定ミスだった）。
+- **修正**: `Theme.accent`をDARK_MONO/BEIGE_MONOそれぞれで「通常文字色ともキーワード色とも異なる
+  中間色」に変更した。既存のDARK_MODE/LIGHT_MODEの設計と揃え、`accent`は常に本文の文字色と別の値に
+  すること、という暗黙の前提を明文化する。
+  - `DARK_MONO.accent` = `#666666`（`DARK_MODE.accent`と同値に揃えた。背景#000000・通常文字
+    #333333・キーワード#FFFFFFのいずれとも十分に異なる中間グレー）
+  - `BEIGE_MONO.accent` = `#8A929A`（`LIGHT_MODE.accent`と同値に揃えた。背景#F5F0E6・通常文字
+    #333333・キーワード#000000のいずれとも十分に異なるミュートグレー）
+  - `theme.accent`は選択ハイライト以外にも検索ハイライト・ステータス行区切り・telescopeタグ色・
+    歩行キャラクターの配色計算等、本ファイル内で15箇所以上参照される共通の「アクセント色」である
+    ため、この修正はVISUAL LINE選択の可視性だけでなくそれらの見た目にも波及する（意図した挙動。
+    元々`accent`が`foreground`と同値だったこと自体が設計ミスで、他のUI要素も同様に本文の文字色に
+    溶け込んで見えづらくなっていたはずのため、まとめて是正される）。
+- **今後同様の単色系テーマを追加する際の注意**: 「キーワード/クラス名」と「それ以外」の2色だけで
+  構成するテーマであっても、`accent`（選択ハイライト・検索ハイライト等の背景として使われる）には
+  本文で使う2色のいずれとも異なる第3の色を必ず割り当てること。`foreground`や`syntaxKeyword`と
+  同じ値を`accent`にコピーしない。
+- **テスト**: 既存のテスト（`FontColorCommandTest`・`EditorCanvasTest`・`SyntaxHighlighterTest`・
+  `NonAsciiGlyphCacheTest`）にDARK_MONO/BEIGE_MONOの`accent`をピクセル単位で検証するケースは
+  無かったため変更不要だった（既存全ケースPASS、他の全体テストスイートも既知のベースラインFAIL3件
+  のみで回帰なし）。目視確認は使い捨てのプレビューコードでVISUAL LINE選択状態をレンダリングし、
+  選択範囲の文字が視認できることをスクリーンショットで確認した（`SyntaxHighlightPreview.java`とは
+  別の一時ファイルで検証、本体には追加していない）。
